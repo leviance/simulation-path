@@ -1,0 +1,203 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng và chạy bể nước hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Ta đã có một ứng dụng có thể dùng: nước đổ xuống, vòi thêm hạt và vật cản đổi dòng chảy. Nhưng một hình đẹp có thể che cả sai đơn vị, sai search lẫn sai timestep. Bài cuối đặt các phép kiểm cạnh nhau để biết phần nào đã đúng và phần nào vẫn là giới hạn của mô hình.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tách ba câu hỏi:
+
+1. **Phép tính có đúng không?** Kernel, lực cặp, search và integrator cần fixture có kết quả biết trước hoặc oracle độc lập.
+2. **Mô hình cho kết quả tới mức nào?** WCSPH có nén; mặt thoáng thiếu support; boundary mẫu/collision là xấp xỉ. Finite không đồng nghĩa density sát ρ₀.
+3. **Chi phí có phù hợp không?** Phải đo cùng N/state/build và tách solver khỏi render. Không lấy số FPS ở 1.000 hạt để quảng cáo bản 5.000.
+
+<InteractiveLab demo="sph-water" mode="sph-12" />
+
+## Viết code từng bước
+
+### Kiểm đạo hàm bằng cách tính khác
+
+Thay vì gọi lại `gradient` để tạo đáp án, dùng finite difference của **kernel** ở hai phía. Tích phân chuẩn hóa phải có trọng số diện tích `2πr`, không lấy tổng W như tổng chiều dài:
+
+{/* snippet tests/tests.cpp#gradient-check */}
+
+```cpp title="tests/tests.cpp — oracle kernel độc lập"
+void kernelChecks() {
+    const auto report = water::reference();
+    check(close(report.integral, 1, 1e-6), "independent radial area integral");
+    for (const double q : {0.3, 0.8, 1.2, 1.8}) {
+        const double x = q * water::h;
+        const double epsilon = 1e-6 * water::h;
+        const double numerical = (water::kernel(x + epsilon) - water::kernel(x - epsilon)) / (2 * epsilon);
+        const double actual = water::gradient(x, 0).x;
+        check(close(actual, numerical, 1e-5 * std::max(1.0, std::abs(numerical))), "gradient finite difference");
+    }
+    check(water::kernel(water::support) == 0, "support endpoint");
+    check(water::gradient(0, 0).x == 0 && water::gradient(0, 0).y == 0, "zero displacement");
+}
+```
+
+### Chạy ca chuẩn trên state riêng
+
+{/* snippet include/sph/reference.hpp#reference */}
+
+```cpp title="include/sph/reference.hpp — kiểm chứng không đổi bể đang xem"
+inline Reference reference() {
+    Reference report;
+    const int intervals = 10000;
+    const double dr = support / intervals;
+    for (int i = 0; i < intervals; ++i) {
+        const double r = (i + 0.5) * dr;
+        report.integral += 2 * std::numbers::pi * r * kernel(r) * dr;
+    }
+    State fixture;
+    for (int y = 0; y < 10; ++y) {
+        for (int x = 0; x < 10; ++x) {
+            fixture.particles.push_back({2 + (x + 0.5) * spacing, 2 + (y + 0.5) * spacing});
+        }
+    }
+    Settings settings;
+    settings.gravity = 0;
+    const auto grid = buildNeighbors(fixture, true);
+    const auto all = buildNeighbors(fixture, false);
+    State slow = fixture;
+    computeDensity(fixture, grid);
+    computeDensity(slow, all);
+    computePressure(fixture, settings);
+    computePressure(slow, settings);
+    computeForces(fixture, grid, settings);
+    computeForces(slow, all, settings);
+    double netX = 0;
+    double netY = 0;
+    for (std::size_t i = 0; i < fixture.particles.size(); ++i) {
+        const auto& a = fixture.particles[i];
+        const auto& b = slow.particles[i];
+        report.gridError = std::max({report.gridError, std::abs(a.density - b.density), std::abs(a.ax - b.ax), std::abs(a.ay - b.ay)});
+        netX += mass * a.ax;
+        netY += mass * a.ay;
+    }
+    report.forceError = std::hypot(netX, netY);
+    const auto initial = fixture.particles;
+    for (int i = 0; i < 50; ++i) {
+        step(fixture, settings);
+    }
+    for (std::size_t i = 0; i < initial.size(); ++i) {
+        report.equilibriumDrift = std::max(report.equilibriumDrift, std::hypot(fixture.particles[i].x - initial[i].x, fixture.particles[i].y - initial[i].y));
+    }
+    report.passed = std::abs(report.integral - 1) < 1e-6 && report.gridError < 1e-10 && report.forceError < 1e-8 && report.equilibriumDrift < 1e-4 && grid.lists == all.lists;
+    return report;
+}
+```
+
+Ca cân bằng ở đây là lattice **zero-gravity**, không tường, không vòi. Sau 50 bước, drift không quá 1e−4 m. Nó kiểm một state phải đứng yên, **không chứng minh cân bằng thủy tĩnh có gravity**. Lực pressure dương/viscosity được kiểm riêng bằng cặp cho trước; không dùng ca lực 0 để thay phép kiểm đó.
+
+## Ghép các phần lại
+
+V/nút Kiểm chứng chạy `reference` trên dữ liệu nhỏ độc lập và pause bể. Nó không reset scene hoặc thay model time của người dùng. Tests còn so grid/all-pairs ở neighbor IDs, density, pressure, acceleration và quỹ đạo; chạy dam/pool 5.000 hạt thật; kiểm vòi, capacity, paddle và dữ liệu lỗi.
+
+Chạy toàn bộ bản tải về:
+
+```bash title="Terminal — final, checkpoints và CTest"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 1
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 1
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+.\build\Release\project_50_final.exe
+```
+
+Target mặc định là final; starter và 12 checkpoint vẫn có thể chạy riêng. Trên Ninja/Make single-config, dùng build directory riêng với `CMAKE_BUILD_TYPE`. SDL khóa 3.4.8; không cần Node.js để build ứng dụng C++.
+
+### Đo chi phí theo một quy trình có thể chạy lại
+
+Benchmark nằm ngay trong ZIP, không phụ thuộc script riêng của người biên soạn:
+
+```bash title="Terminal — benchmark CPU hữu hạn"
+.\build\Release\project_50_tests.exe --benchmark
+```
+
+Nó warm-up 30 bước, clone cùng state cho tám mẫu của mỗi N rồi in median/min–max. Khoảng đo không gồm copy state. Full step được đo bằng chính `water::step`; các toán tử đo riêng giúp tìm chỗ tốn chi phí, không giả định tổng các median bằng median của toàn bước. Render ở đây chỉ là dựng ảnh CPU 720×432, **chưa gồm SDL upload/present**. Chạy Release; Debug chỉ dùng kiểm đúng và dò lỗi.
+
+{/* snippet tests/benchmark.hpp#benchmark */}
+
+```cpp title="tests/benchmark.hpp — đo cùng dữ liệu và đủ số hạt"
+inline int run() {
+    for (const std::size_t count : {1000, 5000}) {
+        auto warmed = water::makeState(water::Preset::Dam, count);
+        water::Settings settings;
+        for (int k = 0; k < 30; ++k) {
+            water::step(warmed, settings);
+        }
+        std::vector<double> searchTimes, densityTimes, forceTimes, updateTimes, fullTimes, renderTimes;
+        for (int sample = 0; sample < 8; ++sample) {
+            auto state = warmed;
+            auto started = Clock::now();
+            const auto search = water::buildNeighbors(state, true);
+            auto a = Clock::now();
+            water::computeDensity(state, search);
+            water::computePressure(state, settings);
+            auto b = Clock::now();
+            water::computeForces(state, search, settings);
+            auto c = Clock::now();
+            const double dt = water::chooseDt(state, settings);
+            water::movePaddle(state, dt);
+            water::integrate(state, dt);
+            water::requireFinite(state);
+            auto d = Clock::now();
+            searchTimes.push_back(milliseconds(started, a));
+            densityTimes.push_back(milliseconds(a, b));
+            forceTimes.push_back(milliseconds(b, c));
+            updateTimes.push_back(milliseconds(c, d));
+
+            // Đo thêm step thật: có validate/finite/allocation/destruction của chính solver.
+            state = warmed;
+            started = Clock::now();
+            water::step(state, settings);
+            a = Clock::now();
+            fullTimes.push_back(milliseconds(started, a));
+
+            water::Surface surface;
+            started = Clock::now();
+            water::reconstruct(state, surface);
+            water::shade(surface);
+            a = Clock::now();
+            renderTimes.push_back(milliseconds(started, a));
+            if (state.updated != count || surface.drawn != count) {
+                return 2;
+            }
+        }
+        std::cout << "CONFIG Release-required N=" << count << " warmup=30 samples=8 c=20 alpha=0.3 g=9.81 maxDt=0.001 grid=2h\n";
+        distribution("grid/search", searchTimes);
+        distribution("density/EOS", densityTimes);
+        distribution("forces", forceTimes);
+        distribution("dt/integrate/finite", updateTimes);
+        distribution("full-step", fullTimes);
+        distribution("CPU surface720x432, no SDL", renderTimes);
+    }
+    return 0;
+}
+```
+
+Ví dụ một lượt dam-break chuẩn, c=20, alpha=0,3, gravity=9,81, sau 2.200 tick: model time khoảng 1,504 s; min/median/max ρ/ρ₀ khoảng 0,269/1,050/1,209, p95 compression 14,43%, không lọt biên. Đây là ví dụ **có sai số nén đáng kể**, không phải một đáp án “nước chuẩn” để căn màu. Sai khác nhỏ giữa compiler/máy hoặc ở quỹ đạo dài không tự động là bug; sai neighbor, mất mass hay nonfinite thì cần điều tra.
+
+## Thử làm sai để hiểu đúng
+
+Đổi hệ số kernel sang 3D; bỏ một cell kề; đảo dấu viscosity; giữ nguyên dt khi tăng c. Với mỗi lỗi, chỉ ra test sẽ bắt trước khi chạy. Nếu không có test phù hợp, bổ sung fixture thay vì sửa ngưỡng để suite xanh.
+
+## Tự kiểm tra kết quả
+
+- Kernel integral sai số dưới 1e−6; gradient sai số tương đối dưới 1e−5 ở các vị trí khác 0/cutoff.
+- Lực cặp ±962,899070 N ở fixture đã công bố; net force dưới 1e−8 N; viscosity power không dương.
+- Grid/all-pairs khớp cả dữ liệu và trajectory trong 1e−9 m; ca equilibrium đạt ngưỡng drift đã đặt.
+- Bản chuẩn có 5.000 hạt được cập nhật/vẽ; theo dõi min/median/max density, p95 compression, dt và leakage của **toàn hệ**. PASS không thay thế báo cáo sai số mô hình.
+- Ghi máy, Release/Debug, N, warm-up, số lần lặp, median và min–max khi benchmark. Tách build grid/search, density, force, integrate, render và full step; đừng cộng thời gian enqueue hoặc số đo khác state để so.
+- UI pause/reset, mouse/keyboard, ZIP và source từng checkpoint dùng được. Tests không bị NDEBUG vô hiệu hóa trong Release.
+
+Một lần chạy dam-break 5.000 hạt có thể nén mạnh khi dội thành. Hãy đọc số đo thực, giảm dt hoặc tăng c và so lại ở cùng model time. Không tuyên bố đây là nước không nén chính xác chỉ vì mặt nước trông mượt. Mặt nước là phép trình bày 2D; alpha là tiêu tán số; paddle là kinematic một chiều. Những giới hạn ấy là một phần của sản phẩm, không phải điều cần giấu khỏi người học.
+
+## Bài tập mở rộng
+
+Tạo một hồ nông đã nghỉ, đo kinetic energy và density theo thời gian với gravity khác 0. Đặt ngưỡng trước khi chạy và giải thích boundary có thể gây sai số nào; đừng tái sử dụng PASS của ca zero-gravity. [Project 51](/roadmap/51) sẽ mở rộng kernel, search và solver sang **3D/GPU**; không chỉ đổi kiểu render của bể 2D này.

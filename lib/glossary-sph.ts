@@ -21,18 +21,18 @@ export const sphGlossaryTerms = [
     id: "sph-eos",
     term: "SPH equation of state — EOS",
     definition:
-      "Project 50 đặt p=max(0,c²*(rho−rho0)). Độ nén làm pressure tăng; c là tốc độ âm số điều khiển độ cứng, không phải tốc độ chảy. Clamp tránh pressure âm nhưng thay đổi mô hình mặt thoáng; không đảm bảo rho luôn sát rho0.",
+      "Project 50 đặt p=max(0,c²*(rho−rho0)). Với density kg/m² và c m/s, pressure 2D có đơn vị N/m, không phải Pa. c điều khiển độ cứng, không phải tốc độ chảy; clamp pressure âm không đảm bảo rho luôn sát rho0.",
   },
   {
     id: "sph-artificial-viscosity",
     term: "Artificial viscosity Monaghan",
     definition:
-      "Tiêu tán số cho cặp có relativeVelocity·displacement âm. Project 50 dùng beta=0 và alpha=0–0.3; Pi được cộng vào hệ số lực trước −m*gradient. Alpha không phải kinematic viscosity ν của nước thật.",
+      "Tiêu tán số cho cặp có relativeVelocity·displacement âm. Project 50 dùng beta=0 và alpha=0–1, mặc định 0,3; Pi được cộng vào hệ số lực trước −m*gradient. Alpha không phải kinematic viscosity ν của nước thật.",
   },
   {
     id: "sph-timestep",
     term: "SPH acoustic/force timestep",
     definition:
-      "Project 50 chọn min(0.001,0.25*h/(c+vmax),0.25*sqrt(h/amax)). Đây là bound thực hành cho mô hình giảng dạy, không phải chứng minh ổn định mọi cấu hình. Ngân sách 64 substep/frame và dropped time ngăn chạy bù vô hạn.",
+      "Project 50 chọn min(0.001,0.25*h/(c+vmax+3),0.25*sqrt(h/amax)); +3 m/s dự phòng tốc độ biên. Đây là bound thực hành, không phải chứng minh ổn định mọi cấu hình. Tối đa 24 substep/frame và ngân sách thời gian, dropped time ngăn chạy bù vô hạn.",
   },
 ];

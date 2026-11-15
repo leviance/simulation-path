@@ -1,12 +1,14 @@
-#include "diagnostics.hpp"
-#include "pair.hpp"
-#include "timing.hpp"
+#include "benchmark.hpp"
+#include "sph/emitter.hpp"
+#include "sph/reference.hpp"
+#include "sph/surface.hpp"
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <set>
 #include <string_view>
 
-// Explicit checks remain enabled when NDEBUG is defined in Release builds.
+// require chạy trong cả Debug/Release; không dùng assert bị NDEBUG vô hiệu hóa.
 int failures = 0;
 
 void check(bool condition, std::string_view label) {
@@ -16,168 +18,207 @@ void check(bool condition, std::string_view label) {
     }
 }
 
-bool close(double a, double b, double tolerance = 1e-10) {
-    return std::abs(a - b) < tolerance;
+bool close(double a, double b, double tolerance) {
+    return std::isfinite(a) && std::isfinite(b) && std::abs(a - b) <= tolerance;
 }
 
-int main() {
-    for (const auto& result : water::validateWater()) {
-        check(result.pass, result.label);
-        std::cout << result.label << " value=" << result.value << '\n';
+template <typename Action>
+void rejects(Action action, std::string_view label) {
+    bool thrown = false;
+    try {
+        action();
+    } catch (const std::exception&) {
+        thrown = true;
     }
-    check(water::kernel(water::support) == 0, "compact support cutoff");
-    check(close(water::kernel(0), 10 / (7 * std::numbers::pi * water::h * water::h)), "independent 2D normalization oracle");
-    const auto g = water::gradient({0.03, 0.02});
-    const auto opposite = water::gradient({-0.03, -0.02});
-    check(close(g.x, -opposite.x) && close(g.y, -opposite.y), "odd kernel gradient");
-    check(water::gradient({0, 0}).x == 0, "zero-distance gradient is finite");
+    check(thrown, label);
+}
 
-    auto state = water::makeState();
-    const auto neighbors = water::buildNeighbors(state, false);
-    water::computeDensity(state, neighbors);
-    // Direct sum over all positions is independent of the neighbor-list filter.
-    double densityOracle = 0;
-    const auto point = state.particles[35].position;
-    for (const auto p : neighbors.positions)
-        densityOracle += water::mass * water::kernel(std::hypot(point.x - p.x, point.y - p.y));
-    check(close(state.particles[35].density, densityOracle), "direct density oracle");
-    const double wallDensity = state.particles[0].density;
-    state.walls.clear();
-    water::computeDensity(state, water::buildNeighbors(state, false));
-    check(wallDensity > state.particles[0].density, "wall samples restore missing support");
+// [snippet gradient-check]
+void kernelChecks() {
+    const auto report = water::reference();
+    check(close(report.integral, 1, 1e-6), "independent radial area integral");
+    for (const double q : {0.3, 0.8, 1.2, 1.8}) {
+        const double x = q * water::h;
+        const double epsilon = 1e-6 * water::h;
+        const double numerical = (water::kernel(x + epsilon) - water::kernel(x - epsilon)) / (2 * epsilon);
+        const double actual = water::gradient(x, 0).x;
+        check(close(actual, numerical, 1e-5 * std::max(1.0, std::abs(numerical))), "gradient finite difference");
+    }
+    check(water::kernel(water::support) == 0, "support endpoint");
+    check(water::gradient(0, 0).x == 0 && water::gradient(0, 0).y == 0, "zero displacement");
+}
 
-    auto pair = water::makeState(water::Preset::Pair);
-    pair.walls.clear();
-    pair.particles[0].density = 1100;
-    pair.particles[1].density = 1200;
-    water::computePressure(pair, 12);
-    check(close(pair.particles[0].pressure, 14400), "shared C++ and Canvas EOS fixture");
+// [/snippet gradient-check]
+void pairChecks() {
+    water::State state;
+    state.particles = {{2, 2, 1, 0}, {2 + water::h, 2, -1, 0}};
+    state.particles[0].density = 1100;
+    state.particles[1].density = 1200;
     water::Settings settings;
     settings.gravity = 0;
     settings.alpha = 0;
-    const auto pairNeighbors = water::buildNeighbors(pair, false);
-    const auto pressure = water::accelerations(pair, pairNeighbors, settings);
-    check(pressure[0].x < 0 && pressure[1].x > 0 && close(pressure[0].x + pressure[1].x, 0), "symmetric pressure repels and conserves momentum");
-    settings.alpha = 0.15;
-    const auto viscous = water::accelerations(pair, pairNeighbors, settings);
-    double power = 0;
-    for (std::size_t i = 0; i < pair.particles.size(); ++i)
-        power += water::mass * water::dot(pair.particles[i].velocity, water::subtract(viscous[i], pressure[i]));
-    check(power < 0 && close(viscous[0].x + viscous[1].x, 0), "artificial viscosity dissipative pair power");
-    check(water::artificialViscosity({0.1, 0}, {1, 0}, 1000, 1000, 12, 0.15) == 0, "no artificial viscosity for separating pair");
-    pair.particles[0].density = 900;
-    water::computePressure(pair, 12);
-    check(pair.particles[0].pressure == 0, "pressure clamp at free surface");
+    const auto search = water::buildNeighbors(state, false);
+    water::computePressure(state, settings);
+    water::computeForces(state, search, settings);
+    const double pressureForce = water::mass * state.particles[0].ax;
+    check(close(state.particles[0].pressure, 40000, 1e-9) && close(state.particles[1].pressure, 80000, 1e-9), "2D EOS shared fixture");
+    check(close(pressureForce, -962.899070255326, 1e-8), "nonzero pair force independent numeric oracle");
+    check(close(water::mass * (state.particles[0].ax + state.particles[1].ax), 0, 1e-8), "equal and opposite pressure forces");
+    settings.alpha = 0.3;
+    water::computeForces(state, search, settings);
+    const double viscosityForce = water::mass * state.particles[0].ax - pressureForce;
+    check(close(2 * viscosityForce, -224.529475242557, 1e-8), "viscosity negative power");
+    const double separate = water::artificialViscosity(-water::h, 0, -2, 0, 1100, 1200, settings);
+    check(separate == 0, "separating pair has zero viscosity");
+}
 
-    // The isolated teaching diagnostic must preserve prescribed densities and time.
-    const auto pairReport = water::inspectPair(water::PairParameters{}, water::Settings{});
-    check(pairReport.state.walls.empty() && pairReport.state.time == 0, "isolated pair has no external forces or integration");
-    check(pairReport.state.particles[0].density == 1100 && pairReport.state.particles[1].density == 1200, "isolated pair preserves prescribed density");
-    check(close(pairReport.state.particles[0].pressure, 14400) && close(pairReport.state.particles[1].pressure, 28800), "isolated pair EOS example");
-    check(close(pairReport.grad.x, 1617.2744726384344, 1e-9) && close(pairReport.pressureForce[0].x, -211.56105354248845, 1e-9), "shared numerical pair fixture");
-    check(close(pairReport.netForce.x, 0) && close(pairReport.netForce.y, 0), "isolated net force zero");
-    check(close(pairReport.pi, 0.0009070297226124577) && close(pairReport.viscosityPower, -3.609163493617516, 1e-9), "shared Pi and viscosity power fixture");
-    water::PairParameters separating;
-    separating.approaching = false;
-    const auto separated = water::inspectPair(separating, water::Settings{});
-    check(separated.pi == 0 && close(separated.viscosityPower, 0) && close(separated.pressureForce[0].x, pairReport.pressureForce[0].x), "separation disables viscosity but not pressure");
-
-    // Each bound is tested while it is strictly smaller than maxDt.
-    auto timed = water::makeState(water::Preset::Pair);
-    timed.walls.clear();
-    for (auto& p : timed.particles) {
-        p.velocity = {0, 0};
-    }
-    std::vector<water::Vec2> zero(timed.particles.size());
-    water::Settings acousticSettings;
-    acousticSettings.soundSpeed = 20;
-    const double acoustic = water::chooseDt(timed, zero, acousticSettings);
-    check(close(acoustic, 0.25 * water::h / 20) && acoustic < water::maxDt, "active acoustic timestep bound");
-    const std::vector<water::Vec2> forcing(timed.particles.size(), {1e6, 0});
-    const double forceDt = water::chooseDt(timed, forcing, water::Settings{});
-    check(close(forceDt, 0.25 * std::sqrt(water::h / 1e6)) && forceDt < acoustic, "active force timestep bound");
-    check(close(water::chooseDt(timed, zero, water::Settings{}), water::maxDt), "inactive bounds retain maxDt");
-    const double invalidAcceleration[] = {1e12, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()};
-    for (const double value : invalidAcceleration) {
-        bool rejectedDt = false;
-        try {
-            water::chooseDt(timed, std::vector<water::Vec2>(timed.particles.size(), {value, 0}), water::Settings{});
-        } catch (const std::exception&) {
-            rejectedDt = true;
+void searchChecks() {
+    water::State a;
+    for (int y = 0; y < 5; ++y) {
+        for (int x = 0; x < 8; ++x) {
+            a.particles.push_back({0.03 + x * water::spacing, 0.03 + y * water::spacing, 0.1 * std::sin(x + y), 0.1 * std::cos(x - y)});
         }
-        check(rejectedDt, "too-small or nonfinite force timestep rejected");
     }
-    bool incomplete = false;
-    try {
-        water::chooseDt(timed, {}, water::Settings{});
-    } catch (const std::exception&) {
-        incomplete = true;
+    a.walls = water::wallSamples();
+    auto b = a;
+    const auto grid = water::buildNeighbors(a, true);
+    const auto all = water::buildNeighbors(b, false);
+    check(grid.lists == all.lists, "grid neighbor IDs with negative wall cells");
+    check(grid.candidates < all.candidates, "grid reduces candidates on same fixture");
+    water::Settings settings;
+    water::computeDensity(a, grid);
+    water::computeDensity(b, all);
+    water::computePressure(a, settings);
+    water::computePressure(b, settings);
+    water::computeForces(a, grid, settings);
+    water::computeForces(b, all, settings);
+    for (std::size_t i = 0; i < a.particles.size(); ++i) {
+        check(close(a.particles[i].density, b.particles[i].density, 1e-9), "density grid/all-pairs");
+        check(close(a.particles[i].pressure, b.particles[i].pressure, 1e-8), "pressure grid/all-pairs");
+        check(close(a.particles[i].ax, b.particles[i].ax, 1e-9) && close(a.particles[i].ay, b.particles[i].ay, 1e-9), "force grid/all-pairs");
     }
-    check(incomplete, "incomplete timestep acceleration rejected");
-    timed.particles[0].velocity.x = 1e9;
-    bool tooFast = false;
-    try {
-        water::chooseDt(timed, zero, water::Settings{});
-    } catch (const std::exception&) {
-        tooFast = true;
-    }
-    check(tooFast, "too-small acoustic timestep rejected");
-
-    water::Vec2 position{-0.2, 0.4};
-    water::Vec2 velocity{-2, 3};
-    water::collide(position, velocity);
-    check(close(position.x, water::spacing / 2) && close(velocity.x, 0.2) && velocity.y == 3, "collision changes only outward normal");
-    auto empty = water::makeState(water::Preset::Empty);
-    check(water::pour(empty, {0.5, 0.7}), "emission accepted in empty space");
-    check(!water::pour(empty, {0.5, 0.7}), "overlapping emission rejected");
-    check(!water::pour(empty, {std::numeric_limits<double>::quiet_NaN(), 0.7}), "nonfinite nozzle rejected");
-    check(close(water::measure(empty).totalMass, water::mass), "emission adds exactly one particle mass");
-    empty.particles.resize(water::capacity);
-    check(!water::pour(empty, {0.8, 0.7}) && empty.particles.size() == water::capacity, "capacity is a hard bound");
-
-    auto grid = water::makeState();
-    auto brute = grid;
-    settings = water::Settings{};
-    for (int i = 0; i < 150; ++i) {
-        water::step(grid, settings);
-        settings.useGrid = false;
-        water::step(brute, settings);
+    for (int k = 0; k < 40; ++k) {
         settings.useGrid = true;
+        water::step(a, settings);
+        settings.useGrid = false;
+        water::step(b, settings);
     }
-    for (std::size_t i = 0; i < grid.particles.size(); ++i) {
-        check(close(grid.particles[i].position.x, brute.particles[i].position.x) && close(grid.particles[i].position.y, brute.particles[i].position.y), "grid trajectory equals all-pairs");
-        const auto p = grid.particles[i].position;
-        check(p.x >= water::spacing / 2 && p.x <= 1 - water::spacing / 2 && p.y >= water::spacing / 2 && p.y <= 0.8 - water::spacing / 2, "finite dam bounds");
+    for (std::size_t i = 0; i < a.particles.size(); ++i) {
+        check(close(a.particles[i].x, b.particles[i].x, 1e-9) && close(a.particles[i].y, b.particles[i].y, 1e-9), "trajectory grid/all-pairs");
     }
-    std::vector<double> schedulePositions;
-    for (const int fps : {30, 60, 120}) {
-        auto scheduled = water::makeState(water::Preset::Pair);
-        scheduled.walls.clear();
-        settings.gravity = 0;
-        double accumulator = 0;
-        for (int frame = 0; frame < fps; ++frame) {
-            const auto plan = water::advanceFrame(scheduled, settings, accumulator, 1.0 / fps, false, {0.6, 0.7});
-            accumulator = plan.remainder;
-            check(plan.dropped == 0, "reference schedule discards no time");
-        }
-        check(close(scheduled.time, 1, 1e-9), "one second of reference schedule");
-        schedulePositions.push_back(scheduled.particles[0].position.x);
-    }
-    check(close(schedulePositions[0], schedulePositions[1]) && close(schedulePositions[0], schedulePositions[2]), "FPS-independent reference trajectory");
-    auto stalled = water::makeState(water::Preset::Pair);
-    const auto plan = water::advanceFrame(stalled, settings, 0, 2, false, {0.6, 0.7});
-    check(plan.steps <= 64 && plan.dropped >= 1.95, "bounded work after stalled frame");
-    bool rejected = false;
-    settings.soundSpeed = std::numeric_limits<double>::infinity();
-    try {
-        water::prepare(stalled, settings);
-    } catch (const std::exception&) {
-        rejected = true;
-    }
-    check(rejected, "invalid settings rejected");
+    water::State edge;
+    edge.particles = {{0.1, 0.1}, {0.1 + water::support, 0.1}, {0.1 + water::support - 1e-8, 0.1}, {-0.03, 0.1}};
+    check(water::buildNeighbors(edge, true).lists == water::buildNeighbors(edge, false).lists, "negative cells and exact cutoff");
+    water::Grid lookup;
+    rejects([&] {
+        lookup.cell(1e300, 0);
+    },
+            "grid rejects before unsafe integer conversion");
+}
 
+void scaleChecks() {
+    // Kiểm workload thật ngắn trong CTest; render/2200 bước được kiểm ở executable riêng có deadline.
+    for (const auto preset : {water::Preset::Dam, water::Preset::Pool}) {
+        auto state = water::makeState(preset, 5000);
+        const auto initialMass = water::mass * state.particles.size();
+        for (int i = 0; i < 16; ++i) {
+            water::step(state, {});
+        }
+        water::inspectCurrent(state, {});
+        const auto values = water::measure(state);
+        check(state.particles.size() == 5000 && state.updated == 5000, "actual 5000 updated particles");
+        check(close(initialMass, water::mass * state.particles.size(), 1e-9) && values.leaked == 0, "mass and boundary containment");
+        check(std::isfinite(values.maximum) && values.maximum < 1.5, "short-run compression guard, not physical accuracy proof");
+        std::cout << "SCALE 5000 tick=" << state.tick << " rho=" << values.minimum << ',' << values.median << ',' << values.maximum << " dt=" << state.dt << " leakage=" << values.leaked << '\n';
+        water::Surface surface;
+        water::reconstruct(state, surface);
+        water::shade(surface);
+        check(surface.drawn == 5000 && surface.rgba.size() == 720 * 432 * 4, "surface consumes all particles");
+    }
+    rejects([] {
+        water::makeState(water::Preset::Dam, 40000);
+    },
+            "bounded count");
+    rejects([] {
+        water::buildNeighbors(water::makeState(), false);
+    },
+            "bounded all-pairs");
+}
+
+void inputChecks() {
+    auto state = water::makeState(water::Preset::Empty);
+    const std::size_t added = water::emitBurst(state, {8.6, 6.5});
+    check(added == 7 && state.emitted == 7, "burst has seven new particles");
+    check(water::emitBurst(state, {8.6, 6.5}) == 0 && state.rejected == 7, "overlap rejection");
+    while (state.particles.size() < water::capacity) {
+        state.particles.push_back({1, 1});
+    }
+    check(water::emitBurst(state, {4, 4}) == 0 && state.particles.size() == water::capacity, "capacity does not delete old particles");
+    state = water::makeState(water::Preset::Empty);
+    state.paddle.enabled = true;
+    const double initialX = state.paddle.x;
+    water::targetPaddle(state, initialX + 2, state.paddle.y);
+    check(state.paddle.x == initialX, "target does not teleport body");
+    water::movePaddle(state, 0.001);
+    check(close(state.paddle.x - initialX, 0.003, 1e-12), "kinematic speed bound");
+    water::Particle p{state.paddle.x, state.paddle.y};
+    water::collide(state, p);
+    check(std::hypot(p.x - state.paddle.x, p.y - state.paddle.y) >= state.paddle.radius + water::spacing / 2 - 1e-10, "paddle singular center contact");
+    water::Particle inward{-1, 1, 2, 0};
+    water::collide(state, inward);
+    check(inward.vx == 2, "boundary preserves inward velocity");
+}
+
+void robustnessChecks() {
+    auto state = water::makeState(water::Preset::Empty);
+    state.particles = {{2, 2}};
+    water::Settings settings;
+    settings.soundSpeed = 40;
+    check(close(water::chooseDt(state, settings), 0.25 * water::h / 43, 1e-12), "acoustic timestep oracle");
+    state.particles[0].ax = 1e8;
+    check(close(water::chooseDt(state, settings), 0.25 * std::sqrt(water::h / 1e8), 1e-12), "force timestep oracle");
+    state.particles[0].ax = 1e20;
+    rejects([&] {
+        water::chooseDt(state, settings);
+    },
+            "too-small timestep rejected");
+    state.particles[0].ax = std::numeric_limits<double>::quiet_NaN();
+    rejects([&] {
+        water::step(state, settings);
+    },
+            "NaN rejected");
+    settings.soundSpeed = std::numeric_limits<double>::infinity();
+    rejects([&] {
+        water::validate(settings);
+    },
+            "invalid parameter rejected");
+    std::set<std::pair<double, double>> unique;
+    for (const auto& wall : water::wallSamples()) {
+        check(wall.x < 0 || wall.x > water::width || wall.y < 0 || wall.y > water::height, "wall outside fluid domain");
+        check(unique.insert({wall.x, wall.y}).second, "no corner duplicate");
+    }
+    const auto report = water::reference();
+    check(report.passed && report.equilibriumDrift < 1e-4, "zero-gravity equilibrium and reference");
+}
+
+int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--benchmark") {
+        return benchmark::run();
+    }
+    try {
+        kernelChecks();
+        pairChecks();
+        searchChecks();
+        scaleChecks();
+        inputChecks();
+        robustnessChecks();
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return EXIT_FAILURE;
+    }
     if (failures != 0) {
         return EXIT_FAILURE;
     }
+    std::cout << "SPH tests PASS\n";
     return EXIT_SUCCESS;
 }

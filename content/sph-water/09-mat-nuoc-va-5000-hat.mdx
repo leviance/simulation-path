@@ -1,0 +1,114 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ các chấm rời tới mặt nước của 5.000 hạt
+
+## Vấn đề cần giải quyết
+
+Grid đã giúp ta tính cùng một hệ bằng ít phép thử hơn. Bây giờ mới tăng tới bản chuẩn 5.000 hạt. Tuy nhiên, chỉ vẽ thêm chấm xanh vẫn khiến bể giống một đống viên bi. Ta cần đọc các vị trí ấy thành một vùng nước liên tục, đồng thời giữ cách xem hạt thật để kiểm.
+
+## Hiểu ý tưởng trước khi viết code
+
+Solver không đổi: vẫn tính density, pressure và lực cho từng hạt. Chỉ phần vẽ thêm một trường phủ `coverage` trên ảnh 720×432. Mỗi hạt đóng góp một blob mềm, tắt ngoài bán kính `R=1.65*spacing`:
+
+$$\phi(s)=\sum_i\frac{4}{\pi(1.65)^2}\max\left(0,1-\frac{\|s-x_i\|^2}{R^2}\right)^3.$$
+
+Đây là kernel **để vẽ**, không thay cubic spline trong solver. Hệ số làm trường phủ gần 1 trong một lattice đều. Mặt nước được đọc từ vùng có coverage đủ lớn; vì vậy các chấm gần nhau nối thành một khối, còn hạt bắn rời vẫn hiện thành giọt nhỏ.
+
+Thử đoán: đổi bán kính blob có được làm density của solver thay đổi không?
+
+<InteractiveLab demo="sph-water" mode="sph-9" />
+
+## Viết code từng bước
+
+### Tăng dữ liệu thật trước khi đổi hình vẽ
+
+Từ checkpoint 9, constructor trong `app/state.hpp` chọn `requested=5000` và `View::Surface`. Cảnh dam đặt đúng 50×100 hạt; không lấy 1.000 hạt rồi nhân số trên giao diện. Preset 10.000 là mở rộng theo phần cứng, không phải quy mô bắt buộc của bài này.
+
+### Cộng trường từ mọi hạt
+
+{/* snippet include/sph/surface.hpp#surface */}
+
+```cpp title="include/sph/surface.hpp — splat vị trí hạt lên trường phủ"
+inline void reconstruct(const State& state, Surface& surface) {
+    std::fill(surface.coverage.begin(), surface.coverage.end(), 0.0f);
+    const double radius = 1.65 * spacing;
+    const double scale = surface.w / width;
+    const double pixels = radius * scale;
+    const double weight = 4 / (std::numbers::pi * 1.65 * 1.65);
+    surface.drawn = 0;
+    for (const auto& p : state.particles) {
+        const double cx = p.x * scale;
+        const double cy = (height - p.y) * scale;
+        const int left = std::max(0, static_cast<int>(std::floor(cx - pixels)));
+        const int right = std::min(surface.w - 1, static_cast<int>(std::ceil(cx + pixels)));
+        const int top = std::max(0, static_cast<int>(std::floor(cy - pixels)));
+        const int bottom = std::min(surface.hh - 1, static_cast<int>(std::ceil(cy + pixels)));
+        for (int y = top; y <= bottom; ++y) {
+            for (int x = left; x <= right; ++x) {
+                const double dx = (x + 0.5 - cx) / pixels;
+                const double dy = (y + 0.5 - cy) / pixels;
+                const double q2 = dx * dx + dy * dy;
+                if (q2 < 1) {
+                    const double t = 1 - q2;
+                    surface.coverage[y * surface.w + x] += static_cast<float>(weight * t * t * t);
+                }
+            }
+        }
+        ++surface.drawn;
+    }
+}
+```
+
+Chỉ quét bounding box của blob trên ảnh, nhưng **không bỏ hạt nào**. Bộ đếm `drawn` tăng theo mỗi hạt được xử lý, độc lập với số pixel cuối có màu xanh.
+
+### Tô hình từ coverage
+
+{/* snippet include/sph/surface.hpp#shade */}
+
+```cpp title="include/sph/surface.hpp — màu thân và mép nước"
+inline void shade(Surface& surface) {
+    for (int y = 0; y < surface.hh; ++y) {
+        for (int x = 0; x < surface.w; ++x) {
+            const int i = y * surface.w + x;
+            const double phi = surface.coverage[i];
+            const double dx = surface.coverage[y * surface.w + std::min(x + 1, surface.w - 1)] - surface.coverage[y * surface.w + std::max(x - 1, 0)];
+            const double dy = surface.coverage[std::min(y + 1, surface.hh - 1) * surface.w + x] - surface.coverage[std::max(y - 1, 0) * surface.w + x];
+            const double normal = std::max(0.0, (0.35 * dx + 0.94 * dy) / std::max(1e-9, std::hypot(dx, dy)));
+            const double edge = std::exp(-70 * (phi - 0.65) * (phi - 0.65)) * (0.25 + 0.75 * normal);
+            const double alpha = std::clamp((phi - 0.30) * 5, 0.0, 1.0);
+            const double elevation = 1 - static_cast<double>(y) / surface.hh;
+            double grid = 0;
+            if (x % 36 == 0 || y % 36 == 0) {
+                grid = 4;
+            }
+            const double background[3] = {9 + grid, 18 + grid, 31 + grid};
+            const double waterColor[3] = {14 + 12 * elevation + 128 * edge, 102 + 40 * elevation + 105 * edge, 190 + 25 * elevation + 38 * edge};
+            for (int channel = 0; channel < 3; ++channel) {
+                surface.rgba[4 * i + channel] = static_cast<std::uint8_t>(std::clamp(background[channel] * (1 - alpha) + waterColor[channel] * alpha, 0.0, 255.0));
+            }
+            surface.rgba[4 * i + 3] = 255;
+        }
+    }
+}
+```
+
+Gradient coverage giúp mép hướng lên sáng hơn; alpha làm biên mềm trong vài pixel. Đây là cách trình bày 2D, không phải tính khúc xạ hay surface reconstruction 3D. Số pixel phủ nước không bảo toàn diện tích chính xác; **mass của solver** mới là đại lượng cần giữ khi không có vòi.
+
+## Ghép các phần lại
+
+`App.refresh` cập nhật số đo sau physics; `draw` gọi `reconstruct → shade → SDL_UpdateTexture → SDL_RenderTexture`. Khi paused và state không đổi, ảnh được giữ lại thay vì dựng lại trong mỗi frame. Chuyển L sang Hạt/Density/Pressure/Speed để xem cùng dữ liệu theo cách khác.
+
+## Thử làm sai để hiểu đúng
+
+Tạm chỉ splat mỗi hạt thứ năm. Hình có thể còn nhận ra nước, nhưng `drawn` không được ghi 5.000 nữa. Sau đó thử đổi radius hiển thị: nếu density hay trajectory đổi theo, bạn đã trộn presentation vào solver. Hoàn tác trước khi nghiệm thu.
+
+## Tự kiểm tra kết quả
+
+- Default có 5.000 hạt; sau một bước `updated=drawn=5000`, mass 24.500 kg trong mô hình 2D.
+- Cột nước đổ xuống, lan ngang và dội vào thành; không có animation nước chạy riêng phía sau.
+- Lớp Hạt thật và mặt nước trùng vị trí; density/pressure hiển thị thang màu, số đo không bị clamp.
+- Ghi chi phí theo N. 10.000 không được gọi là realtime nếu chưa đo được trên máy đang dùng.
+
+## Bài tập mở rộng
+
+Thử coverage ở độ phân giải thấp hơn nhưng giữ toàn bộ solver 5.000 hạt. So thời gian render và độ răng cưa, đừng gọi đó là giảm workload physics. [Tiếp: vòi nước và khối lượng được thêm](./10-voi-nuoc-va-khoi-luong).

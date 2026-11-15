@@ -1,0 +1,128 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kéo một vật cản vào dòng nước
+
+## Vấn đề cần giải quyết
+
+Đổ nước rồi chỉ đứng nhìn sẽ bỏ lỡ một câu hỏi thú vị: nếu đưa một vật rắn vào dòng chảy, nước tách và dội lại thế nào? Ta sẽ thêm một đĩa tròn có thể kéo, nhưng không coi event chuột là quyền dịch chuyển vật rắn tức thời xuyên qua toàn bộ bể.
+
+## Hiểu ý tưởng trước khi viết code
+
+Vật cản ở đây là **kinematic**: người dùng điều khiển target, chương trình đưa nó tới target với tốc độ tối đa 3 m/s. Nước chịu tác động của nó, nhưng không có solver rigid body tính phản lực để đẩy nó ngược lại. Đây là tương tác một chiều, không phải một hệ fluid–rigid chính xác đầy đủ.
+
+Một biên chuyển động cần cả position và velocity. SPH samples nằm trong vật rắn giúp bù support và tạo lực; collision hình học ở vị trí mới là lớp chống xuyên thêm. Khi paused, target có thể đổi nhưng vật cản và nước đều đứng yên.
+
+<InteractiveLab demo="sph-water" mode="sph-11" />
+
+## Viết code từng bước
+
+### Thêm mẫu rắn có vận tốc
+
+{/* snippet include/sph/scenes.hpp#solid-samples */}
+
+```cpp title="include/sph/scenes.hpp — mẫu tường và vật cản"
+inline std::vector<Particle> samples(const State& state) {
+    std::vector<Particle> result = state.particles;
+    result.insert(result.end(), state.walls.begin(), state.walls.end());
+    if (state.paddle.enabled) {
+        // Vành đai mẫu nằm bên trong vật rắn, chuyển động với cùng velocity.
+        for (int layer = 0; layer < 3; ++layer) {
+            const double radius = state.paddle.radius - (layer + 0.5) * spacing;
+            const int count = static_cast<int>(std::ceil(2 * std::numbers::pi * radius / spacing));
+            for (int k = 0; k < count; ++k) {
+                const double angle = 2 * std::numbers::pi * k / count;
+                result.push_back({state.paddle.x + radius * std::cos(angle), state.paddle.y + radius * std::sin(angle), state.paddle.vx, state.paddle.vy});
+            }
+        }
+    }
+    return result;
+}
+```
+
+Ba vành mẫu nằm **bên trong** đĩa, cách nhau một spacing. Chúng có cùng velocity với biên; force loop dùng giá trị đó khi tính relative velocity. Đĩa không tự sinh hạt nước và các mẫu rắn không cộng vào mass của nước.
+
+### Tách target khỏi vị trí thật
+
+{/* snippet include/sph/boundary.hpp#paddle */}
+
+```cpp title="include/sph/boundary.hpp — target và tốc độ biên"
+inline void movePaddle(State& state, double dt) {
+    auto& paddle = state.paddle;
+    if (!paddle.enabled) {
+        return;
+    }
+    const double dx = paddle.targetX - paddle.x;
+    const double dy = paddle.targetY - paddle.y;
+    const double distance = std::hypot(dx, dy);
+    double fraction = 0;
+    if (distance > 1e-12) {
+        fraction = std::min(1.0, 3.0 * dt / distance);
+    }
+    paddle.vx = dx * fraction / dt;
+    paddle.vy = dy * fraction / dt;
+    paddle.x += dx * fraction;
+    paddle.y += dy * fraction;
+}
+
+inline void targetPaddle(State& state, double x, double y) {
+    if (!std::isfinite(x) || !std::isfinite(y)) {
+        throw std::invalid_argument("Invalid paddle target");
+    }
+    const double margin = state.paddle.radius + 2 * spacing;
+    state.paddle.targetX = std::clamp(x, margin, width - margin);
+    state.paddle.targetY = std::clamp(y, margin, height - margin);
+}
+```
+
+Target được giữ cách thành một khoảng đủ cho đĩa và hạt nước. Khi target ở rất gần, fraction nhỏ đi để không vượt quá nó. Không có phép chia cho distance=0.
+
+## Ghép các phần lại
+
+Trong `step`, lực đọc samples của biên tại đầu bước; `movePaddle(dt)` tiến vật cản, rồi `integrate/collide` xử lý hạt ở vị trí biên mới. Đây là ghép explicit bậc một, có độ trễ sai phân; không giải implicit contact giữa fluid và rigid body.
+
+Đây là chỗ nối mới vào solver, không phải gọi `movePaddle` từ event chuột:
+
+{/* snippet include/sph/solver.hpp#step */}
+
+```cpp title="include/sph/solver.hpp — tiến biên trong physics step"
+inline void step(State& state, const Settings& settings) {
+    validate(settings);
+    requireFinite(state);
+    for (auto& p : state.particles) {
+        p.ax = 0;
+        p.ay = -settings.gravity;
+    }
+    bool useGrid = false;
+    useGrid = settings.useGrid;
+    auto search = buildNeighbors(state, useGrid);
+    computeDensity(state, search);
+    state.candidates = search.candidates;
+    computePressure(state, settings);
+    computeForces(state, search, settings);
+    requireFinite(state);
+    const double dt = chooseDt(state, settings);
+    movePaddle(state, dt);
+    integrate(state, dt);
+    requireFinite(state);
+}
+```
+
+`collide` đưa tâm hạt ra ngoài `paddle.radius+spacing/2`, rồi chỉ phản xạ phần **relative normal velocity đang đi vào vật rắn**. Velocity của biên phải được trừ trước khi lấy dot product. Không đổi velocity tiếp tuyến tùy ý để giả ma sát.
+
+Chọn tool Kéo vật cản, bật đĩa rồi kéo hoặc dùng mũi tên. Nước không được di chuyển chỉ vì bạn đổi target lúc paused; nhấn N/Chạy mới tiến physics.
+
+## Thử làm sai để hiểu đúng
+
+Gán `paddle.x=mouseX` trong event handler. Một lần rê xa có thể nhảy xuyên qua hàng trăm hạt và tạo cú nén vô lý. Tiếp đó bỏ velocity của biên khỏi phép va chạm: vật cản đang chuyển động sẽ bị đối xử như tường đứng yên. Hoàn tác trước khi đo.
+
+## Tự kiểm tra kết quả
+
+- Target đổi khi paused, position của paddle không đổi.
+- Với dt=0,001, một bước dịch đĩa không quá 0,003 m.
+- Mẫu SPH và hình đĩa dùng cùng position/radius/velocity.
+- Sau bước, hạt không nằm trong đĩa; ca tâm trùng tâm không tạo NaN.
+- Gravity/tường/paddle là tác động ngoài: không yêu cầu momentum toàn bể bảo toàn.
+
+## Bài tập mở rộng
+
+Thay target chuột bằng một đường đi do người dùng vẽ trước nhưng vẫn giữ giới hạn tốc độ. Đường đi chỉ điều khiển biên; tuyệt đối không dùng nó làm quỹ đạo dựng sẵn cho các hạt nước. [Tiếp: kiểm chứng và bản hoàn chỉnh](./12-kiem-chung-va-ban-hoan-chinh).

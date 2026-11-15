@@ -1,88 +1,125 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Cho hạt rơi và va vào thành bể
+# Cho hạt rơi, rồi giữ chúng trong bể
 
 ## Vấn đề cần giải quyết
 
-Các chấm đã được vẽ đúng nhưng chưa chuyển động. Trước khi viết lực giữa hàng xóm, ta cần một đường cập nhật đơn giản để kiểm gravity, đơn vị và va chạm. Bài này chỉ làm các hạt rơi độc lập. Chúng có thể chồng lên nhau ở đáy; chưa có lý do gì khiến cột lan ngang như nước.
-
-Mục tiêu là khi nhấn N, mỗi hạt tiến thêm một bước 0.001 s. Không chạy liên tục lúc này: tiến từng bước giúp thấy chính xác dữ liệu nào vừa đổi.
+Ở bài trước, các chấm chỉ đứng yên. Bây giờ ta cho chúng rơi dưới trọng lực và dừng ở thành bể. Đừng vội gọi kết quả là nước: các hạt lúc này vẫn đi xuyên qua nhau vì chưa có density hay pressure.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Gravity là acceleration (0,−9.81) m/s². Dùng semi-implicit Euler trong nhóm project về tích phân: cập nhật velocity trước, rồi dùng velocity mới để cập nhật position.
+Acceleration cho biết vận tốc thay đổi nhanh thế nào. Semi-implicit Euler cập nhật vận tốc trước, rồi dùng vận tốc mới để đổi vị trí:
 
-$$
-\mathbf v^{n+1}=\mathbf v^n+\Delta t\,\mathbf a^n,\qquad
-\mathbf x^{n+1}=\mathbf x^n+\Delta t\,\mathbf v^{n+1}.
-$$
+$$v^{n+1}=v^n+a^n\Delta t,\qquad x^{n+1}=x^n+v^{n+1}\Delta t.$$
 
-Hạt nghỉ ở y=0.5 sau bước đầu có vy=−0.00981, y=0.49999019. Những con số nhỏ là đúng vì dt nhỏ. Đừng tăng dt lên một frame 1/30 s chỉ để thấy chuyển động nhanh; solver SPH về sau nhạy với timestep hơn nhiều.
-
-Thành trái/phải/đáy giữ tâm cách thành nửa spacing. Nếu velocity đang hướng ra ngoài, đổi normal thành −0.1 lần giá trị cũ; tangent giữ nguyên. Mép trên cũng có collision giải tích để demo không mất hạt. Đây là **trần an toàn**, không phải điều kiện mặt thoáng mở của một bể thực.
+Gravity nằm trên y nên `ax=0`, `ay=-g`. Ở các bài chưa có pressure, N tiến 0,01 s. Sau mười lần N, tổng thời gian là 0,1 s; một hạt chưa chạm biên có `vy=-0.981 m/s`. Với cách tích phân này, quãng rơi là 0,053955 m, không phải đúng nghiệm liên tục 0,04905 m. Sai khác đó là sai số tích phân, không phải do SDL.
 
 <InteractiveLab demo="sph-water" mode="sph-2" />
 
 ## Viết code từng bước
 
-### Bước 1 — Tạo acceleration cho mọi hạt
+### Đổi state bằng dt, không bằng số frame
 
-Thêm `accelerations` trong `include/solver.hpp`. Ở checkpoint này, tham số neighbors chưa dùng; vector kết quả chỉ chứa gravity:
+Trong `sph/solver.hpp`, `step` đặt acceleration cho toàn bộ hạt. Sau đó gọi hàm sau, không đặt phép cộng vị trí trong `draw`:
 
-```cpp title="include/solver.hpp — khởi tạo acceleration"
-std::vector<Vec2> result(state.particles.size(), {0, -settings.gravity});
-```
+{/* snippet include/sph/boundary.hpp#integrate */}
 
-Hàm trả vector riêng. Quy ước này rất quan trọng: sau này toàn bộ lực phải được tính từ state cũ trước khi bất kỳ hạt nào được di chuyển.
-
-### Bước 2 — Tích phân velocity và position
-
-Thêm `integrate`, duyệt index tương ứng giữa particle và acceleration. Đây là phần bên trong vòng lặp:
-
-```cpp title="include/solver.hpp — semi-implicit Euler trong integrate"
-auto& p = state.particles[i];
-p.velocity.x += acceleration[i].x * dt;
-p.velocity.y += acceleration[i].y * dt;
-p.position.x += p.velocity.x * dt;
-p.position.y += p.velocity.y * dt;
-collide(p.position, p.velocity);
-```
-
-Sau vòng lặp, cộng `state.time += dt` và kiểm `finiteState`. Acceleration đã có đơn vị m/s²; chỉ nhân dt ở bước đổi velocity, không nhân dt ngay lúc khởi tạo gravity.
-
-### Bước 3 — Giải quyết collision và nối phím N
-
-Thêm `collide` trước `integrate`. Nhánh thành trái minh họa cả việc đưa tâm về vị trí hợp lệ và tránh phản xạ một hạt đang đi vào trong:
-
-```cpp title="include/solver.hpp — thành trái"
-const double radius = spacing / 2;
-if (position.x < radius) {
-    position.x = radius;
-    if (velocity.x < 0) velocity.x *= -0.1;
+```cpp title="include/sph/boundary.hpp — tích phân một bước"
+inline void integrate(State& state, double dt) {
+    for (auto& p : state.particles) {
+        p.vx += p.ax * dt;
+        p.vy += p.ay * dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        collide(state, p);
+    }
+    state.time += dt;
+    state.dt = dt;
+    ++state.tick;
+    state.updated = state.particles.size();
 }
 ```
 
-Các nhánh phải/đáy/trần dùng điều kiện hướng normal tương ứng. Trong `main`, N đặt `singleStep=true`; sau vòng event gọi `water::step(state,settings)`. Không tích phân ở từng event: số keyboard event không phải thời gian vật lý.
+`updated` đếm số hạt thật đã đi qua lượt cập nhật. `tick` tăng một lần cho cả hệ, không tăng theo từng hạt.
 
-```cpp title="src/main.cpp — yêu cầu một bước từ event"
-if (event.key.key == SDLK_N) singleStep = true;
+### Chỉ sửa vận tốc đang hướng ra ngoài
+
+Khi tâm hạt vượt biên, ta đưa nó về mặt giới hạn và phản xạ một phần nhỏ vận tốc pháp tuyến. Hệ số 0,05 làm va chạm rất ít nảy. Thành trái chỉ sửa `vx` âm; nó không được đảo một `vx` dương đang đưa hạt trở vào bể.
+
+{/* snippet include/sph/boundary.hpp#boundary */}
+
+```cpp title="include/sph/boundary.hpp — va chạm với bốn thành"
+inline void collide(State& state, Particle& p) {
+    const double radius = spacing / 2;
+    if (p.x < radius) {
+        p.x = radius;
+        if (p.vx < 0) {
+            p.vx *= -0.05;
+        }
+        ++state.contacts;
+    }
+    if (p.x > width - radius) {
+        p.x = width - radius;
+        if (p.vx > 0) {
+            p.vx *= -0.05;
+        }
+        ++state.contacts;
+    }
+    if (p.y < radius) {
+        p.y = radius;
+        if (p.vy < 0) {
+            p.vy *= -0.05;
+        }
+        ++state.contacts;
+    }
+    if (p.y > height - radius) {
+        p.y = height - radius;
+        if (p.vy > 0) {
+            p.vy *= -0.05;
+        }
+        ++state.contacts;
+    }
+}
 ```
+
+Đây là bể kín bốn cạnh, kể cả trần. Đường biên phía trên không phải một miệng mở cho nước tràn ra.
 
 ## Ghép các phần lại
 
-`step` gọi `prepare` để có acceleration, sau đó `integrate`. `prepare` hiện chỉ kiểm settings/state và đặt dt=0.001. Mỗi lần N chỉ chạy một bước; giữ phím không phát bước qua key repeat. Source đầy đủ bên dưới đã ghép các hàm vào đúng vị trí.
+Phím N trong `app/input.hpp` pause trước, gọi `App.oneStep`, rồi cập nhật inspector. `oneStep` gọi `water::step`; `step` gọi `integrate`; cuối cùng renderer đọc vị trí mới. Sau bài này, hãy chạy checkpoint 2 và đối chiếu chuỗi gọi đó bằng debugger.
 
-Preset Pair có hai hạt tiến lại gần. Chúng đi xuyên qua nhau ở bài này vì chưa có lực nội và không có hard-sphere collision. Điều đó giúp phân biệt rõ tính năng ta sắp bổ sung.
+Đây là `step` hoàn chỉnh ở checkpoint 2. Lượt đầu gán acceleration, lượt trong `integrate` mới đổi velocity/position. Bạn có thể thấy chính xác nơi hàm vừa viết được gọi:
+
+{/* snippet include/sph/solver.hpp#step */}
+
+```cpp title="include/sph/solver.hpp — nối gravity và integrate"
+inline void step(State& state, const Settings& settings) {
+    validate(settings);
+    requireFinite(state);
+    for (auto& p : state.particles) {
+        p.ax = 0;
+        p.ay = -settings.gravity;
+    }
+    requireFinite(state);
+    const double dt = 0.01;
+    integrate(state, dt);
+    requireFinite(state);
+}
+```
+
+Để kiểm con số velocity trong C++, đặt breakpoint ngay trước `collide` và chọn một hạt chưa chạm thành; xem `p.vy` ở cửa sổ Watch. Canvas có hàng Velocity để thử nhanh. Đừng dùng một hạt đã chạm đáy để so với công thức rơi tự do.
 
 ## Thử làm sai để hiểu đúng
 
-1. Cộng gravity vào velocity mà bỏ dt. Chỉ một lần N đã làm velocity đổi 9.81 m/s. Khôi phục dt rồi so với số dự kiến ở trên.
-2. Phản xạ vx ở thành trái kể cả khi vx dương. Hạt vừa được đưa về thành lại bị quay ra ngoài. Khôi phục kiểm tra hướng velocity.
+Đổi `p.vy += p.ay * dt` thành `p.vy += p.ay`. Mười bước sẽ tạo tốc độ lớn gấp 100 lần ở dt=0,01. Tiếp theo, thử đảo velocity ở thành trái mà không kiểm dấu: một hạt đang đi vào bể sẽ bị hãm sai. Hoàn tác trước khi tiếp tục.
 
 ## Tự kiểm tra kết quả
 
-Ca hạt đơn ở y=0.5 khớp velocity/position bước đầu. Đáy không cho tâm thấp hơn 0.0225; thành trái không đổi vy. Không có NaN/Infinity. Cột chưa lan ngang, chưa cần sửa điều đó bằng jitter hay lực đẩy tùy ý.
+- Một hạt tự do sau 10 bước có `vy=-0.981`, quãng rơi 0,053955 m trong sai số số thực nhỏ.
+- Velocity tiếp tuyến không bị sửa chỉ vì chạm thành.
+- Hạt không ra ngoài vùng tâm `[spacing/2, width-spacing/2] × [spacing/2, height-spacing/2]`.
+- Chưa có force giữa các hạt. Nếu chúng chồng lên nhau, đó là điều bài này chưa giải quyết.
 
 ## Bài tập mở rộng
 
-Viết phép kiểm collision ở thành phải với velocity hướng vào và hướng ra. Sau đó học [kernel 2D](/projects/sph-water/03-kernel-hai-chieu): thay vì coi mỗi hạt là một điểm chỉ ảnh hưởng tại chính nó, ta cho nó một vùng ảnh hưởng trơn.
+Đặt gravity bằng 0, thêm một hạt có vận tốc xiên rồi dự đoán thành nó chạm trước. [Bài tiếp theo: vùng ảnh hưởng của một hạt](./03-kernel-hai-chieu).

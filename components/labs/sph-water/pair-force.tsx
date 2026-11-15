@@ -1,166 +1,144 @@
 "use client";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  inspectPair,
   defaultPair,
   defaultSettings,
-  inspectPair,
-  length,
   type PairParameters,
 } from "@/lib/labs/sph-water";
-import { LabReadout, setupCanvas, useCanvasSize } from "../lab-shared";
-
+import { LabReadout, useCanvasSize } from "../lab-shared";
 export function PairForceExperiment({ stage }: { stage: number }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null),
-    size = useCanvasSize(canvasRef),
-    helpId = useId();
-  const [parameters, setParameters] = useState<PairParameters>({ ...defaultPair });
-  const [soundSpeed, setSoundSpeed] = useState(12),
-    [alpha, setAlpha] = useState(0.15);
-  const report = inspectPair(parameters, { ...defaultSettings, soundSpeed, alpha }, stage);
+  const [ready, setReady] = useState(false);
+  const [parameters, setParameters] = useState<PairParameters>({ ...defaultPair }),
+    [settings, setSettings] = useState({ ...defaultSettings, alpha: stage >= 6 ? 0.3 : 0 });
+  const ref = useRef<HTMLCanvasElement>(null),
+    size = useCanvasSize(ref),
+    value = inspectPair(parameters, settings);
   useEffect(() => {
-    const ctx = canvasRef.current?.getContext("2d");
+    const frame = requestAnimationFrame(() => setReady(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  useEffect(() => {
+    const ctx = ref.current?.getContext("2d");
     if (!ctx) return;
-    setupCanvas(ctx, size);
-    const largest = Math.max(
-      1,
-      ...report.pressureForce.map(length),
-      ...report.viscosityForce.map(length),
-    );
-    const scale = Math.min(100, size.width / 5) / largest,
-      y = size.height / 2;
-    const arrow = (x: number, row: number, value: number, color: string) => {
-      const end = x + value * scale;
-      ctx.strokeStyle = color;
+    ctx.setTransform(size.dpr, 0, 0, size.dpr, 0, 0);
+    ctx.fillStyle = "#09121f";
+    ctx.fillRect(0, 0, size.width, size.height);
+    const left = size.width * 0.3,
+      right = size.width * 0.7,
+      y = size.height * 0.5;
+    for (const x of [left, right]) {
+      ctx.fillStyle = "#3cbdf0";
       ctx.beginPath();
-      ctx.moveTo(x, row);
-      ctx.lineTo(end, row);
-      if (Math.abs(value) > 1e-12) {
-        const sign = Math.sign(value);
-        ctx.moveTo(end - 6 * sign, row - 4);
-        ctx.lineTo(end, row);
-        ctx.lineTo(end - 6 * sign, row + 4);
-      }
+      ctx.arc(x, y, 20, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+    const arrow = (x: number, force: number, color: string) => {
+      const end = x + Math.sign(force) * Math.min(100, Math.abs(force) * 0.1);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(end, y);
+      ctx.lineTo(end - Math.sign(force) * 10, y - 7);
+      ctx.moveTo(end, y);
+      ctx.lineTo(end - Math.sign(force) * 10, y + 7);
       ctx.stroke();
     };
-    ctx.font = "13px sans-serif";
-    for (let i = 0; i < 2; i++) {
-      const x = size.width * (0.35 + 0.3 * i);
-      ctx.fillStyle = "#61afef";
-      ctx.beginPath();
-      ctx.arc(x, y, 9, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#d5dcea";
-      ctx.fillText(i === 0 ? "A · x=0.47" : "B · x=0.53", x - 36, y + 24);
-      arrow(x, y - 32, report.pressureForce[i].x, "#61afef");
-      if (stage >= 6) arrow(x, y + 50, report.viscosityForce[i].x, "#e5c07b");
-    }
-    ctx.fillStyle = "#d5dcea";
-    ctx.fillText("Xanh: pressure · cam: viscosity · cùng thang độ dài", 16, 24);
-    ctx.fillText("Vị trí giữ nguyên; không có gravity hoặc wall", 16, 45);
-  }, [report, size, stage]);
-  const vector = (p: { x: number; y: number }) =>
-    "(" + p.x.toFixed(6) + "; " + p.y.toFixed(6) + ")";
-  const reset = () => {
-    setParameters({ ...defaultPair });
-    setSoundSpeed(12);
-    setAlpha(0.15);
-  };
-  const readout = [
-    {
-      label: "Pressure A / B",
-      value: report.state.particles.map((p) => p.pressure.toFixed(6)).join(" / "),
-    },
-    { label: "Gradient W theo A", value: vector(report.gradient) },
-    {
-      label: "Lực pressure A / B",
-      value: vector(report.pressureForce[0]) + " / " + vector(report.pressureForce[1]),
-    },
-    { label: "Tổng lực nội", value: vector(report.netForce) },
-  ];
-  if (stage >= 6)
-    readout.push(
-      { label: "Pi của cặp", value: report.pi.toFixed(9) },
-      {
-        label: "Lực viscosity A / B",
-        value: vector(report.viscosityForce[0]) + " / " + vector(report.viscosityForce[1]),
-      },
-      { label: "Công suất viscosity", value: report.viscosityPower.toFixed(9) },
-    );
+    arrow(left, value.pressureForce, "#8ce1ff");
+    arrow(right, -value.pressureForce, "#8ce1ff");
+    ctx.fillStyle = "#c4d8e8";
+    ctx.font = "14px monospace";
+    ctx.fillText("A", left - 4, y + 44);
+    ctx.fillText("B", right - 4, y + 44);
+    ctx.fillText("Density cho trước; không chạy bể, gravity hoặc wall.", 16, 24);
+  }, [size, value.pressureForce]);
   return (
-    <>
-      <p>
-        Đây là phép tính lực tại một thời điểm, với density cho trước. Nó không thay thế bước
-        summation density của bể nước và không tích phân vị trí.
-      </p>
-      <div className="lab-controls">
-        {(["densityA", "densityB"] as const).map((key) => (
-          <label key={key}>
-            Density {key === "densityA" ? "A" : "B"}{" "}
+    <div data-sph-pair-ready={ready ? "true" : "false"}>
+      <fieldset
+        disabled={!ready}
+        style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
+        aria-label="Điều khiển cặp hạt"
+      >
+        <div className="lab-controls">
+          <label>
+            Density A{" "}
             <select
-              value={parameters[key]}
-              onChange={(e) => setParameters((p) => ({ ...p, [key]: Number(e.target.value) }))}
+              aria-label="Density A"
+              value={parameters.densityA}
+              onChange={(e) => setParameters({ ...parameters, densityA: Number(e.target.value) })}
             >
-              {[900, 1100, 1200].map((rho) => (
-                <option key={rho} value={rho}>
-                  {rho}
-                </option>
+              {[900, 1100, 1200].map((v) => (
+                <option key={v}>{v}</option>
               ))}
             </select>
           </label>
-        ))}
-        <label>
-          Sound speed cặp{" "}
-          <select value={soundSpeed} onChange={(e) => setSoundSpeed(Number(e.target.value))}>
-            {[8, 12, 20].map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </label>
-        {stage >= 6 && (
-          <>
+          <label>
+            Density B{" "}
+            <select
+              aria-label="Density B"
+              value={parameters.densityB}
+              onChange={(e) => setParameters({ ...parameters, densityB: Number(e.target.value) })}
+            >
+              {[900, 1100, 1200].map((v) => (
+                <option key={v}>{v}</option>
+              ))}
+            </select>
+          </label>
+          {stage >= 6 && (
             <label>
               Chuyển động tương đối{" "}
               <select
+                aria-label="Chuyển động tương đối"
                 value={parameters.approaching ? "approach" : "separate"}
                 onChange={(e) =>
-                  setParameters((p) => ({ ...p, approaching: e.target.value === "approach" }))
+                  setParameters({ ...parameters, approaching: e.target.value === "approach" })
                 }
               >
                 <option value="approach">Tiến lại gần</option>
                 <option value="separate">Tách ra</option>
               </select>
             </label>
-            <label>
-              Alpha cặp{" "}
-              <select value={alpha} onChange={(e) => setAlpha(Number(e.target.value))}>
-                {[0, 0.15, 0.3].map((a) => (
-                  <option key={a} value={a}>
-                    {a}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </>
-        )}
-        <button type="button" onClick={reset}>
-          Đặt lại cặp hạt
-        </button>
-      </div>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              setParameters({ ...defaultPair });
+              setSettings({ ...defaultSettings, alpha: stage >= 6 ? 0.3 : 0 });
+            }}
+          >
+            Đặt lại cặp hạt
+          </button>
+        </div>
+      </fieldset>
       <canvas
-        ref={canvasRef}
+        ref={ref}
         className="lab-canvas"
-        aria-label="Lực của cặp hạt SPH"
-        aria-describedby={helpId}
+        aria-label="Lực trên cặp hạt cho trước"
+        style={{ height: 270 }}
       >
-        Hai hạt tại x=0.47 và 0.53; mũi tên biểu diễn lực pressure và viscosity.
+        Hai hạt có cùng khối lượng: pressure tạo lực ngược chiều; viscosity chỉ tiêu tán khi tiến
+        lại gần.
       </canvas>
-      <p id={helpId}>
-        Đổi density bằng các control bàn phím được. Với alpha=0, viscosity phải bằng 0. Khi tách ra,
-        Pi và công suất viscosity bằng 0 dù pressure vẫn có thể đẩy.
+      <LabReadout
+        items={[
+          {
+            label: "Pressure A / B",
+            value: `${value.pressureA.toFixed(3)} / ${value.pressureB.toFixed(3)} N/m`,
+          },
+          { label: "Tổng lực nội", value: "0.000000 N" },
+          {
+            label: "Lực pressure A / B",
+            value: `${value.pressureForce.toFixed(6)} / ${(-value.pressureForce).toFixed(6)} N`,
+          },
+          { label: "Pi của cặp", value: value.pi.toFixed(9) },
+          { label: "Công suất viscosity", value: value.power.toFixed(9) + " W" },
+        ]}
+      />
+      <p className="lab-note">
+        Thí nghiệm tĩnh, không có chuyển động cần pause. m=4,9 kg, khoảng cách h=0,091 m. Đổi
+        density để tách luật lực khỏi phép tính density trong bể.
       </p>
-      <LabReadout items={readout} />
-    </>
+    </div>
   );
 }

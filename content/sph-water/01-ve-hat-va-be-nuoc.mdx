@@ -1,102 +1,187 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Vẽ các hạt trong bể trước khi mô phỏng nước
+# Dựng bể và vẽ 1.000 hạt đầu tiên
 
 ## Vấn đề cần giải quyết
 
-Ở Project 49, khói nằm trên một lưới cố định. Bài này đổi cách biểu diễn: mỗi phần nhỏ của nước được gắn với một hạt có vị trí riêng. Khi nước chảy, chính các vị trí ấy thay đổi.
+Bạn có thể vẽ hàng nghìn chấm xanh mà chưa tạo ra một giọt nước nào. Nhưng nếu chưa biết dữ liệu nào tạo ra các chấm ấy, viết thêm công thức sẽ chỉ khiến chương trình khó hiểu hơn. Bài đầu dừng ở một việc rõ ràng: mở cửa sổ, dựng bể và vẽ đúng 1.000 hạt đứng yên.
 
-Chưa cần học toàn bộ SPH ngay. Việc đầu tiên là chạy một cửa sổ SDL3, vẽ thành bể và một cột chấm tròn bên trái. Nếu chưa nhìn thấy dữ liệu, những lỗi ở solver sau này sẽ rất khó phân biệt với lỗi vẽ.
+[Tải ZIP Project 50](/downloads/project-50-sph-water.zip), giải nén rồi mở terminal ở thư mục có `CMakeLists.txt`:
 
-Hãy đọc thử thách ở [đầu học phần](/projects/sph-water) trước. Tải ZIP, mở thư mục project và chạy starter. Starter chỉ có bể trống; bài này bổ sung 96 hạt đứng yên. Các bài đã hoàn thành đều có source chạy được ở cuối trang, không cần tự ghép đoạn mã từ nhiều bài.
+```bash title="Terminal — bắt đầu từ khung SDL3"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_50_starter --parallel 1
+.\build\Debug\project_50_starter.exe
+```
+
+Starter có bể trống và panel để bạn không phải viết lại phần giao diện SDL3. Chưa có thuật toán chất lưu giấu trong đó. Bạn sửa `starter/`, hoặc chạy target `project_50_checkpoint_1` để đối chiếu. Mỗi checkpoint trong ZIP là một bộ source độc lập; phần cuối bài trên web cũng có đầy đủ các file.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Miền mô phỏng rộng 1 m, cao 0.8 m, trục y hướng lên. SDL lại vẽ y hướng xuống. Với khung logical 800×660, ta dành 700 pixel cho một mét và đặt đáy tại y=610:
+Ta chọn bể rộng 12,6 m, cao 7,56 m. Đây là kích thước của mô hình 2D, không phải kích thước cửa sổ. Trục y hướng lên. Một hạt giữ vị trí và vận tốc; màu xanh chỉ xuất hiện lúc vẽ.
 
-$$
-x_s=50+700x_w,\qquad y_s=610-700y_w.
-$$
+{/* snippet include/sph/model.hpp#particle */}
 
-Phép đổi chỉ dùng lúc vẽ hoặc đọc input. Position vẫn tính bằng mét; kéo rộng window không làm nước nặng hơn, nhanh hơn hay thay đổi khoảng cách giữa hạt.
+```cpp title="include/sph/model.hpp — dữ liệu một hạt"
+struct Particle {
+    double x = 0;
+    double y = 0;
+    double vx = 0;
+    double vy = 0;
+    double density = restDensity;
+    double pressure = 0;
+    double ax = 0;
+    double ay = 0;
+};
+```
 
-`spacing=0.045` là khoảng cách ban đầu của lattice. Bán kính vẽ 7 logical pixel chỉ giúp nhìn rõ từng chấm. Nó chưa phải bán kính va chạm giữa các hạt và cũng không phải bán kính kernel SPH sẽ học ở Bài 03.
+Vì chưa có chuyển động, `vx`, `vy`, `ax`, `ay` đều bằng 0. Hai số `density` và `pressure` chưa được dùng để tính lực; đừng nhầm việc có tên biến với việc đã có một solver.
+
+Thử đoán trước: kéo rộng cửa sổ có nên làm hạt tự cách xa nhau trong world space không?
 
 <InteractiveLab demo="sph-water" mode="sph-1" />
 
 ## Viết code từng bước
 
-### Bước 1 — Chạy starter và giữ bộ khung SDL3
+### Mở cửa sổ theo từng bước có kiểm lỗi
 
-Trong thư mục ZIP đã giải nén, configure một lần và bật các checkpoint:
+`main.cpp` trong scaffold đã có phần này. Đọc qua một lần để biết tài nguyên được tạo và giải phóng ở đâu. Renderer không được tạo bằng một biểu thức viết tắt khó dò lỗi:
 
-```bash title="Terminal — build starter trước khi viết solver"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_50_starter
+{/* snippet src/main.cpp#window */}
+
+```cpp title="src/main.cpp — khởi tạo SDL3 và logical presentation"
+if (!SDL_Init(SDL_INIT_VIDEO)) {
+    std::cerr << SDL_GetError() << '\n';
+    return EXIT_FAILURE;
+}
+SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
+if (options.hidden) {
+    flags |= SDL_WINDOW_HIDDEN;
+}
+SDL_Window* window = SDL_CreateWindow("Project 50 - SPH Water Tank", 1280, 820, flags);
+if (window == nullptr) {
+    std::cerr << SDL_GetError() << '\n';
+    SDL_Quit();
+    return EXIT_FAILURE;
+}
+SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
+if (renderer == nullptr) {
+    std::cerr << SDL_GetError() << '\n';
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return EXIT_FAILURE;
+}
+if (!SDL_SetRenderLogicalPresentation(renderer, 1280, 820, SDL_LOGICAL_PRESENTATION_LETTERBOX)) {
+    std::cerr << SDL_GetError() << '\n';
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return EXIT_FAILURE;
+}
 ```
 
-Chạy `build/Debug/project_50_starter.exe` trên Visual Studio generator; với Ninja, executable thường nằm ngay trong `build`. Starter tạo window/renderer, dùng logical presentation và giải phóng tài nguyên khi thoát. Giữ các nhánh kiểm lỗi này trong `src/main.cpp`; đừng xóa để đoạn mã ngắn hơn.
+Logical presentation 1280×820 làm panel và thao tác chuột ổn định khi resize. Nó không quyết định bể rộng bao nhiêu mét.
 
-### Bước 2 — Tạo dữ liệu của cột hạt
+### Đặt các hạt vào một cột
 
-Thêm kiểu dữ liệu sau trong `include/model.hpp`. Position/velocity là vector; density/pressure sẽ được tính thật từ Bài 04. Giá trị khởi tạo của hai trường này chưa phải kết quả SPH.
+`makeState` tạo dữ liệu bằng hai chỉ số hàng/cột. Với 1.000 hạt, cột có 20 hạt mỗi hàng và 50 hàng. Khoảng cách tâm là `spacing=0.07`. Không dùng bán kính vẽ để quyết định vị trí vật lý.
 
-```cpp title="include/model.hpp — dữ liệu một hạt"
-struct Particle {
-    Vec2 position;
-    Vec2 velocity;
-    double density = restDensity;
-    double pressure = 0;
-};
+{/* snippet include/sph/scenes.hpp#scene */}
+
+```cpp title="include/sph/scenes.hpp — tạo cảnh"
+inline State makeState([[maybe_unused]] Preset preset = Preset::Dam, std::size_t count = 5000) {
+    if (count != 1000 && count != 5000 && count != 10000) {
+        throw std::invalid_argument("Choose 1000, 5000 or 10000 particles");
+    }
+    State state;
+    if (preset != Preset::Empty) {
+        std::size_t columns = count / 100;
+        if (count == 1000) {
+            columns = 20;
+        }
+        if (preset == Preset::Pool) {
+            columns = 125;
+        }
+        state.particles.reserve(capacity);
+        for (std::size_t i = 0; i < count; ++i) {
+            const double x = (static_cast<double>(i % columns) + 0.5) * spacing;
+            const double y = (static_cast<double>(i / columns) + 0.5) * spacing;
+            state.particles.push_back({x, y});
+        }
+    }
+    return state;
+}
 ```
 
-`State` giữ một `std::vector<Particle>`. Trong `makeState`, preset Dam chọn 8 cột, 12 hàng. Đặt tâm hạt đầu tiên cách đáy/thành nửa spacing để không bắt đầu bên trong tường:
+`include/app/state.hpp` giữ `state` giữa các frame. Bạn không được gọi `makeState` trong mỗi lượt vẽ, nếu không chuyển động về sau sẽ liên tục bị đặt lại.
 
-```cpp title="include/model.hpp — dựng lattice trong makeState"
-for (int y = 0; y < rows; ++y) {
-    for (int x = 0; x < columns; ++x) {
-        Vec2 position{spacing / 2 + x * spacing, spacing / 2 + y * spacing};
-        state.particles.push_back({position, {0, 0}});
+### Đổi vị trí world thành pixel
+
+Một hạt ở y=0 nằm ở đáy bể, còn pixel y=0 nằm phía trên cửa sổ. `toScreen` là nơi duy nhất đảo trục. Ta chia vị trí cho kích thước world để được tỉ lệ, nhân kích thước viewport rồi cộng góc viewport:
+
+{/* snippet include/app/draw.hpp#mapping */}
+
+```cpp title="include/app/draw.hpp — ánh xạ world và screen"
+inline water::Vec2 toScreen(double x, double y) {
+    return {viewport.x + viewport.w * x / water::width, viewport.y + viewport.h * (1 - y / water::height)};
+}
+
+inline bool fromScreen(float x, float y, water::Vec2& point) {
+    if (x < viewport.x || x > viewport.x + viewport.w || y < viewport.y || y > viewport.y + viewport.h) {
+        return false;
+    }
+    point.x = water::width * (x - viewport.x) / viewport.w;
+    point.y = water::height * (1 - (y - viewport.y) / viewport.h);
+    return true;
+}
+```
+
+`fromScreen` đi ngược lại để dùng cho con trỏ ở các bài sau; bạn chưa phải viết input vào solver lúc này. Điểm giữa bể phải vào giữa viewport, không phải giữa cả cửa sổ có panel bên phải.
+
+### Vẽ đĩa nhỏ bằng scanline SDL3
+
+Với mỗi độ lệch `dy`, nửa chiều dài đường ngang của hình tròn là `sqrt(radius²−dy²)`. Đây là cùng ý tưởng hình tròn đã gặp ở Project 04, lần này dùng `SDL_RenderLine` để vẽ một hạt:
+
+{/* snippet include/app/draw.hpp#disk */}
+
+```cpp title="include/app/draw.hpp — primitive vẽ một hạt"
+inline void disk(SDL_Renderer* renderer, float x, float y, float radius) {
+    for (int dy = -static_cast<int>(radius); dy <= static_cast<int>(radius); ++dy) {
+        const float span = std::sqrt(std::max(0.0f, radius * radius - dy * dy));
+        SDL_RenderLine(renderer, x - span, y + dy, x + span, y + dy);
     }
 }
 ```
 
-Trong `main`, gọi `state = water::makeState(preset)` sau khi tạo renderer. Hàm dựng cảnh không cần biết SDL; nó sẽ được dùng lại trong tests thuần.
+Cuối cùng, trong `draw`, duyệt các hạt, đổi tọa độ rồi gọi primitive vừa viết:
 
-### Bước 3 — Đổi tọa độ rồi vẽ chấm tròn
+{/* snippet include/app/draw.hpp#draw-particles */}
 
-Trong `include/view.hpp`, đặt phép đổi tọa độ và hàm vẽ. SDL3 có `SDL_RenderLine`, nên có thể tô hình tròn bằng các hàng ngang: ở độ cao `row`, nửa chiều rộng là căn của `radius²−row²`.
-
-```cpp title="include/view.hpp — phép đổi world sang logical screen"
-inline Vec2 toScreen(Vec2 p) {
-    return {50 + 700 * p.x, 610 - 700 * p.y};
+```cpp title="include/app/draw.hpp — nối dữ liệu với renderer"
+for (const auto& p : app.state.particles) {
+    const auto point = toScreen(p.x, p.y);
+    SDL_SetRenderDrawColor(renderer, 40, 170, 239, 255);
+    disk(renderer, static_cast<float>(point.x), static_cast<float>(point.y), 2.2f);
 }
 ```
 
-```cpp title="include/view.hpp — vẽ một scanline của chấm tròn"
-const double halfWidth = std::sqrt(std::max(0.0, radius * radius - row * row));
-if (!SDL_RenderLine(renderer, static_cast<float>(center.x - halfWidth), static_cast<float>(center.y + row), static_cast<float>(center.x + halfWidth), static_cast<float>(center.y + row))) {
-    return false;
-}
-```
-
-Vòng ngoài của `drawDisk` chạy `row` từ âm radius đến dương radius. `drawScene` xóa nền, vẽ rectangle của bể, duyệt các hạt, gọi `drawDisk(toScreen(p.position),7)` rồi `SDL_RenderPresent`. Mỗi hàm vẽ trả `bool`; lỗi SDL phải được truyền lên `main` để thoát với mã lỗi.
+Màu `(40,170,239,255)` và bán kính 2,2 pixel chỉ là cách vẽ. Chúng không quyết định mass hoặc vùng ảnh hưởng giữa các hạt. Giữ `SDL_RenderPresent` ở cuối vòng lặp để trình bày cả frame một lần, không present sau từng chấm.
 
 ## Ghép các phần lại
 
-Build target `project_50_checkpoint_1` theo danh sách target trong CMake được cung cấp. Luồng dữ liệu lúc này là `makeState → state.particles → toScreen → drawDisk`. Không có tích phân thời gian hay tương tác hạt. R dựng lại cột nước, P đổi preset, I in dữ liệu hạt đang chọn ra terminal.
-
-Đừng thêm noise hay hiệu ứng làm mịn ở bước này. Một lattice đều giúp ta biết khoảng cách ban đầu là bao nhiêu khi kiểm density sau đó.
+`main` tạo `tank::App`; constructor gọi `rebuild`, rồi `draw` duyệt `state.particles`. `toScreen` trong `app/draw.hpp` đổi tọa độ trước khi `disk` vẽ từng chấm bằng scanline. Chỉ hàm đổi tọa độ đảo y; dữ liệu vật lý vẫn hướng lên.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ dấu trừ trong `y_s=610−700y_w`. Cột hạt sẽ nằm dưới đáy hoặc ngoài window. Đây là lỗi hệ tọa độ, không phải gravity sai.
-2. Dùng window width làm spacing của `makeState`. Resize rồi quan sát cột đổi hình. Khôi phục spacing world cố định và để renderer lo letterbox.
+Tạm bỏ phép `1-y/height` khi đổi y sang screen. Cột hạt sẽ xuất hiện gần trần thay vì đáy, dù dữ liệu không đổi. Sau đó thử tạo lại state trong vòng vẽ. Hiện tại chưa thấy lỗi; ghi lại dự đoán lỗi sẽ xuất hiện khi ta thêm velocity, rồi hoàn tác cả hai thay đổi.
 
 ## Tự kiểm tra kết quả
 
-Preset Dam có đúng 96 hạt; hạt đầu ở (0.0225,0.0225). Cột đứng yên dù để window mở lâu. Resize, R và P hoạt động; đóng window không để lại process. Màu chỉ được đọc từ state, không ghi ngược vào density.
+- Checkpoint 1 hiển thị 1.000 hạt; starter vẫn là bể trống.
+- Resize/minimize/restore không đổi vị trí world hoặc số hạt.
+- Reset đưa về đúng cảnh đang chọn. Escape và nút đóng cửa sổ thoát sạch.
+- N chưa làm hạt chuyển động: solver sẽ bắt đầu ở bài sau.
 
 ## Bài tập mở rộng
 
-Thêm preset hình chữ L bằng cách tạo position, không sửa hàm vẽ. Ghi số hạt dự kiến rồi đối chiếu vector size. Tiếp theo, [cho hạt rơi và va thành](/projects/sph-water/02-trong-luc-va-thanh-be); chưa có lực SPH trong bước đó.
+Đổi cột thành hai khối tách rời nhưng giữ tổng 1.000 hạt. Hãy tự tính vị trí hạt đầu/cuối mỗi khối trước khi chạy. [Tiếp theo: cho hạt rơi và giữ trong bể](./02-trong-luc-va-thanh-be).

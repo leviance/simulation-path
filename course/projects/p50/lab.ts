@@ -1,54 +1,59 @@
 import type { ProjectLabMeta } from "../../labs/types";
 const lab = {
   base: {
-    label: "SPH WATER LAB",
-    title: "Đổ nước, chọn một hạt và đọc solver",
+    label: "SPH WATER TANK",
+    title: "Đổ nước, tạo sóng và đọc dữ liệu bên trong",
     description:
-      "Canvas dùng cùng kernel 2D, pressure, preset và ngân sách với C++. Vòng support giúp thấy hạt nào thực sự góp vào density và lực.",
+      "Bể SPH 2D có 5.000 hạt thật ở bản cuối. Mặt nước được dựng từ vị trí hạt; kernel, lực và đơn vị dùng cùng mô hình với C++.",
   },
   modes: {
     "sph-1": {
-      title: "Hạt đứng yên",
-      description: "Đổi cảnh mẫu, nhìn vị trí trước khi thêm physics.",
+      title: "1.000 hạt đứng yên",
+      description: "Dữ liệu nào quyết định vị trí các chấm? Chưa có physics.",
     },
     "sph-2": {
-      title: "Rơi và va chạm",
-      description: "N tiến 0.001s; các hạt chưa tác động lên nhau.",
+      title: "Rơi tự do và bốn biên",
+      description: "Tiến 0,01 s, xem velocity đổi trước position. Các hạt chưa tạo chất lỏng.",
     },
     "sph-3": {
-      title: "Kernel 2D",
-      description: "Chọn hạt, nhìn vòng h/2h và các hàng xóm nằm trong support.",
+      title: "Kernel quanh một hạt",
+      description: "Chọn hạt, nhìn support 2h và đồ thị W(r)/W(0).",
     },
     "sph-4": {
-      title: "Density và tường",
-      description: "Đọc rho/rho0 và xem mẫu tĩnh; màu density không phải pressure.",
+      title: "Density không phải số hàng xóm",
+      description: "Đọc tổng mW ở trong lòng khối, mặt thoáng và gần tường.",
     },
     "sph-5": {
-      title: "Pressure",
-      description:
-        "Đo lực đối nhau trên cặp có density cho trước, không gravity/wall; sau đó đổi c và quan sát bể.",
+      title: "Pressure bắt đầu đẩy hạt",
+      description: "Mở cặp độc lập, đổi density rồi trở lại bể. Bước SPH nhỏ hơn bước rơi tự do.",
     },
     "sph-6": {
-      title: "Artificial viscosity",
-      description:
-        "Đổi cặp tiến lại gần/tách ra, đọc Pi và công suất viscosity; so alpha tại cùng state.",
+      title: "Viscosity chỉ cản cặp đang nén",
+      description: "Đổi tiến lại gần/tách ra, đọc Pi và công suất trong ca cặp riêng.",
     },
     "sph-7": {
-      title: "Grid và all-pairs",
-      description: "Đổi phương pháp tìm hàng xóm, so số ứng viên nhưng giữ nguyên phương trình.",
+      title: "Grid phải giữ nguyên kết quả",
+      description: "Chuyển grid/all-pairs ở 1.000 hạt và so số ứng viên.",
     },
     "sph-8": {
-      title: "Vòi nước",
-      description: "Chuột/keyboard chuyển vòi, phát một hạt và đọc số thành công/từ chối.",
+      title: "Dt và ngân sách",
+      description: "Chạy rồi pause; phân biệt model time, dt và thời gian bị bỏ.",
     },
     "sph-9": {
-      title: "Substep có giới hạn",
-      description: "Chạy/dừng, đổ liên tục và đo dt/thời gian bỏ qua khi đổi FPS.",
+      title: "Mặt nước từ 5.000 hạt thật",
+      description: "Chuyển Mặt nước/Hạt/Density; cả ba đọc cùng dữ liệu, không có nước vẽ sẵn.",
     },
     "sph-10": {
+      title: "Đổ thêm mass",
+      description: "Click hoặc dùng mũi tên/Enter; thử phát hai lần cùng chỗ khi paused.",
+    },
+    "sph-11": {
+      title: "Vật cản kinematic",
+      description: "Bật vật cản và kéo target; chỉ khi physics tiến thì vật cản mới di chuyển.",
+    },
+    "sph-12": {
       title: "Bể nước hoàn chỉnh",
-      description:
-        "Chạy ca chuẩn riêng, không thay cảnh hiện tại; đọc số đo và giới hạn của WCSPH.",
+      description: "Dam-break, vòi, vật cản, slider, lớp debug và ca chuẩn chạy riêng.",
     },
   },
 } satisfies ProjectLabMeta;

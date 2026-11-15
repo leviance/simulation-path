@@ -1,58 +1,92 @@
 import { expect, test } from "@playwright/test";
-test("SPH isolated pair exposes pressure balance and viscosity power using keyboard-accessible controls", async ({
+const readout = (page: import("@playwright/test").Page, label: string) =>
+  page
+    .locator(".lab-readout div")
+    .filter({ has: page.getByText(label, { exact: true }) })
+    .locator("dd")
+    .first();
+test("P50 first checkpoint gates physics and publishes highlighted complete source", async ({
+  page,
+}) => {
+  await page.goto("/projects/sph-water/01-ve-hat-va-be-nuoc");
+  await expect(page.locator('[data-sph-ready="true"]')).toBeVisible();
+  await expect(page.getByRole("button", { name: "Tiến một bước", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Đổ một đợt", exact: true })).toHaveCount(0);
+  await expect(readout(page, "Số hạt / khối lượng")).toContainText("1000 /");
+  await expect(page.locator('.prose [data-theme="one-dark-pro"]').first()).toBeVisible();
+  await expect(page.locator(".checkpoint-source")).toBeVisible();
+});
+test("P50 pair experiment shows independent pressure balance and dissipative viscosity", async ({
   page,
 }) => {
   await page.goto("/projects/sph-water/06-artificial-viscosity");
-  await page.getByLabel("Thí nghiệm", { exact: true }).selectOption("pair");
-  const readout = (label: string) =>
-    page
-      .locator(".lab-readout div")
-      .filter({ has: page.getByText(label, { exact: true }) })
-      .locator("dd");
-  await expect(readout("Pressure A / B")).toHaveText("14400.000000 / 28800.000000");
-  await expect(readout("Tổng lực nội")).toHaveText("(0.000000; 0.000000)");
-  await expect(readout("Công suất viscosity")).toHaveText("-3.609163494");
+  await page.getByText("Thí nghiệm lực trên hai hạt độc lập", { exact: true }).click();
+  await expect(readout(page, "Pressure A / B")).toHaveText("40000.000 / 80000.000 N/m");
+  await expect(readout(page, "Tổng lực nội")).toContainText("0.000000");
+  await expect(readout(page, "Công suất viscosity")).toHaveText("-224.529475243 W");
   await page.getByLabel("Chuyển động tương đối", { exact: true }).selectOption("separate");
-  await expect(readout("Pi của cặp")).toHaveText("0.000000000");
-  await expect(readout("Công suất viscosity")).toHaveText("0.000000000");
-  await expect(readout("Lực pressure A / B")).toContainText("-211.561054");
-  await page.getByLabel("Density A", { exact: true }).selectOption("900");
-  await page.getByLabel("Density B", { exact: true }).selectOption("900");
-  await expect(readout("Pressure A / B")).toHaveText("0.000000 / 0.000000");
-  await page.getByRole("button", { name: "Đặt lại cặp hạt", exact: true }).click();
-  await expect(readout("Công suất viscosity")).toHaveText("-3.609163494");
+  await expect(readout(page, "Pi của cặp")).toHaveText("0.000000000");
+  await expect(readout(page, "Công suất viscosity")).toHaveText("0.000000000 W");
+  await expect(readout(page, "Lực pressure A / B")).toContainText("-962.899070");
 });
-test("SPH gates stages, emits with keyboard and validates without changing the visible state", async ({
+test("P50 final starts with 5000 actual particles and native-equivalent controls", async ({
   page,
 }) => {
   const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto("/projects/sph-water/01-ve-hat-va-be-nuoc");
-  await expect(page.getByRole("button", { name: "Tiến một bước" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Đổ một hạt" })).toHaveCount(0);
-  await page.goto("/projects/sph-water/10-kiem-chung-va-hoan-thien");
-  const readout = (label: string) =>
-    page
-      .locator(".lab-readout div")
-      .filter({ has: page.getByText(label, { exact: true }) })
-      .locator("dd");
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/projects/sph-water/12-kiem-chung-va-ban-hoan-chinh");
+  await expect(page.locator('[data-sph-ready="true"]')).toBeVisible();
+  await expect(readout(page, "Số hạt / khối lượng")).toHaveText("5000 / 24500.00 kg");
+  const canvas = page.getByLabel("Mô phỏng nước SPH 2D", { exact: true });
+  await canvas.press("n");
+  await expect(readout(page, "Thời gian mô phỏng")).toContainText("tick 1");
+  await expect(readout(page, "Cập nhật / vẽ")).toHaveText("5000 / 5000");
+  await page.getByText("Tham số và công cụ thí nghiệm", { exact: true }).click();
+  const time = await readout(page, "Thời gian mô phỏng").textContent();
+  await page.getByRole("button", { name: "Kiểm chứng ca chuẩn", exact: true }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Ca chuẩn riêng:" })).toContainText(
+    "PASS",
+  );
+  await expect(readout(page, "Thời gian mô phỏng")).toHaveText(time!);
+  await expect(page.getByRole("button", { name: "Chạy", exact: true })).toBeDisabled();
+  expect(errors).toEqual([]);
+});
+test("P50 keyboard emission and reset preserve selected preset and settings", async ({ page }) => {
+  await page.goto("/projects/sph-water/12-kiem-chung-va-ban-hoan-chinh");
   await page.getByLabel("Cảnh mẫu", { exact: true }).selectOption("empty");
   const canvas = page.getByLabel("Mô phỏng nước SPH 2D", { exact: true });
   await canvas.press("Enter");
-  await expect(readout("Số hạt / khối lượng")).toHaveText("1 / 2.0250 kg");
+  await expect(readout(page, "Số hạt / khối lượng")).toHaveText("7 / 34.30 kg");
   await canvas.press("Enter");
-  await expect(readout("Đổ thành công / từ chối")).toHaveText("1 / 1");
+  await expect(readout(page, "Đổ thành công / từ chối")).toHaveText("7 / 7");
   await canvas.press("ArrowRight");
   await canvas.press("Enter");
-  await expect(readout("Số hạt / khối lượng")).toHaveText("2 / 4.0500 kg");
-  await page.getByRole("button", { name: "Tiến một bước" }).click();
-  const time = await readout("Thời gian mô phỏng").textContent();
-  await page.getByRole("button", { name: "Kiểm chứng ca chuẩn" }).click();
-  await expect(page.getByRole("status")).toContainText("PASS");
-  await expect(readout("Thời gian mô phỏng")).toHaveText(time!);
-  await page.getByRole("button", { name: "Đặt lại" }).click();
-  await expect(readout("Thời gian mô phỏng")).toHaveText("0.000000 s");
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await expect(page.getByRole("button", { name: "Chạy", exact: true })).toBeDisabled();
+  await expect(readout(page, "Số hạt / khối lượng")).not.toHaveText("7 / 34.30 kg");
+  await page.getByRole("button", { name: "Đặt lại", exact: true }).click();
+  await expect(page.getByLabel("Cảnh mẫu", { exact: true })).toHaveValue("empty");
+  await expect(readout(page, "Số hạt / khối lượng")).toHaveText("0 / 0.00 kg");
+});
+test("P50 pointer capture, paddle target, resizing and navigation have no script errors", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto("/projects/sph-water/12-kiem-chung-va-ban-hoan-chinh");
+  await page.getByLabel("Cảnh mẫu", { exact: true }).selectOption("obstacle");
+  await page.getByText("Tham số và công cụ thí nghiệm", { exact: true }).click();
+  await page.getByLabel("Công cụ chuột", { exact: true }).selectOption("paddle");
+  const canvas = page.getByLabel("Mô phỏng nước SPH 2D", { exact: true });
+  await canvas.scrollIntoViewIfNeeded();
+  const b = (await canvas.boundingBox())!;
+  await page.mouse.move(b.x + b.width * 0.5, b.y + b.height * 0.6);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width * 0.7, b.y + b.height * 0.4, { steps: 5 });
+  await page.mouse.up();
+  await canvas.press("n");
+  await expect(readout(page, "Thời gian mô phỏng")).toContainText("tick 1");
+  await page.setViewportSize({ width: 1080, height: 850 });
+  await expect(canvas).toBeVisible();
+  await page.goto("/projects/sph-water");
   expect(errors).toEqual([]);
 });

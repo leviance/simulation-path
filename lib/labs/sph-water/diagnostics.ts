@@ -1,85 +1,27 @@
-import { gradient, kernel } from "./kernel.ts";
-import { buildNeighbors } from "./neighbors.ts";
-import {
-  defaultSettings,
-  finiteState,
-  h,
-  length,
-  makeState,
-  mass,
-  restDensity,
-  type State,
-} from "./model.ts";
-import { accelerations, computeDensity, computePressure, step } from "./solver.ts";
-
+import { restDensity, mass, spacing, width, height, type State } from "./model.ts";
 export function measure(state: State) {
-  let momentumX = 0,
-    momentumY = 0,
-    energy = 0,
-    maxCompression = 0;
+  const ratios = state.particles.map((p) => p.density / restDensity).sort((a, b) => a - b);
+  let maxSpeed = 0,
+    kinetic = 0,
+    leaked = 0;
   for (const p of state.particles) {
-    momentumX += mass * p.velocity.x;
-    momentumY += mass * p.velocity.y;
-    energy += 0.5 * mass * length(p.velocity) ** 2;
-    maxCompression = Math.max(maxCompression, p.density / restDensity - 1);
+    maxSpeed = Math.max(maxSpeed, Math.hypot(p.vx, p.vy));
+    kinetic += 0.5 * mass * (p.vx * p.vx + p.vy * p.vy);
+    if (
+      p.x < spacing / 2 - 1e-9 ||
+      p.x > width - spacing / 2 + 1e-9 ||
+      p.y < spacing / 2 - 1e-9 ||
+      p.y > height - spacing / 2 + 1e-9
+    )
+      leaked++;
   }
-  return { mass: state.particles.length * mass, momentumX, momentumY, energy, maxCompression };
-}
-export function validateWater() {
-  const results: { label: string; pass: boolean; value: number }[] = [];
-  let integral = 0;
-  const bins = 2000,
-    dr = (2 * h) / bins;
-  for (let k = 0; k < bins; k++) {
-    const r = (k + 0.5) * dr;
-    integral += 2 * Math.PI * r * kernel(r) * dr;
-  }
-  results.push({
-    label: "Kernel 2D: integral≈1",
-    pass: Math.abs(integral - 1) < 1e-6,
-    value: integral,
-  });
-  const state = makeState("dam");
-  const brute = buildNeighbors(state, false),
-    grid = buildNeighbors(state, true);
-  const matching = grid.lists.every((list, i) => list.join(",") === brute.lists[i].join(","));
-  results.push({
-    label: "Grid = all-pairs",
-    pass: matching,
-    value: grid.candidates / brute.candidates,
-  });
-  const pair = makeState("pair");
-  pair.walls = [];
-  pair.particles.forEach((p) => {
-    p.density = 1100;
-    p.pressure = 14400;
-  });
-  const a = accelerations(pair, buildNeighbors(pair, false), { ...defaultSettings, gravity: 0 }, 6);
-  const residual = Math.hypot(a[0].x + a[1].x, a[0].y + a[1].y);
-  results.push({ label: "Internal pair: net force≈0", pass: residual < 1e-10, value: residual });
-  const finite = makeState("dam");
-  for (let i = 0; i < 300; i++) step(finite);
-  results.push({
-    label: "Dam: 300 finite steps",
-    pass:
-      finiteState(finite) &&
-      finite.particles.every(
-        (p) => p.position.x >= 0 && p.position.x <= 1 && p.position.y >= 0 && p.position.y <= 0.8,
-      ),
-    value: measure(finite).maxCompression,
-  });
-  const d = { x: 0.03, y: 0.02 },
-    epsilon = 1e-6;
-  const difference =
-    (kernel(length({ x: d.x + epsilon, y: d.y })) - kernel(length({ x: d.x - epsilon, y: d.y }))) /
-    (2 * epsilon);
-  results.push({
-    label: "Gradient: finite difference",
-    pass: Math.abs(difference - gradient(d).x) < 1e-4,
-    value: Math.abs(difference - gradient(d).x),
-  });
-  computeDensity(state, grid);
-  computePressure(state, defaultSettings.soundSpeed);
-  // No density correction is used to make this diagnostic look better.
-  return results;
+  return {
+    minimum: ratios[0] ?? 0,
+    median: ratios[Math.floor(ratios.length / 2)] ?? 0,
+    maximum: ratios.at(-1) ?? 0,
+    p95Compression: Math.max(0, (ratios[Math.floor(0.95 * (ratios.length - 1))] ?? 0) - 1),
+    maxSpeed,
+    kinetic,
+    leaked,
+  };
 }

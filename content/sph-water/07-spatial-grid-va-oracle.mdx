@@ -1,82 +1,135 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Tìm hàng xóm nhanh hơn mà không đổi lực
+# Viết grid để tìm đúng hàng xóm nhanh hơn
 
 ## Vấn đề cần giải quyết
 
-Mỗi substep đang thử mọi vị trí, bao gồm wall, cho từng hạt nước. Cách này dễ kiểm nhưng tốn O(N(N+B)) phép thử với B mẫu tường. Khi thêm vòi và chạy nhiều substep mỗi frame, phần tìm hàng xóm có thể chiếm phần lớn thời gian.
-
-Ta thêm spatial grid, nhưng giữ all-pairs làm oracle. Tối ưu chỉ được chấp nhận khi danh sách hàng xóm và kết quả solver vẫn khớp, không phải chỉ vì Canvas chạy nhanh hơn.
+Cho mỗi hạt quét mọi hạt khác là cách dễ kiểm nhất, nhưng phần lớn khoảng cách được tính chỉ để kết luận “quá xa”. Nếu tăng lên 5.000 hạt mà giữ all-pairs, ta làm khoảng 25 triệu phép thử cho một lượt, chưa kể mẫu tường. Ta cần bỏ những ứng viên chắc chắn ngoài support, không bỏ hạt khỏi solver.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Chọn cell size bằng support=2h. Một vòng support quanh hạt chỉ có thể chạm cell của nó và tám cell kề. Tọa độ cell:
+Chọn cell size bằng support `2h`. Một hàng xóm trong support chỉ có thể nằm ở cell hiện tại hoặc tám cell kề. Nhưng **nằm trong 3×3 cell chưa đủ**: vẫn phải lọc khoảng cách thật nhỏ hơn `2h`.
 
-$$
-c_x=\left\lfloor x/(2h)\right\rfloor,\qquad c_y=\left\lfloor y/(2h)\right\rfloor.
-$$
-
-Wall samples có tọa độ âm, nên phải dùng floor. Ép số âm về int bằng truncation sẽ gom một số vị trí ngoài bể vào cell sai. Bucket chứa cả fluid/wall index, không dùng hai hệ index khác nhau.
-
-Ứng viên lấy từ 3×3 cell **chưa chắc** là hàng xóm. Vẫn lọc r² nhỏ hơn support². Sort các index được nhận giúp giữ thứ tự cộng giống all-pairs: sai số do search không bị lẫn với sai số thứ tự cộng floating point.
+Ta dùng một mảng `ids` liên tục, chia thành dải cho từng cell. Ba bước build là count → prefix sum → scatter. Với cell k, các hạt của nó nằm ở `[starts[k], starts[k+1])`. Prefix ở đây không phải thuật toán mới để trang trí; nó thay cho nhiều bucket cấp phát rời và chuẩn bị cách nghĩ dùng tiếp khi học GPU.
 
 <InteractiveLab demo="sph-water" mode="sph-7" />
 
 ## Viết code từng bước
 
-### Bước 1 — Đưa positions vào bucket
+### Dựng dải index theo cell
 
-Trong `buildNeighbors`, sau khi ghép positions, dùng `std::map<pair<int,int>,vector<size_t>>`. Nó không phải cấu trúc nhanh nhất, nhưng rõ ràng cho quy mô vài trăm hạt:
+{/* snippet include/sph/neighbors.hpp#grid */}
 
-```cpp title="include/neighbors.hpp — cell có tọa độ âm"
-const auto p = result.positions[j];
-auto cell = std::make_pair(static_cast<int>(std::floor(p.x / support)), static_cast<int>(std::floor(p.y / support)));
-buckets[cell].push_back(j);
-```
+```cpp title="include/sph/neighbors.hpp — uniform grid count/prefix/scatter"
+struct Grid {
+    static constexpr int columns = 74;
+    static constexpr int rows = 46;
+    std::vector<int> starts = std::vector<int>(columns * rows + 1);
+    std::vector<int> ids;
 
-Rebuild mỗi substep vì particle position vừa thay đổi. Chưa tái sử dụng neighbor list với skin như các project molecular trước; SPH support/search ở đây được tính lại trực tiếp.
+    int cell(double x, double y) const {
+        if (!std::isfinite(x) || !std::isfinite(y) || x < -3 * support || y < -3 * support || x >= (columns - 3) * support || y >= (rows - 3) * support) {
+            throw std::out_of_range("Sample outside bounded grid");
+        }
+        const int cx = static_cast<int>(std::floor(x / support)) + 3;
+        const int cy = static_cast<int>(std::floor(y / support)) + 3;
+        if (cx < 0 || cx >= columns || cy < 0 || cy >= rows) {
+            throw std::out_of_range("Sample outside bounded grid");
+        }
+        return cy * columns + cx;
+    }
 
-### Bước 2 — Lấy ứng viên từ các cell kề
-
-Với hạt i, tính cx/cy bằng floor tương tự, rồi nối bucket nếu có:
-
-```cpp title="include/neighbors.hpp — duyệt đúng chín cell"
-for (int y = cy - 1; y <= cy + 1; ++y) {
-    for (int x = cx - 1; x <= cx + 1; ++x) {
-        const auto found = buckets.find({x, y});
-        if (found != buckets.end()) {
-            nearby.insert(nearby.end(), found->second.begin(), found->second.end());
+    void build(const std::vector<Particle>& points) {
+        std::fill(starts.begin(), starts.end(), 0);
+        for (const auto& p : points) {
+            ++starts[cell(p.x, p.y) + 1];
+        }
+        for (std::size_t k = 1; k < starts.size(); ++k) {
+            starts[k] += starts[k - 1];
+        }
+        auto cursor = starts;
+        ids.resize(points.size());
+        for (std::size_t j = 0; j < points.size(); ++j) {
+            ids[cursor[cell(points[j].x, points[j].y)]++] = static_cast<int>(j);
         }
     }
+};
+```
+
+`floor` là cần thiết vì mẫu tường có tọa độ âm. Cộng offset 3 đưa các cell âm vào mảng hữu hạn; nếu sample vượt miền grid, chương trình báo lỗi thay vì ghi ngoài buffer.
+
+### Giữ nguyên điều kiện hàng xóm
+
+{/* snippet include/sph/neighbors.hpp#neighbors */}
+
+```cpp title="include/sph/neighbors.hpp — cùng predicate, hai cách tìm"
+inline Search buildNeighbors(const State& state, bool useGrid) {
+    Search result;
+    result.samples = samples(state);
+    result.lists.resize(state.particles.size());
+    Grid grid;
+    if (useGrid) {
+        grid.build(result.samples);
+    }
+    for (std::size_t i = 0; i < state.particles.size(); ++i) {
+        const auto& p = state.particles[i];
+        auto& list = result.lists[i];
+        list.reserve(40);
+        const auto consider = [&](int j) {
+            ++result.candidates;
+            const double dx = p.x - result.samples[j].x;
+            const double dy = p.y - result.samples[j].y;
+            if (dx * dx + dy * dy < support * support) {
+                list.push_back(j);
+            }
+        };
+        if (useGrid) {
+            const int center = grid.cell(p.x, p.y);
+            const int cx = center % Grid::columns;
+            const int cy = center / Grid::columns;
+            for (int y = std::max(0, cy - 1); y <= std::min(Grid::rows - 1, cy + 1); ++y) {
+                for (int x = std::max(0, cx - 1); x <= std::min(Grid::columns - 1, cx + 1); ++x) {
+                    const int cell = y * Grid::columns + x;
+                    for (int k = grid.starts[cell]; k < grid.starts[cell + 1]; ++k) {
+                        consider(grid.ids[k]);
+                    }
+                }
+            }
+        } else
+        {
+            if (state.particles.size() > 1000) {
+                throw std::invalid_argument("All-pairs is a small oracle, not the 5000-particle runtime");
+            }
+            for (std::size_t j = 0; j < result.samples.size(); ++j) {
+                consider(static_cast<int>(j));
+            }
+        }
+        // Cùng thứ tự cộng với all-pairs để lỗi search không lẫn lỗi reduction.
+        std::sort(list.begin(), list.end());
+    }
+    return result;
 }
 ```
 
-Giữ nhánh `else` all-pairs và phần lọc khoảng cách Bài 04. Cộng `nearby.size()` vào `candidates` trước cutoff; inspector báo chi phí thử ứng viên, không phải benchmark thời gian chuẩn hóa theo máy.
-
-### Bước 3 — So cả dữ liệu và quỹ đạo
-
-Sau cutoff, sort list để cùng thứ tự cộng với all-pairs:
-
-```cpp title="include/neighbors.hpp — giữ thứ tự reduction"
-std::sort(list.begin(), list.end());
-result.lists.push_back(std::move(list));
-```
-
-Phím G chuyển grid/all-pairs. Kiểm bằng control và `tests/tests.cpp` đi kèm; validator trong UI được thêm ở Bài 10. CTest so `grid.lists == brute.lists`, sau đó chạy hai bản dam 150 bước với cùng settings để so position.
+`consider` là cùng một phép thử được gọi từ hai đường search. Danh sách được sort theo ID để hai cách cộng cùng thứ tự; nhờ vậy, khi kiểm fixture, lỗi search không bị trộn với sai khác reduction số thực.
 
 ## Ghép các phần lại
 
-Density/force không biết list đến từ grid hay all-pairs. Chỉ `buildNeighbors` thay nhánh search; việc sort thống nhất reduction order giữ các phép cộng giống nhau. Đừng dùng candidate count nhỏ hơn làm bằng chứng grid luôn nhanh hơn: map allocation/sort cũng có chi phí.
+Chỉ thay `buildNeighbors(state, useGrid)` trong `step` và `inspectCurrent`. `computeDensity`, `computePressure`, `computeForces` không đổi. Rebuild grid mỗi substep vì hạt vừa chuyển cell; chưa có neighbor cache/skin cần theo dõi displacement.
+
+Canvas cho đổi Grid/All-pairs trong panel ở 1.000 hạt. Bản lớn chặn all-pairs ngay từ lựa chọn để tránh một thao tác vô tình làm UI đứng lâu. Oracle nhỏ vẫn quét đầy đủ, không giảm độ đúng để đổi lấy tốc độ.
 
 ## Thử làm sai để hiểu đúng
 
-1. Duyệt chỉ cell của hạt. Hai hạt ở hai phía cùng một ranh cell có thể rất gần nhưng bị bỏ sót. Oracle danh sách phải phát hiện lỗi.
-2. Bỏ cutoff vì đã dùng 3×3 cell. Một số ứng viên xa support sẽ lọt vào inspector; force kernel có thể bằng 0 nhưng danh sách vẫn sai và tốn công.
+Bỏ lọc distance sau khi lấy 3×3 cell. Danh sách sẽ chứa hạt ngoài support; kernel có thể bằng 0 nên một vài hình vẫn trông gần đúng. Vì thế test phải so cả neighbor IDs, không chỉ nhìn density cuối. Sau đó thử dùng phép ép `int` thay `floor` ở tọa độ âm.
 
 ## Tự kiểm tra kết quả
 
-So danh sách ở preset Dam/Pool/Pair/Empty, cell âm, góc và khoảng cách đúng 2h. Khoảng cách đúng cutoff bị loại vì W/gradient bằng 0. Quỹ đạo grid/all-pairs khớp trong sai số 1e−10 ở ca chuẩn. Khi dùng grid, số ứng viên giảm nhưng số hạt/mass và công thức không đổi.
+- Grid và all-pairs cho cùng danh sách tại cell âm, góc cell và sát cutoff.
+- Density, pressure và acceleration khớp trên fixture nhỏ có cả tường và relative velocity.
+- Chạy hai bản clone qua nhiều bước, so trajectory trong 1e−9 m.
+- Log candidate count; không tuyên bố grid nhanh hơn cho mọi N chỉ từ một ca lớn.
 
 ## Bài tập mở rộng
 
-Đo thời gian buildNeighbors riêng và thời gian toàn substep, chạy lặp cùng state nhiều lần. Báo machine/configuration, không lấy một frame ngẫu nhiên. Tiếp theo [thêm vòi nước](/projects/sph-water/08-do-nuoc-bang-chuot).
+Đổi cell size thành h. Stencil 3×3 cũ không còn đủ; hãy tự suy ra số cell phải tìm trước khi sửa code. [Tiếp: timestep và ngân sách chạy](./08-timestep-va-ngan-sach).

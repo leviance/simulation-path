@@ -2,200 +2,270 @@ import type { ProjectLearningAssets } from "../../learning/types";
 const learning = {
   guides: {
     "p50-l01": {
-      focus: "Có hình chạy được trước khi học SPH.",
-      expected: "96 hạt đứng yên bên trái bể; resize không đổi tọa độ.",
-      files: ["include/model.hpp", "include/view.hpp", "src/main.cpp"],
+      focus: "Nối dữ liệu hạt với hình vẽ trước khi nghĩ tới lực.",
+      expected: "1.000 chấm đứng yên trong bể; resize không đổi tọa độ world.",
+      files: [
+        "src/main.cpp",
+        "include/sph/model.hpp",
+        "include/sph/scenes.hpp",
+        "include/app/draw.hpp",
+      ],
       steps: [
         {
-          title: "Chạy starter",
-          explanation: "Window/renderer có kiểm lỗi và logical presentation 800×660.",
-        },
-        {
-          title: "Dựng dữ liệu hạt",
-          explanation: "Particle giữ position/velocity; makeState tạo cột 8×12 từ spacing.",
-        },
-        {
-          title: "Vẽ chấm tròn",
+          title: "Chạy khung",
           explanation:
-            "toScreen đổi world y lên; drawDisk vẽ scanline, drawScene không sửa physics.",
+            "main khởi tạo SDL/window/renderer tuần tự, kiểm lỗi và giữ event loop trong lúc chưa có solver.",
+        },
+        {
+          title: "Tạo dữ liệu",
+          explanation:
+            "makeState dùng i%columns và i/columns để đặt hạt; requested=1000 ở bài đầu.",
+        },
+        {
+          title: "Nối vào renderer",
+          explanation:
+            "toScreen đổi y hướng lên sang y hướng xuống; draw dùng position, không sửa physics.",
         },
       ],
     },
     "p50-l02": {
-      focus: "Tách chuyển động tự do khỏi tương tác chất lỏng.",
-      expected: "N làm velocity giảm theo g*dt; hạt dừng/nảy nhỏ ở thành, chưa lan ngang.",
-      files: ["include/solver.hpp", "src/main.cpp"],
+      focus: "Phân biệt hạt rơi với fluid.",
+      expected: "Sau mười lần N, velocity và position đã đổi; không có lực đẩy giữa các hạt.",
+      files: ["include/sph/boundary.hpp", "include/sph/solver.hpp"],
       steps: [
-        { title: "Dựng acceleration", explanation: "Mỗi hạt nhận (0,−g), chưa đọc hàng xóm." },
+        { title: "Gán acceleration", explanation: "step đặt ax=0, ay=-gravity cho toàn bộ hạt." },
         {
-          title: "Tích phân theo dt",
-          explanation: "Cập nhật velocity trước position bằng semi-implicit Euler.",
+          title: "Tích phân",
+          explanation:
+            "integrate cập nhật velocity rồi position với dt=0,01 ở các bài chưa có pressure.",
         },
         {
-          title: "Giữ trong bể",
+          title: "Giữ biên",
           explanation:
-            "Chỉ phản xạ normal hướng ra ngoài, restitution 0.1; trần trên là giới hạn demo.",
+            "collide chỉ phản xạ normal đang hướng ra ngoài, không đảo chiều velocity đã đi vào.",
         },
       ],
     },
     "p50-l03": {
-      focus: "Hiểu trọng số trước khi cộng density.",
-      expected: "Vòng nhỏ là h, vòng lớn là 2h; gradient tại gốc bằng 0.",
-      files: ["include/kernel.hpp", "include/view.hpp"],
+      focus: "Tự viết trọng số và hướng biến thiên của nó.",
+      expected: "Kernel tắt ở 2h; gradient bằng 0 ở r=0, không có NaN.",
+      files: ["include/sph/kernel.hpp", "include/app/draw.hpp"],
       steps: [
+        { title: "Đặt đơn vị", explanation: "W có m^-2, mW có kg/m²; bán kính vẽ không phải h." },
         {
-          title: "Chọn h và support",
-          explanation: "h=1.3*spacing, support=2h; không lấy bán kính vẽ làm support.",
+          title: "Viết hai nhánh",
+          explanation:
+            "kernel dùng q=r/h và hệ số 10/(7πh²). Gradient đạo hàm theo q rồi nhân displacement/r.",
         },
         {
-          title: "Viết cubic spline",
-          explanation: "Hai nhánh polynomial, hệ số 10/(7πh²) chuẩn hóa theo diện tích.",
-        },
-        {
-          title: "Lấy gradient",
-          explanation: "Đạo hàm theo q rồi nhân displacement/r; xử lý r=0 riêng.",
+          title: "Đọc hình",
+          explanation: "Bật inspector/chọn hạt trong Canvas, xem vòng support và đồ thị.",
         },
       ],
     },
     "p50-l04": {
-      focus: "Density là một tổng có đơn vị, không phải số đếm hàng xóm.",
-      expected:
-        "Hạt trong lòng cột gần rho0, hạt mặt thoáng có density thấp; mẫu tường bù support đáy.",
-      files: ["include/model.hpp", "include/neighbors.hpp", "include/solver.hpp"],
+      focus: "Tính density tại vị trí đang nhìn, không dùng màu thay số.",
+      expected: "Hạt mặt thoáng có tổng thấp hơn; mẫu ngoài tường bù một phần support.",
+      files: [
+        "include/sph/scenes.hpp",
+        "include/sph/neighbors.hpp",
+        "include/sph/forces.hpp",
+        "include/sph/solver.hpp",
+      ],
       steps: [
         {
-          title: "Lập all-pairs",
-          explanation: "Fluid đứng trước wall trong positions, giữ self trong cutoff.",
+          title: "Liệt kê mẫu",
+          explanation: "samples ghép fluid trước, walls sau; self vẫn nằm trong danh sách.",
         },
         {
           title: "Cộng mW",
-          explanation: "ComputeDensity hoàn tất cho mọi hạt trước khi lực đọc density.",
+          explanation: "computeDensity hoàn tất mọi hạt trước khi pressure/force đọc dữ liệu.",
         },
         {
-          title: "Thêm mẫu tường",
-          explanation: "Ba lớp ngoài đáy/hai bên, không trùng góc; không có mẫu SPH ở trần.",
+          title: "Cập nhật inspector",
+          explanation:
+            "inspectCurrent tính lại density ở vị trí sau integrate; không gắn số cũ lên hạt mới.",
         },
       ],
     },
     "p50-l05": {
-      focus: "Suy lực đẩy từ density thay vì thêm repulsion tùy ý.",
-      expected:
-        "Cặp độc lập cho force ±211.561054; bể dùng summation density và bắt đầu lan ngang.",
-      files: ["include/solver.hpp", "include/pair.hpp", "include/pair-view.hpp", "src/main.cpp"],
+      focus: "Suy lực từ độ nén, không thêm repulsion tùy ý.",
+      expected: "Cặp có density cho trước cho hai lực ngược dấu; pressure 2D có N/m.",
+      files: ["include/sph/forces.hpp", "include/sph/solver.hpp"],
       steps: [
         {
-          title: "Đổi density thành pressure",
+          title: "Đổi density ra pressure",
           explanation:
-            "EOS tuyến tính và clamp pressure, c điều khiển độ cứng chứ không đổi gravity.",
+            "computePressure dùng p=max(0,c²(ρ−ρ0)); clamp âm tránh tensile attraction của mô hình này.",
         },
         {
-          title: "Đối xứng hai phía",
+          title: "Lực đối xứng",
           explanation:
-            "Coefficient p_i/rho_i²+p_j/rho_j² và gradient đối dấu cho lực nội cân bằng.",
+            "computeForces đọc pressure/density của cả hai hạt, không update position trong neighbor loop.",
         },
         {
-          title: "Đọc state cũ",
+          title: "Ghép pipeline",
           explanation:
-            "Tính toàn bộ acceleration vào vector riêng rồi mới integrate; wall dùng xấp xỉ rho0/p_i.",
+            "step gọi neighbors→density→pressure→forces→integrate; từ bài này dt cố định là 0,00025 s.",
         },
       ],
     },
     "p50-l06": {
-      focus: "Thêm tiêu tán số với điều kiện tiến lại gần.",
-      expected: "Alpha dương cản cặp đang nén, không tác động cặp tách ra.",
-      files: ["include/kernel.hpp", "include/solver.hpp", "include/pair.hpp", "src/main.cpp"],
+      focus: "Đặt độ tiêu tán vào đúng cặp và đúng dấu.",
+      expected: "Pi/power bằng 0 khi tách ra, power không dương khi tiến lại gần.",
+      files: ["include/sph/kernel.hpp", "include/sph/forces.hpp"],
       steps: [
+        { title: "Kiểm dot", explanation: "(v_i−v_j)·(x_i−x_j)<0 nghĩa là đang tiến lại gần." },
         {
-          title: "Đọc dấu dot product",
-          explanation: "relativeVelocity·displacement âm nghĩa là khoảng cách đang giảm.",
-        },
-        { title: "Tính Pi", explanation: "Monaghan beta=0, epsilon²=0.01h² giữ mẫu số hữu hạn." },
-        {
-          title: "Ghép vào coefficient",
+          title: "Thêm Pi",
           explanation:
-            "Cộng Pi trước khi nhân −m*gradient; so lực và công suất trên cùng cặp cho trước, không nhân dt hai lần.",
+            "artificialViscosity dùng alpha,c và density trung bình; không nhân dt trong lực.",
+        },
+        {
+          title: "Đối chiếu",
+          explanation:
+            "Mở thí nghiệm cặp, thay hướng chuyển động nhưng giữ density để tách viscosity khỏi pressure.",
         },
       ],
     },
     "p50-l07": {
-      focus: "Tối ưu search nhưng không thay mô hình.",
-      expected: "Grid giảm số ứng viên và giữ nguyên kết quả của all-pairs.",
-      files: ["include/neighbors.hpp", "tests/tests.cpp", "src/main.cpp"],
+      focus: "Grid giảm search, không giảm số hạt.",
+      expected: "Neighbor IDs và lực giữ nguyên; số ứng viên thấp hơn all-pairs.",
+      files: ["include/sph/neighbors.hpp", "tests/tests.cpp"],
       steps: [
         {
-          title: "Đặt hạt vào bucket",
-          explanation: "Cell size=2h và floor cho cả tọa độ âm của wall.",
+          title: "Count/prefix/scatter",
+          explanation: "Grid.starts chia ids thành dải liên tiếp cho từng cell; cell size=2h.",
         },
         {
-          title: "Duyệt 3×3 cell",
-          explanation: "Chỉ cell kề có thể giao support, vẫn lọc bình phương khoảng cách thật.",
+          title: "Tìm stencil",
+          explanation: "Duyệt 3×3 cell và cutoff thật; sort IDs giữ cùng thứ tự cộng với oracle.",
         },
         {
-          title: "So oracle",
-          explanation: "Sort index giữ thứ tự cộng; test cả danh sách và trajectory 150 bước.",
+          title: "So toàn pipeline",
+          explanation:
+            "Tests so danh sách, density, pressure, acceleration và trajectory; không chỉ so count.",
         },
       ],
     },
     "p50-l08": {
-      focus: "Đổ thêm mass có kiểm soát.",
-      expected: "Enter/click phát hạt, overlap/capacity được báo từ chối.",
-      files: ["include/emitter.hpp", "include/view.hpp", "src/main.cpp"],
+      focus: "Chọn dt theo state, rồi giữ UI có ngân sách.",
+      expected: "Dt giảm khi tăng c/speed/force; app báo dropped time thay vì chạy bù vô hạn.",
+      files: ["include/sph/solver.hpp", "include/app/state.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Đổi vị trí vòi",
-          explanation:
-            "SDL_ConvertEventToRenderCoordinates rồi fromScreen; không dùng window pixel trực tiếp.",
+          title: "Acoustic/force bound",
+          explanation: "chooseDt lấy min với 0,001 s; dưới 1e−7 dừng, không clamp velocity.",
         },
         {
-          title: "Kiểm vị trí phát",
-          explanation: "Nozzle hữu hạn, kẹp trong bể, cách hạt cũ ít nhất 0.8*spacing.",
+          title: "Gọi trong loop",
+          explanation: "main đo elapsed rồi gọi App.advance, sau đó refresh/draw.",
         },
         {
-          title: "Quản lý input",
+          title: "Giới hạn work",
           explanation:
-            "Capture khi kéo; mouse up/blur/minimize hủy thao tác, arrows/Enter thay thế chuột.",
+            "Mỗi frame tối đa 24 bước và khoảng 12 ms; bước đang chạy luôn được hoàn tất.",
         },
       ],
     },
     "p50-l09": {
-      focus: "Không buộc một frame bằng một physics step.",
-      expected: "Dt thích nghi hữu hạn, dropped time hiện rõ, blur dừng solver và vòi.",
-      files: ["include/solver.hpp", "include/timing.hpp", "src/main.cpp"],
+      focus: "Tăng tới bản chuẩn và dựng mặt nước trung thực từ hạt.",
+      expected: "Default 5.000 hạt, updated/drawn đều 5.000 sau bước; không có LOD solver.",
+      files: [
+        "include/sph/scenes.hpp",
+        "include/sph/surface.hpp",
+        "include/app/state.hpp",
+        "include/app/draw.hpp",
+      ],
       steps: [
         {
-          title: "Ước lượng dt",
-          explanation: "Min của maxDt, acoustic bound và force bound, dt quá nhỏ thì dừng.",
+          title: "Đổi mặc định",
+          explanation: "App.requested=5000 từ checkpoint 9; 1000/10000 vẫn là preset riêng.",
         },
         {
-          title: "Tích lũy thời gian",
-          explanation: "Chỉ nhận 0.05s/frame và trừ dt thật đã chạy khỏi accumulator.",
+          title: "Splat trường phủ",
+          explanation:
+            "reconstruct duyệt mọi hạt, cộng compact blob vào coverage; radius hình không đổi h của SPH.",
         },
         {
-          title: "Giới hạn work",
-          explanation: "Tối đa 64 substep; emitter sau tick, tick tiếp theo rebuild neighbors.",
+          title: "Tô mặt",
+          explanation:
+            "shade đọc coverage và gradient để làm mép nước sáng; texture chỉ phục vụ presentation.",
         },
       ],
     },
     "p50-l10": {
-      focus: "Phân biệt kiểm đúng phép tính với chất lượng mô hình.",
-      expected:
-        "Ca chuẩn PASS, source đầy đủ build ở Debug/Release; compression vẫn được đọc riêng.",
-      files: ["include/diagnostics.hpp", "tests/tests.cpp", "src/main.cpp"],
+      focus: "Vòi đưa thêm mass vào hệ một cách công khai.",
+      expected: "Một đợt tối đa bảy hạt; phát lại khi paused bị từ chối overlap.",
+      files: ["include/sph/emitter.hpp", "include/app/input.hpp", "include/app/state.hpp"],
       steps: [
         {
-          title: "Kernel và gradient",
-          explanation:
-            "Tích phân theo diện tích và finite difference độc lập với công thức derivative.",
+          title: "Kiểm chỗ trống",
+          explanation: "emitBurst kiểm tank/paddle/overlap/capacity trước khi push_back.",
         },
         {
-          title: "Pair/search/timing",
+          title: "Bắt input",
           explanation:
-            "Net force, công suất viscosity, grid oracle, emission và lịch FPS có fixture rõ.",
+            "handle đổi event window sang logical render, capture trong drag; motion chỉ đổi nozzle.",
         },
         {
-          title: "Chạy full project",
+          title: "Theo thời gian mô hình",
           explanation:
-            "ZIP gồm starter/checkpoint/final/tests; CTest không cần window, UI V chạy ca riêng hữu hạn.",
+            "App.oneStep phát sau mỗi 0,025 s mô phỏng khi bật E; không phát theo số mouse event.",
+        },
+      ],
+    },
+    "p50-l11": {
+      focus: "Biên chuyển động cần cả vị trí lẫn vận tốc.",
+      expected: "Kéo chỉ đổi target; khi chạy, paddle đi tối đa 3 m/s và nước va vào biên mới.",
+      files: [
+        "include/sph/scenes.hpp",
+        "include/sph/boundary.hpp",
+        "include/sph/solver.hpp",
+        "include/app/input.hpp",
+      ],
+      steps: [
+        {
+          title: "Lấy mẫu vật rắn",
+          explanation: "samples thêm ba vòng bên trong paddle, có velocity của biên.",
+        },
+        {
+          title: "Tiến target",
+          explanation:
+            "targetPaddle kẹp vùng hợp lệ; movePaddle chạy với dt trong physics step, không teleport qua event.",
+        },
+        {
+          title: "Chống xuyên",
+          explanation:
+            "collide sửa position và relative normal velocity; không có rigid-body response hoặc ma sát chính xác.",
+        },
+      ],
+    },
+    "p50-l12": {
+      focus: "Tách hình đẹp, phép tính đúng và giới hạn mô hình.",
+      expected: "Ca chuẩn PASS trên state riêng; ZIP/final/CTest chạy độc lập.",
+      files: [
+        "include/sph/reference.hpp",
+        "include/sph/metrics.hpp",
+        "tests/tests.cpp",
+        "tests/benchmark.hpp",
+        "src/main.cpp",
+      ],
+      steps: [
+        {
+          title: "Oracle độc lập",
+          explanation:
+            "Kiểm integral/finite difference/pair, all-pairs và equilibrium zero-gravity với ngưỡng riêng.",
+        },
+        {
+          title: "Ca lớn",
+          explanation:
+            "Dam/pool 5000 theo dõi density distribution, dt/leakage và count; không chỉ kiểm finite.",
+        },
+        {
+          title: "Bàn giao",
+          explanation:
+            "Build Debug/Release từng checkpoint, đo Release với warm-up/repetitions; ghi máy và loại chi phí.",
         },
       ],
     },
@@ -208,34 +278,50 @@ const learning = {
         kind: "SDL API",
       },
     ],
-    "p50-l02": [
-      { label: "SPH — mô phỏng chất lưu bằng hạt", href: "/glossary#sph-water", kind: "Thuật ngữ" },
+    "p50-l02": [{ label: "SPH và integration", href: "/glossary#sph-water", kind: "Thuật ngữ" }],
+    "p50-l03": [
+      {
+        label: "Cubic spline 2D — PySPH",
+        href: "https://pysph.readthedocs.io/en/main/reference/kernels.html",
+        kind: "Thuật ngữ",
+      },
     ],
-    "p50-l03": [{ label: "Kernel 2D", href: "/glossary#sph-kernel-2d", kind: "Thuật ngữ" }],
     "p50-l04": [
-      { label: "Summation density", href: "/glossary#sph-summation-density", kind: "Thuật ngữ" },
+      {
+        label: "Summation density — PySPH",
+        href: "https://pysph.readthedocs.io/en/main/reference/equations.html",
+        kind: "Thuật ngữ",
+      },
     ],
     "p50-l05": [{ label: "Equation of state", href: "/glossary#sph-eos", kind: "Thuật ngữ" }],
     "p50-l06": [
       {
-        label: "Artificial viscosity",
-        href: "/glossary#sph-artificial-viscosity",
+        label: "Monaghan artificial viscosity — PySPH",
+        href: "https://pysph.readthedocs.io/en/main/reference/equations.html",
         kind: "Thuật ngữ",
       },
     ],
-    "p50-l07": [
-      { label: "Support và neighbor search", href: "/glossary#sph-kernel-2d", kind: "Thuật ngữ" },
-    ],
-    "p50-l08": [
+    "p50-l07": [{ label: "Support và grid", href: "/glossary#sph-kernel-2d", kind: "Thuật ngữ" }],
+    "p50-l08": [{ label: "SPH timestep", href: "/glossary#sph-timestep", kind: "Thuật ngữ" }],
+    "p50-l09": [
       {
-        label: "SDL_ConvertEventToRenderCoordinates",
-        href: "https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates",
+        label: "SDL_UpdateTexture",
+        href: "https://wiki.libsdl.org/SDL3/SDL_UpdateTexture",
         kind: "SDL API",
       },
     ],
-    "p50-l09": [{ label: "SPH timestep", href: "/glossary#sph-timestep", kind: "Thuật ngữ" }],
     "p50-l10": [
-      { label: "SDL với CMake", href: "https://wiki.libsdl.org/SDL3/README-cmake", kind: "CMake" },
+      {
+        label: "SDL_RenderCoordinatesFromWindow",
+        href: "https://wiki.libsdl.org/SDL3/SDL_RenderCoordinatesFromWindow",
+        kind: "SDL API",
+      },
+    ],
+    "p50-l11": [
+      { label: "Biên của mô hình SPH", href: "/glossary#sph-summation-density", kind: "Thuật ngữ" },
+    ],
+    "p50-l12": [
+      { label: "CMake của SDL", href: "https://wiki.libsdl.org/SDL3/README-cmake", kind: "CMake" },
     ],
   },
 } satisfies ProjectLearningAssets;

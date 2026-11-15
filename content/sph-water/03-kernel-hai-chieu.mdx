@@ -1,102 +1,78 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Một hạt ảnh hưởng tới vùng xung quanh như thế nào?
+# Một hạt đóng góp vào vùng xung quanh thế nào?
 
 ## Vấn đề cần giải quyết
 
-Một đám điểm riêng lẻ chưa cho ta density hay pressure. SPH giải quyết bằng cách coi mỗi hạt đóng góp vào một vùng xung quanh. Gần hạt thì trọng số lớn; càng xa thì nhỏ; ngoài support thì bằng 0. Hàm trọng số ấy gọi là kernel.
-
-Bài này chưa dùng kernel để đẩy hạt. Ta viết kernel/gradient, chọn một hạt và vẽ vòng support. Tách bước này ra giúp bắt lỗi hệ số 2D trước khi nó lan sang mọi density và lực.
+Cho các chấm rơi không khiến chúng tạo thành một khối nước. Ta cần một cách ước lượng lượng chất lỏng quanh mỗi vị trí. Nhưng trước khi cộng hàng xóm, phải quyết định một hạt ở gần hay xa đóng góp bao nhiêu.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Chọn smoothing length h=1.3*spacing=0.0585 m. Cubic spline dưới đây có support **2h**, không phải h. Đặt q=r/h:
+Kernel `W(r)` là trọng số theo khoảng cách. Nó lớn gần tâm, giảm dần và tắt hẳn ngoài `2h`. `h=1.3*spacing=0.091 m`; support là `0.182 m`. Hai số này không phải bán kính chấm trên màn hình.
 
-$$
-W(r)=\frac{10}{7\pi h^2}
-\begin{cases}
-1-\frac32q^2+\frac34q^3,&0\le q<1,\\
-\frac14(2-q)^3,&1\le q<2,\\
-0,&q\ge2.
-\end{cases}
-$$
+Ta dùng cubic spline chuẩn hóa **theo diện tích 2D**. Đặt `q=r/h`:
 
-Hệ số trước ngoặc bảo đảm tích phân kernel theo **diện tích** bằng 1. Kernel có đơn vị m⁻². Vì đang viết mô hình 2D, ta không lấy hệ số 1/(πh³) của 3D. [Tài liệu kernel của PySPH](https://pysph.readthedocs.io/en/main/reference/kernels.html) dùng đúng quy ước q=r/h và support 2h này.
+$$W(r)=\frac{10}{7\pi h^2}\begin{cases}1-\frac32q^2+\frac34q^3,&0\le q<1,\\\frac14(2-q)^3,&1\le q<2,\\0,&q\ge2.\end{cases}$$
 
-Để tính lực, cần gradient theo vị trí hạt i. Với displacement=x_i−x_j và r là độ dài của nó:
+`W` có đơn vị m⁻². Nhân với mass kg sẽ cho density kg/m². Không lấy hệ số 3D `1/(πh³)` rồi vẫn gọi kết quả là cùng mô hình. Công thức chuẩn hóa được đối chiếu với [tài liệu kernel của PySPH](https://pysph.readthedocs.io/en/main/reference/kernels.html).
 
-$$
-\nabla_iW=\frac{10}{7\pi h^3}f'(q)\frac{\mathbf x_i-\mathbf x_j}{r}.
-$$
-
-Khi r=0, gradient bằng vector 0 do đối xứng; không chia cho r rồi mới sửa NaN. Kernel vẫn có giá trị dương tại r=0. Hai điều này khác nhau.
+Đoán trước khi thử: hạt ở đúng `r=2h` có còn đóng góp không? Gradient tại tâm nên là một vector theo hướng nào?
 
 <InteractiveLab demo="sph-water" mode="sph-3" />
 
 ## Viết code từng bước
 
-### Bước 1 — Khai báo kích thước dùng chung
+Viết hai hàm trong `sph/kernel.hpp`:
 
-Trong `include/model.hpp`, các giá trị đã có từ bộ khung nay được dùng để định nghĩa vùng ảnh hưởng:
+{/* snippet include/sph/kernel.hpp#kernel */}
 
-```cpp title="include/model.hpp — spacing, smoothing length và support"
-constexpr double spacing = 0.045;
-constexpr double h = 1.3 * spacing;
-constexpr double support = 2 * h;
+```cpp title="include/sph/kernel.hpp — kernel và gradient 2D"
+inline double kernel(double distance) {
+    const double q = std::abs(distance) / h;
+    const double normalization = 10 / (7 * std::numbers::pi * h * h);
+    if (q >= 2) {
+        return 0;
+    }
+    if (q < 1) {
+        return normalization * (1 - 1.5 * q * q + 0.75 * q * q * q);
+    }
+    const double tail = 2 - q;
+    return normalization * 0.25 * tail * tail * tail;
+}
+
+inline Vec2 gradient(double dx, double dy) {
+    const double distance = std::sqrt(dx * dx + dy * dy);
+    const double q = distance / h;
+    if (distance == 0 || q >= 2) {
+        return {};
+    }
+    const double normalization = 10 / (7 * std::numbers::pi * h * h);
+    double derivative = -0.75 * (2 - q) * (2 - q);
+    if (q < 1) {
+        derivative = -3 * q + 2.25 * q * q;
+    }
+    const double factor = normalization * derivative / (h * distance);
+    return {factor * dx, factor * dy};
+}
 ```
 
-Vòng nhỏ trên Canvas là h, vòng lớn là 2h. Các đường nối đi tới hạt trong vòng lớn; chúng chưa biểu diễn độ lớn lực.
-
-### Bước 2 — Viết hai nhánh của kernel
-
-Thêm `kernel(double r)` vào `include/kernel.hpp`; include `<numbers>` cho π. Hàm nhận khoảng cách, không nhận bình phương khoảng cách:
-
-```cpp title="include/kernel.hpp — kernel cubic spline 2D"
-const double q = std::abs(r) / h;
-const double normalization = 10 / (7 * std::numbers::pi * h * h);
-if (q >= 2) {
-    return 0;
-}
-if (q < 1) {
-    return normalization * (1 - 1.5 * q * q + 0.75 * q * q * q);
-}
-return normalization * 0.25 * std::pow(2 - q, 3);
-```
-
-Không bỏ normalization rồi tăng mass để nhìn “gần giống”. Làm vậy sẽ mất ý nghĩa đơn vị và phép kiểm density.
-
-### Bước 3 — Viết gradient và xử lý tâm
-
-Trong `gradient`, tính r/q trước, trả 0 ở gốc và ngoài support. Sau đó lấy đạo hàm f′ ở nhánh tương ứng:
-
-```cpp title="include/kernel.hpp — nhánh gradient hữu hạn"
-if (r == 0 || q >= 2) {
-    return {0, 0};
-}
-const double normalization = 10 / (7 * std::numbers::pi * h * h);
-double derivative = -0.75 * std::pow(2 - q, 2);
-if (q < 1) {
-    derivative = -3 * q + 2.25 * q * q;
-}
-const double scale = normalization * derivative / (h * r);
-return {scale * displacement.x, scale * displacement.y};
-```
-
-Ở `view.hpp`, vòng support được vẽ bằng 64 đoạn thẳng quanh position đang chọn. Dùng `700*support` để đổi bán kính sang logical pixel. Click chọn hạt gần nhất; phím trái/phải chọn index để thao tác không phụ thuộc chuột.
+`gradient(dx,dy)` lấy đạo hàm theo `q`, nhân `1/h`, rồi nhân hướng `displacement/r`. Vì chia cho r, phải xử lý `distance==0` trước. Tại tâm, độ dốc của kernel đối xứng bằng 0; trả `{0,0}` là giá trị đúng, không phải cách né lỗi.
 
 ## Ghép các phần lại
 
-Checkpoint 03 vẫn rơi/va thành như Bài 02. Phần mới là kernel, gradient và inspector support, chưa phải pressure. Kiểm nhánh tại q=1: cả hai công thức W đều bằng một phần tư normalization, gradient cũng nối liên tục.
+Chưa thêm lực ở bài này. Renderer/Canvas dùng `support` để vẽ vòng quanh hạt đang chọn; đồ thị nhỏ biểu diễn `W(r)/W(0)`. Ở bài tiếp, `computeDensity` mới gọi `kernel` trong neighbor loop. `gradient` sẽ được dùng khi viết lực pressure, không dùng để di chuyển chấm ngay bây giờ.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi cutoff thành r=h trong phần chọn hàng xóm nhưng giữ kernel support 2h. Vòng ngoài còn nhiều đóng góp dương bị bỏ sót; density sẽ thấp sai ở bài tiếp theo.
-2. Bỏ nhánh r=0 của gradient. Self pair tạo 0/0. Khôi phục nhánh, kiểm gradient(0,0) bằng vector 0.
+Bỏ nhánh `distance==0`. Hạt sẽ trở thành hàng xóm của chính nó ở bài sau, nên phép `0/0` chắc chắn xảy ra. Tiếp đó đổi support thành h nhưng giữ nguyên công thức: bạn vừa cắt bỏ đuôi của kernel, tích phân sẽ không còn bằng 1.
 
 ## Tự kiểm tra kết quả
 
-W không âm, bằng 0 tại/ngoài 2h; W(0)=10/(7πh²). Gradient đảo dấu khi displacement đảo dấu. Tích phân số `2π∫rW(r)dr` phải gần 1; phép kiểm này được chạy đầy đủ ở Bài 10. Đừng chỉ kiểm diện tích dưới đồ thị W(r): thiếu hệ số 2πr sẽ sai phép đo 2D.
+- `kernel(0)>kernel(h)>kernel(2h)=0` và hai nhánh liên tục ở h.
+- `gradient(0,0)` bằng 0, không NaN; gradient đổi dấu khi đảo displacement.
+- Tích phân theo diện tích `2π∫rW(r)dr` gần 1, sai số dưới 1e−6 với 10.000 midpoint samples.
+- So gradient với finite difference ở `0.3h`, `1.2h`, `1.8h`; không chỉ gọi cùng một công thức hai lần.
 
 ## Bài tập mở rộng
 
-Tự lấy đạo hàm của từng nhánh rồi so gradient bằng finite difference tại q=0.5,1,1.5. Tiếp theo dùng kernel để [tính density và thêm mẫu tường](/projects/sph-water/04-density-va-mau-tuong).
+Vẽ cùng `W(r)` khi h gấp đôi và dự đoán chiều cao đỉnh. Tổng diện tích vẫn là 1 nên đỉnh không thể giữ nguyên. [Tiếp: tính density từ hàng xóm](./04-density-va-mau-tuong).

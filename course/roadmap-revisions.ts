@@ -249,6 +249,30 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
     workload:
       "128² = 16.384 ô/33.024 cạnh; 256² = 65.536 ô/131.584 cạnh thật. Dt=1/60, PCG≤384 vòng; báo thời gian bỏ qua khi quá tải.",
   },
+  "50": {
+    previousTitle: "Bể nước bằng hạt: SPH 2D có thể đổ và va vào thành",
+    replacement: {
+      slug: "sph-water",
+      acceptanceNote: "Bản 5.000 hạt đang được nghiệm thu; kiểm solver, đồ họa và tương tác riêng.",
+    },
+    summary: "Xây bể nước 5.000 hạt SPH thật, đổ nước, tạo sóng và kéo vật cản.",
+    outcome:
+      "Ứng dụng C++/SDL3 có dam-break, mặt nước từ hạt, vòi, vật cản kinematic, slider và các lớp density/pressure/speed.",
+    question:
+      "Các hạt làm thế nào để cùng tạo thành một khối nước chảy được, thay vì chỉ là bóng nảy?",
+    interactions: [
+      "Pour/spawn, kéo vật cản bằng chuột hoặc keyboard.",
+      "Pause/step/reset, đổi N và tham số; đọc dữ liệu/kiểm ca chuẩn riêng.",
+    ],
+    concepts: [
+      "Cubic spline 2D, summation density, EOS và lực pressure/viscosity từ hàng xóm.",
+      "Uniform grid, timestep thích nghi, boundary samples, mass và sai số mô hình.",
+    ],
+    prerequisites:
+      "SDL/input/world space, vector và integration; kernel/grid được giải thích tại chỗ, không buộc học projection ở 49.",
+    workload:
+      "Bản chuẩn 5.000 hạt; 1.000 để học, 10.000 mở rộng. Capacity 12.000, dt≤0,001 s; không hạ dữ liệu để giả FPS.",
+  },
 };
 
 export const rebuildRevisions = Object.fromEntries(

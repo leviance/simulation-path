@@ -1,0 +1,98 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Thêm vòi đổ mà không âm thầm làm mất khối lượng
+
+## Vấn đề cần giải quyết
+
+Bể đã có thể tạo sóng, nhưng người xem chưa đưa thêm nước vào được. Ta sẽ thêm một vòi điều khiển bằng chuột và bàn phím. Điểm cần giữ rõ: phát hạt là đưa **mass mới** vào hệ, không phải chỉ bật hiệu ứng chấm rơi.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một đợt thử phát bảy hạt, cách nhau một spacing theo chiều ngang, velocity ban đầu `(0,-1.2) m/s`. Mỗi hạt được thêm làm mass tăng 4,9 kg. Nếu chỗ đó đã có hạt quá gần, nằm ngoài bể/trong vật cản hoặc đã chạm capacity 12.000, ta từ chối và báo số lượng.
+
+Khi đổ liên tục, đồng hồ vòi chạy theo **model time**, mỗi khoảng 0,025 s thử một đợt. Nó không chạy theo số mouse event hoặc số frame. Nếu máy phải bỏ thời gian mô phỏng, vòi cũng không được lén đổ theo thời gian thật.
+
+<InteractiveLab demo="sph-water" mode="sph-10" />
+
+## Viết code từng bước
+
+### Chỉ thêm hạt hợp lệ
+
+{/* snippet include/sph/emitter.hpp#emit */}
+
+```cpp title="include/sph/emitter.hpp — đợt phát có kiểm tra"
+inline std::size_t emitBurst(State& state, Vec2 nozzle) {
+    if (!std::isfinite(nozzle.x) || !std::isfinite(nozzle.y)) {
+        throw std::invalid_argument("Invalid nozzle coordinates");
+    }
+    std::size_t added = 0;
+    for (int k = -3; k <= 3; ++k) {
+        const double x = nozzle.x + k * spacing;
+        const double y = nozzle.y;
+        bool allowed = state.particles.size() < capacity && x >= spacing && x <= width - spacing && y >= spacing && y <= height - spacing;
+        if (state.paddle.enabled && std::hypot(x - state.paddle.x, y - state.paddle.y) < state.paddle.radius + spacing) {
+            allowed = false;
+        }
+        for (const auto& p : state.particles) {
+            const double dx = p.x - x;
+            const double dy = p.y - y;
+            if (dx * dx + dy * dy < 0.81 * spacing * spacing) {
+                allowed = false;
+                break;
+            }
+        }
+        if (allowed) {
+            state.particles.push_back({x, y, 0, -1.2});
+            ++added;
+            ++state.emitted;
+        } else {
+            ++state.rejected;
+        }
+    }
+    return added;
+}
+```
+
+Khoảng cách tối thiểu là `0.9*spacing`, không phải support. Support nói hạt nào ảnh hưởng tới nhau; khoảng cách phát hạt tránh tạo một state nén mạnh ngay từ đầu. Hạt nước vẫn không có hard-sphere collision với nhau trong solver.
+
+### Đổi input sang đúng world space
+
+`app/input.hpp` gọi `SDL_RenderCoordinatesFromWindow` trước khi `fromScreen` đổi logical render sang world. Đừng lấy `event.button.x/y` rồi chia trực tiếp cho kích thước bể: resize và letterbox sẽ làm nozzle lệch.
+
+{/* snippet include/app/draw.hpp#mapping */}
+
+```cpp title="include/app/draw.hpp — world/screen và vùng bể"
+inline water::Vec2 toScreen(double x, double y) {
+    return {viewport.x + viewport.w * x / water::width, viewport.y + viewport.h * (1 - y / water::height)};
+}
+
+inline bool fromScreen(float x, float y, water::Vec2& point) {
+    if (x < viewport.x || x > viewport.x + viewport.w || y < viewport.y || y > viewport.y + viewport.h) {
+        return false;
+    }
+    point.x = water::width * (x - viewport.x) / viewport.w;
+    point.y = water::height * (1 - (y - viewport.y) / viewport.h);
+    return true;
+}
+```
+
+## Ghép các phần lại
+
+Click với tool Pour đặt vòi và thử phát một đợt. Drag chỉ dời vòi, không phát thêm theo mỗi motion. E bật/tắt đổ liên tục; `App.oneStep` tăng `emitClock` bằng dt đã chạy, rồi phát **sau** tick. Tick tiếp theo rebuild neighbor lists để đưa hạt mới vào đầy đủ density/force.
+
+Input dùng pointer capture trong drag và release khi mouse-up/blur/minimize; mất focus cũng pause và tắt vòi. Trên Canvas, mũi tên chuyển vòi, Enter phát một đợt. Reset giữ cảnh/N/tham số nhưng tắt vòi và đặt lại đúng lượng nước ban đầu.
+
+## Thử làm sai để hiểu đúng
+
+Trong Bể trống đang paused, phát hai lần cùng chỗ. Lần đầu thêm bảy hạt; lần hai phải bị từ chối overlap. Sau đó thử bỏ kiểm khoảng cách: density ban đầu sẽ tăng bất thường. Không dùng cách “xóa hạt cũ nhất” để giải quyết capacity, vì như vậy mass cũ biến mất mà người học không biết.
+
+## Tự kiểm tra kết quả
+
+- Bể trống: một đợt hợp lệ tăng count 7 và mass 34,3 kg.
+- Phát lại cùng chỗ khi paused không thêm hạt; bộ đếm từ chối tăng.
+- Không vượt 12.000 hạt, không xóa hạt cũ và không đưa hạt vào vật cản.
+- Mouse/keyboard đặt cùng tọa độ; ra ngoài viewport không tạo vị trí vô hạn.
+
+## Bài tập mở rộng
+
+Thêm một vòi thứ hai có bộ đếm riêng và chứng minh tổng mass bằng mass ban đầu cộng mass từ cả hai vòi. [Tiếp: kéo vật cản vào dòng nước](./11-vat-can-chuyen-dong).

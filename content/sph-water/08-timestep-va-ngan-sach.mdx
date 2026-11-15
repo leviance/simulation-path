@@ -1,0 +1,124 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chạy liên tục mà không làm cửa sổ mất phản hồi
+
+## Vấn đề cần giải quyết
+
+Tới đây ta đã có một bước SPH, nhưng nhấn N hàng nghìn lần không phải cách dùng bể nước. Bật vòng chạy liên tục cũng có rủi ro: dt quá lớn làm sai lực, còn cố chạy bù mọi thời gian bị trễ có thể chiếm CPU mãi và khiến Pause không được xử lý.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta giới hạn dt theo ba điều kiện thực hành:
+
+$$\Delta t=\min\left(0.001,\frac{0.25h}{c+v_{max}+3},0.25\sqrt{\frac{h}{\max(a_{max},10^{-12})}}\right).$$
+
+Số 3 m/s dự phòng tốc độ biên chuyển động sẽ có ở bài 11; hiện tại nó chỉ làm bound thận trọng hơn. Tăng c hoặc tốc độ hạt làm acoustic bound nhỏ đi; acceleration rất lớn làm force bound chi phối. Đây là **heuristic cho solver này**, không phải chứng minh ổn định hay độ chính xác tổng quát.
+
+<InteractiveLab demo="sph-water" mode="sph-8" />
+
+## Viết code từng bước
+
+### Chọn dt sau khi có acceleration
+
+{/* snippet include/sph/solver.hpp#timestep */}
+
+```cpp title="include/sph/solver.hpp — timestep theo state"
+inline double chooseDt(const State& state, const Settings& settings) {
+    validate(settings);
+    requireFinite(state);
+    double maximumSpeed = 0;
+    double maximumAcceleration = 0;
+    for (const auto& p : state.particles) {
+        maximumSpeed = std::max(maximumSpeed, std::hypot(p.vx, p.vy));
+        maximumAcceleration = std::max(maximumAcceleration, std::hypot(p.ax, p.ay));
+    }
+    const double acoustic = 0.25 * h / (settings.soundSpeed + maximumSpeed + 3);
+    const double forceBound = 0.25 * std::sqrt(h / std::max(maximumAcceleration, 1e-12));
+    const double dt = std::min({maxDt, acoustic, forceBound});
+    if (!std::isfinite(dt) || dt < 1e-7) {
+        throw std::runtime_error("dt below 1e-7 s: pause and reduce forcing/reset");
+    }
+    return dt;
+}
+```
+
+Tính dt trước lực sẽ bỏ lỡ trường hợp hạt bị nén mạnh ngay trong bước hiện tại. Nonfinite hoặc dt dưới 1e−7 làm app pause/báo lỗi; không clamp velocity để giấu một state đã hỏng.
+
+### Tách clock của frame và clock của mô hình
+
+{/* snippet include/app/state.hpp#frame */}
+
+```cpp title="include/app/state.hpp — chạy có ngân sách"
+void advance(double elapsed) {
+    if (paused || !error.empty()) {
+        return;
+    }
+    dropped += std::max(0.0, elapsed - 0.05);
+    accumulator += std::min(elapsed, 0.05);
+    const auto start = std::chrono::steady_clock::now();
+    int steps = 0;
+    while (accumulator >= water::maxDt && steps < 24) {
+        if (!oneStep()) {
+            break;
+        }
+        accumulator -= state.dt;
+        ++steps;
+        if (std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() >= 12) {
+            break;
+        }
+    }
+    if (steps == 24 || accumulator >= water::maxDt) {
+        dropped += accumulator;
+        accumulator = 0;
+    }
+}
+```
+
+Một frame nhận tối đa 0,05 s, chạy tối đa 24 substep và trả quyền sau khoảng 12 ms native. Vòng lặp luôn hoàn tất bước đang chạy. Canvas dùng khoảng 10 ms cho vòng solver. Vì vậy, đây không phải hard deadline cho riêng một step đắt; nó ngăn app tiếp tục bắt đầu bước mới vô hạn.
+
+## Ghép các phần lại
+
+`main` đo elapsed bằng clock đơn điệu, gọi `app.advance(elapsed)`, rồi refresh/draw. `state.time` chỉ tăng bằng tổng dt đã thực sự chạy. Phần bị bỏ tăng `dropped`, không được cộng lén vào model time. Pause xóa accumulator; N luôn pause trước rồi tiến đúng một substep.
+
+Trong từng substep, `chooseDt` nằm **sau** lượt force và **trước** integrate:
+
+{/* snippet include/sph/solver.hpp#step */}
+
+```cpp title="include/sph/solver.hpp — vị trí chọn dt trong pipeline"
+inline void step(State& state, const Settings& settings) {
+    validate(settings);
+    requireFinite(state);
+    for (auto& p : state.particles) {
+        p.ax = 0;
+        p.ay = -settings.gravity;
+    }
+    bool useGrid = false;
+    useGrid = settings.useGrid;
+    auto search = buildNeighbors(state, useGrid);
+    computeDensity(state, search);
+    state.candidates = search.candidates;
+    computePressure(state, settings);
+    computeForces(state, search, settings);
+    requireFinite(state);
+    const double dt = chooseDt(state, settings);
+    integrate(state, dt);
+    requireFinite(state);
+}
+```
+
+App đợi đủ `maxDt` trong accumulator trước khi bắt đầu một bước; dt thực không lớn hơn số đó nên không vay thời gian tương lai. Sai số trễ dưới 0,001 s này không phải lực vật lý.
+
+## Thử làm sai để hiểu đúng
+
+Đổi dt thành elapsed của frame. Một frame bị treo 0,2 s có thể tạo cú nhảy rất lớn. Sau đó bỏ work cap và giả một frame trễ: thời gian chạy bù sẽ tăng mạnh. Không chạy thử vô hạn; dùng fixture clock và watchdog thay cho việc cố làm máy đứng.
+
+## Tự kiểm tra kết quả
+
+- Ca c lớn làm acoustic bound chi phối; ca acceleration rất lớn làm force bound chi phối.
+- Nonfinite và dt quá nhỏ bị từ chối; app vẫn cho Reset/thoát.
+- N khi đang chạy đưa app về paused; model time dừng nhưng vẫn đọc số được.
+- Báo dropped time và thời gian đo thực. Không suy từ “không nổ số” ra “đã đủ chính xác”.
+
+## Bài tập mở rộng
+
+Trên fixture nhỏ, giảm maxDt một nửa và so kết quả ở **cùng model time**, không cùng số tick. Ghi mức lệch trước khi kết luận nên tăng c hay giảm dt. [Tiếp: mặt nước và 5.000 hạt](./09-mat-nuoc-va-5000-hat).

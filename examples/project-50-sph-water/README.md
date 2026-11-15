@@ -1,71 +1,87 @@
-# Project 50 — Bể nước bằng hạt: SPH 2D có thể đổ và va vào thành
+# Project 50 — Bể nước bằng hạt SPH 2D
 
-Tự xây một bể nước 2D bằng C++20/SDL3, từ các chấm tròn đứng yên đến WCSPH với gravity, density, pressure, artificial viscosity và vòi nước. Bài học bắt đầu bằng hình chạy được, rồi giải thích từng phần của solver trước khi chạy liên tục.
+Từ khung SDL3, bạn tự xây một bể nước có **5.000 hạt SPH thật**: dam-break, hồ nước, vòi đổ và vật cản kéo được. Mặt nước được dựng từ vị trí các hạt, không phải ảnh động hoặc những quả bóng chỉ va chạm với nhau. Density, pressure, artificial viscosity và uniform grid đều được tự viết.
 
-## Trước khi đọc lời giải
+## Học phần này để làm gì?
 
-Thử dựng cột hạt trong bể 1×0.8 m, cho đổ xuống và lan ngang, thêm vòi điều khiển bằng chuột. Đọc challenge trên trang tổng quan, ghi lại những chỗ bạn chưa biết cách làm. Dự kiến 15–19 giờ cho toàn học phần; dành 120–180 phút tự thử trước.
+Project 49 biểu diễn chất lưu trên lưới; project này mang dữ liệu đi theo hạt. Bạn sẽ hiểu cách dùng kernel có đơn vị, suy lực từ density, kiểm search bằng oracle và cân đối chi phí với timestep. Project 51 mới mở rộng sang **3D/GPU**; chương trình này không giả không gian 3D bằng cách chiếu bể 2D.
 
-Nên biết SDL3 input/renderer và đổi tọa độ (01–05), quỹ đạo/tích phân/va chạm (22–24), all-pairs/grid (27–28), gradient và chất lưu trên lưới (48–49). Kernel/density/force SPH được giải thích từ đầu; không cần biết SPH trước.
+Trước khi đọc, dành 120–180 phút tự thử dựng cột nước đổ xuống và vòi điều khiển được. Đề bài trên website tách hành vi cần đạt khỏi gợi ý thuật toán. Toàn học phần khoảng 23 giờ: 6 giờ đọc, 13 giờ tự viết, 4 giờ kiểm/thử; setup/build không tính vào thời lượng học thuần.
 
-## Mười bài và source tương ứng
+Cần biết SDL3/input/đổi tọa độ (01–05), vector, hàm và `std::vector`. Tích phân từ 23 và grid từ 28 giúp ôn lại, nhưng trong bài vẫn giải thích phần cần dùng. Không bắt học pressure projection của 49 trước SPH.
 
-1. Vẽ hạt/bể trong world space, chưa có chuyển động.
-2. Gravity, semi-implicit Euler và collision; chưa có tương tác chất lỏng.
-3. Cubic spline 2D, gradient và vòng support.
-4. Summation density, self và ba lớp wall samples.
-5. EOS tuyến tính/clamp, force pressure đối xứng.
-6. Artificial viscosity Monaghan beta=0 cho cặp tiến lại gần.
-7. Spatial grid có all-pairs oracle.
-8. Vòi nước, overlap/capacity và input chuột/keyboard.
-9. Acoustic/force timestep, accumulator và work cap.
-10. Ca chuẩn độc lập, CTest và mã hoàn chỉnh.
+## 12 bài và source
 
-`source-template/` là nguồn biên soạn trong repository. `starter/`, `checkpoints/01`…`10` và `final/` là source độc lập được sinh sẵn trong ZIP. Không cần chép code qua từng bài để chạy checkpoint. Tests include core ở final, không mở window.
+1. Khung SDL3, bể và 1.000 hạt đứng yên.
+2. Gravity, semi-implicit Euler, collision với bốn thành.
+3. Cubic spline/gradient chuẩn hóa theo 2D.
+4. Summation density, self và mẫu tường.
+5. EOS tuyến tính và pressure force đối xứng.
+6. Artificial viscosity và công suất tiêu tán của cặp.
+7. Uniform grid count/prefix/scatter, đối chiếu all-pairs.
+8. Dt thích nghi, accumulator và ngân sách frame.
+9. Bản chuẩn 5.000 hạt, splat và mặt nước liên tục.
+10. Vòi có overlap/capacity và mass accounting.
+11. Vật cản kinematic và boundary samples chuyển động.
+12. Oracle, equilibrium, dam/pool, benchmark và mã hoàn chỉnh.
 
-## Build và chạy
+`source-template/` là nguồn authored của repository. ZIP có `starter/`, `checkpoints/01..12/`, `final/`, `tests/` và CMake. Mỗi checkpoint tự chứa các file cần chạy. `include/sph/` giữ toán/solver; `include/app/` giữ SDL/input/UI; `src/main.cpp` nối các phần. Không có assets ngoài cần tải thêm. Code trong bài được đồng bộ bằng snippet markers với đúng checkpoint.
 
-Cần compiler C++20, CMake 3.24 trở lên. Windows dùng Visual Studio 2022 với workload Desktop development with C++. CMake FetchContent tải SDL **3.4.8** có SHA-256 khóa cố định và link `SDL3::SDL3`; lần configure đầu cần mạng. Không tự đổi phiên bản SDL khi chỉ muốn chạy bài.
+## Build/run
+
+C++20, CMake ≥3.24. Windows: Visual Studio 2022, workload Desktop development with C++. SDL **3.4.8** được FetchContent tải theo URL/SHA-256 cố định, link `SDL3::SDL3`; configure lần đầu cần mạng. Không cần Node.js để build C++.
 
 ```bash
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
+cmake --build build --config Debug --parallel 1
 ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
+cmake --build build --config Release --parallel 1
 ctest --test-dir build -C Release --output-on-failure --timeout 20
+.\build\Release\project_50_final.exe
 ```
 
-Chạy `build/Debug/project_50_final.exe` trên Windows/Visual Studio. Target mặc định là final; target starter là `project_50_starter`, từng bài là `project_50_checkpoint_1`…`project_50_checkpoint_10`. Với Ninja/Make single-config, dùng hai thư mục riêng có `-DCMAKE_BUILD_TYPE=Debug` hoặc `Release`; executable không nằm trong subdirectory Debug.
+Target mặc định là `project_50_final`; dùng `project_50_starter` hoặc `project_50_checkpoint_1`…`12` để chạy từng bài. Với Ninja/Make single-config, tạo build directory riêng kèm `-DCMAKE_BUILD_TYPE=Debug` hoặc `Release`; executable không nằm trong thư mục con cấu hình. Dùng một worker nếu máy ít RAM. Các bước kiểm dài cần supervisor/deadline như `ARCHITECTURE.md`; không để test chạy bù vô hạn.
 
-## Điều khiển
+## Điều khiển và checklist desktop
 
-- R reset, P đổi preset Dam/Pool/Pair/Empty, I in inspector ra terminal.
-- N tiến một bước; từ Bài 09, Space chạy/dừng và E bật/tắt đổ liên tục.
-- Click chọn hạt từ Bài 03; từ Bài 08 click/rê đặt vòi và thử phát một hạt lúc bắt đầu. Motion chỉ đổi vị trí, không phát theo mỗi event.
-- Trước Bài 08, trái/phải chọn hạt. Từ Bài 08, arrows dịch vòi, Enter đổ một hạt.
-- W bật mẫu tường, L màu theo density; C đổi c=8/12/20; Q alpha=0/0.15/0.3; G grid/all-pairs.
-- Từ Bài 05, F bật/tắt cặp độc lập; 1/2 đổi density A/B (900/1100/1200), I in gradient/lực/tổng lực. Từ Bài 06, D đổi tiến lại gần/tách ra. C/Q dùng chung c/alpha; R đặt lại tham số. Mũi tên xanh là pressure, cam là viscosity.
-- V chạy ca chuẩn trên state riêng từ Bài 10; PASS/FAIL và giá trị được in ra terminal.
-- Mouse up/ra khỏi bể/blur/minimize hủy vòi; blur/minimize dừng solver. Resize chỉ đổi logical presentation.
+- Space chạy/pause từ Bài 08; N pause rồi tiến **một substep**; R reset giữ cảnh/N/tham số; Escape thoát.
+- P đổi Dam/Pool/Obstacle/Empty; G đổi 1.000/5.000/10.000 từ Bài 09. Bản cuối mặc định 5.000; 10.000 là mở rộng cần đo trên máy đang dùng.
+- L đổi Surface/Particles/Density/Pressure/Speed, F1 bật/tắt số đo. Kiểm hình và số hạt cập nhật/vẽ khớp nhau.
+- C/Q/B thay c/alpha/gravity bằng bàn phím; ba slider trong panel cho điều chỉnh liên tục bằng chuột. Thay tham số sẽ pause.
+- M đổi tool Pour/Paddle/Inspect. Pour: click đặt vòi và thử phát bảy hạt; drag chỉ đổi vòi. Enter phát một đợt, E bật vòi liên tục khi physics chạy. Mũi tên dịch nozzle/target.
+- O bật/tắt vật cản. Với tool Paddle, kéo chỉ đổi target; khi paused vật cản không teleport, khi chạy tốc độ không quá 3 m/s. Nước phải nằm ngoài hình đĩa sau bước.
+- Inspect: click chọn hạt, xem vòng support và density/pressure tại tọa độ hiện tại.
+- V chạy ca chuẩn trên state riêng, không đổi scene/tick/model time. Console không thay UI: kết quả cũng hiện trong panel.
+- Mouse-up/blur/minimize release capture; blur/minimize pause và tắt vòi. Resize không đổi world hoặc nhầm vị trí con trỏ.
 
-Window title hiện count/mass/simulated time/maximum compression và dropped time. Inspector đọc density/pressure tại vị trí đang hiển thị; màu không thay dữ liệu solver.
+Ở Bài 02–04, N tiến 0,01 s để thấy rơi tự do. Từ pressure ở Bài 05–07, bước cố định là 0,00025 s. Bài 08 trở đi dùng dt thích nghi ≤0,001 s. Đừng hiểu một substep nhỏ là một frame 1/60 s.
 
-Cặp độc lập là phép đo tĩnh với density cho trước, không chạy summation density, gravity, wall hoặc tích phân. Ca 1100/1200, c=12 cho pressure 14400/28800 và Fx pressure ±211.561054. Khi tiến lại gần với alpha=0.15, Pi≈0.000907030, công suất viscosity≈−3.609163. Khi tách ra, viscosity bằng 0 nhưng pressure vẫn còn. Preset Pair **trong bể** vẫn tính density từ kernel; không dùng nó thay phép đo lực này.
+## Mô hình và đơn vị
 
-## Mô hình và giới hạn
+Miền kín `[0,12.6]×[0,7.56]` m, y lên; spacing=0,07 m, h=0,091 m, support=0,182 m. ρ₀=1.000 **kg/m²**, mass mỗi hạt=4,9 kg. Pressure có **N/m**, không phải Pa. Cubic spline dùng `10/(7πh²)`. Density giữ self và mẫu rắn.
 
-spacing=0.045 m, h=1.3*spacing, support=2h, rho0=1000 **kg/m²**, mass=rho0*spacing²=2.025 kg, tối đa384 hạt. Cubic spline dùng hệ số 2D 10/(7πh²). Mỗi tick: neighbors → density → pressure → acceleration → chọn dt → integrate/collision; emitter sau tick.
+`p=max(0,c²(ρ−ρ₀))`; c∈[12,40] m/s. Force dùng cả `p_i/ρ_i²+p_j/ρ_j²`. Artificial viscosity Monaghan beta=0, alpha∈[0,1], epsilon²=0,01h², chỉ cho cặp tiến lại gần. Alpha không phải độ nhớt vật lý và không có global damping theo frame.
 
-Pressure p=max(0,c²*(rho−rho0)); wall dùng rho0/p_i/velocity0. Alpha là tiêu tán số, **không phải** độ nhớt thật của nước. Clamp pressure và boundary đơn giản không bảo đảm density sát rho0 ở mọi cảnh. Không có surface tension, moving wall, hydrostatic wall correction hoặc surface reconstruction. Hạt không có hard-sphere collision với nhau.
+Bể có bốn biên thật kể cả trần; ba lớp mẫu rắn nằm ngoài miền. Mẫu rắn có rho0/p_i/velocity của biên; collision giải tích giữ tâm ở cách biên spacing/2. Vật cản được điều khiển một chiều, chưa có rigid-body phản lực; lực dùng sample đầu bước, contact dùng vị trí mới. Không khẳng định cân bằng thủy tĩnh chính xác, không có surface tension hoặc mô phỏng 3D.
 
-Ba lớp mẫu tĩnh nằm ngoài đáy/hai bên; trên cùng không có SPH wall. Collision ở y=0.8−spacing/2 là **trần an toàn** để demo không mất hạt, không phải bể mở cho nước tràn ra. Wall samples không tính vào mass nước.
+Dt=min(0,001; 0,25h/(c+vmax+3); 0,25sqrt(h/amax)); +3 dự phòng tốc độ paddle. Dt<1e−7 hoặc nonfinite thì pause/báo lỗi. Mỗi frame nhận tối đa 0,05 s, tối đa 24 substep và khoảng 12 ms native/10 ms Canvas; hoàn tất bước hiện tại rồi trả quyền UI. Model time là tổng dt đã chạy, dropped time báo riêng. **Không hứa thời gian thực hoặc FPS trên mọi máy.**
 
-Dt=min(0.001,0.25h/(c+vmax),0.25sqrt(h/amax)). Đây là bound thực hành cho mô hình này, không phải chứng minh ổn định tổng quát. Dt dưới1e−6 hoặc dữ liệu không hữu hạn làm demo dừng/báo lỗi. Mỗi frame nhận tối đa0.05s, chạy tối đa64 tick; thời gian bỏ qua được báo, không chạy bù vô hạn.
-
-Timestep tests tách hai ca: velocity=0/c=20 làm acoustic bound nhỏ hơn maxDt; acceleration=1e6/c=12 làm force bound chi phối. Có ca dt dưới1e−6, NaN/Infinity và vector acceleration thiếu phần tử, nên trả maxDt cố định hoặc bỏ qua dữ liệu lỗi không thể vượt qua bộ kiểm này.
+Capacity 12.000; vòi thử bảy hạt mỗi 0,025 s model time, từ chối overlap dưới 0,9 spacing. Không thay hạt cũ. Grid cell=2h, stencil 3×3, lọc support thật; all-pairs chỉ dùng ≤1.000 hạt cho oracle. Mặt nước 720×432 đọc mọi hạt bằng blob radius 1,65 spacing; coverage/edge shading chỉ phục vụ vẽ, không đổi density/force.
 
 ## Kiểm chứng
 
-Kernel có tích phân theo diện tích gần1 và gradient khớp finite difference. Density được so tổng trực tiếp và ca self/wall. Cặp tự do kiểm force đối xứng/công suất viscosity. Grid so all-pairs ở cell âm/cutoff và quỹ đạo150 bước. Dam300 bước kiểm finite và báo compression, không chứng nhận độ chính xác vật lý. Emitter kiểm mass/overlap/capacity. Lịch30/60/120 FPS so cùng ca cặp không gravity/wall, không discarded time. CTest không dùng assert nên vẫn kiểm trong Release.
+CTest giữ kiểm tra ở Debug/Release: radial integral, finite difference gradient, nonzero pair force/viscosity power, grid/all-pairs neighbor IDs/density/pressure/acceleration/trajectory, walls/cutoff, count/mass/emission, contact và invalid data. Ca zero-gravity lattice drift <1e−4 m sau 50 bước; **không dùng nó để chứng nhận hydrostatics có gravity**. Có smoke 5.000 hạt trong tests; dam-break dài và hồ được đo thêm ở executable hữu hạn.
 
-Tài liệu đối chiếu: [PySPH kernels](https://pysph.readthedocs.io/en/main/reference/kernels.html), [PySPH equations](https://pysph.readthedocs.io/en/main/reference/equations.html), [SDL CMake](https://wiki.libsdl.org/SDL3/README-cmake). Tiếp theo là Project51 — SPH3D/GPU: kernel thể tích, CSR3D, reduction và CPU oracle để kiểm shader.
+```bash
+.\build\Release\project_50_final.exe --verify
+.\build\Release\project_50_tests.exe --benchmark
+.\build\Release\project_50_final.exe --hidden --ticks=2200 --seconds=60 --capture=dam.bmp
+```
+
+Ticks có giới hạn 6.000; seconds tối đa 60; phải đạt target ticks mới gọi scale check thành công. Log allocated/alive/updated/drawn, density min/median/max, p95 compression, dt, leakage và mass. Chạy hồ bằng `--preset=pool`, vật cản bằng `--preset=obstacle`. Capture là bằng chứng hình, không thay kiểm mouse/keyboard.
+
+Đo hiệu năng bằng Release với cùng state/N, warm-up và repetitions đã công bố; ghi máy, median và độ phân tán, tách search/density/force/integrate/render/full step. Compression lớn, particle detachment và lỗi boundary phải được báo, không dùng mặt nước mượt để che đi. Xem báo cáo nghiệm thu trong repository để biết cấu hình và phần nào đã được kiểm thực tế.
+
+`tests/benchmark.hpp` thực hiện warm-up 30 tick và tám lần đo từ các bản clone của cùng state, riêng cho N=1.000/5.000. Copy state không nằm trong khoảng đo. Full step có validation/finite/allocation của solver; thời gian render CPU không gồm SDL upload/present. Không gọi tổng các median toán tử là median của full frame. Benchmark là một lượt hữu hạn; không chạy vòng benchmark không có deadline trên máy học tập.
+
+Tham khảo: [PySPH kernels](https://pysph.readthedocs.io/en/main/reference/kernels.html), [PySPH equations](https://pysph.readthedocs.io/en/main/reference/equations.html), [SDL CMake](https://wiki.libsdl.org/SDL3/README-cmake).

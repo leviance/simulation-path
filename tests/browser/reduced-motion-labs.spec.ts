@@ -27,7 +27,7 @@ const cases = [
   },
   {
     project: 50,
-    route: "sph-water/10-kiem-chung-va-hoan-thien",
+    route: "sph-water/12-kiem-chung-va-ban-hoan-chinh",
     step: "Tiến một bước",
     label: "Thời gian mô phỏng",
   },

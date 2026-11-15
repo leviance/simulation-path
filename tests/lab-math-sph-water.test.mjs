@@ -1,239 +1,284 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as w from "../lib/labs/sph-water.ts";
-const close = (actual, expected, tolerance = 1e-10) =>
-  assert.ok(Math.abs(actual - expected) < tolerance, `${actual} != ${expected}`);
+const close = (a, b, t = 1e-9) =>
+  assert.ok(
+    Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= t,
+    `${a} != ${b} ± ${t}`,
+  );
+const empty = () => {
+  const s = w.makeState("empty");
+  s.walls = [];
+  return s;
+};
 
-test("SPH kernel is normalized in 2D, compact and has an odd analytic gradient", () => {
-  assert.equal(w.kernel(w.support), 0);
-  assert.equal(w.kernel(3 * w.h), 0);
-  close(w.kernel(0), 10 / (7 * Math.PI * w.h ** 2));
+test("P50 actual scale: 1000/5000/10000, bounded capacity and stage gating", () => {
+  for (const n of [1000, 5000, 10000]) assert.equal(w.makeState("dam", n).particles.length, n);
+  assert.equal(w.makeState("dam", 1000, 0).particles.length, 0);
+  assert.equal(new w.WaterSession(1).state.particles.length, 1000);
+  assert.equal(new w.WaterSession(12).state.particles.length, 5000);
+  for (const n of [-1, 384, 5001, Infinity]) assert.throws(() => w.makeState("dam", n));
+});
+test("P50 independent radial normalization and gradient finite differences", () => {
   let integral = 0;
-  const dr = w.support / 5000;
-  for (let i = 0; i < 5000; i++) {
+  const dr = w.support / 10000;
+  for (let i = 0; i < 10000; i++) {
     const r = (i + 0.5) * dr;
     integral += 2 * Math.PI * r * w.kernel(r) * dr;
   }
-  close(integral, 1, 1e-7);
-  assert.deepEqual(w.gradient({ x: 0, y: 0 }), { x: 0, y: 0 });
-  for (const x of [0.01, w.h, 0.08]) {
-    const d = { x, y: 0.015 },
-      epsilon = 1e-6;
-    const finiteDifference =
-      (w.kernel(w.length({ x: x + epsilon, y: d.y })) -
-        w.kernel(w.length({ x: x - epsilon, y: d.y }))) /
-      (2 * epsilon);
-    close(w.gradient(d).x, finiteDifference, 1e-4);
-    close(w.gradient(d).x, -w.gradient({ x: -x, y: -d.y }).x);
+  close(integral, 1, 1e-6);
+  for (const q of [0.3, 0.8, 1.2, 1.8]) {
+    const x = q * w.h,
+      e = 1e-6 * w.h,
+      d = (w.kernel(x + e) - w.kernel(x - e)) / (2 * e);
+    close(w.gradient(x, 0).x, d, 1e-5 * Math.max(1, Math.abs(d)));
   }
+  assert.equal(w.kernel(w.support), 0);
+  assert.deepEqual(w.gradient(0, 0), { x: 0, y: 0 });
+  close(w.gradient(w.h, 0.02).x, -w.gradient(-w.h, -0.02).x);
 });
-test("SPH density includes self, walls and a directly summed lattice oracle", () => {
-  const state = w.makeState("dam"),
-    neighbors = w.buildNeighbors(state, false);
-  w.computeDensity(state, neighbors);
-  const i = 35,
-    point = state.particles[i].position;
-  let oracle = 0;
-  for (const p of [...state.particles.map((v) => v.position), ...state.walls])
-    oracle += w.mass * w.kernel(Math.hypot(point.x - p.x, point.y - p.y));
-  close(state.particles[i].density, oracle);
-  const isolated = w.makeState("empty");
-  isolated.walls = [];
-  isolated.particles.push(w.particle({ x: 0.5, y: 0.5 }));
-  w.computeDensity(isolated, w.buildNeighbors(isolated, true));
-  close(isolated.particles[0].density, w.mass * w.kernel(0));
-  const withoutWalls = structuredClone(state);
-  withoutWalls.walls = [];
-  w.computeDensity(withoutWalls, w.buildNeighbors(withoutWalls, false));
-  assert.ok(state.particles[0].density > withoutWalls.particles[0].density);
+test("P50 self contribution and walls have actual 2D mass units", () => {
+  const s = empty();
+  s.particles = [w.particle(2, 2)];
+  w.computeDensity(s, w.buildNeighbors(s));
+  close(s.particles[0].density, (w.mass * 10) / (7 * Math.PI * w.h * w.h));
+  const walls = w.makeState("empty").walls;
+  assert.equal(walls.length, 1764);
+  assert.equal(new Set(walls.map((p) => `${p.x},${p.y}`)).size, walls.length);
+  assert.ok(walls.every((p) => p.x < 0 || p.x > w.width || p.y < 0 || p.y > w.height));
 });
-test("SPH grid equals all-pairs including negative wall cells, corners and support cutoff", () => {
-  for (const preset of ["dam", "pool", "pair", "empty"]) {
-    const state = w.makeState(preset);
-    const brute = w.buildNeighbors(state, false),
-      grid = w.buildNeighbors(state, true);
-    assert.deepEqual(grid.lists, brute.lists);
-    if (state.particles.length) assert.ok(grid.candidates < brute.candidates);
-  }
-  const state = w.makeState("empty");
-  state.walls = [];
-  state.particles = [
-    w.particle({ x: 0, y: 0 }),
-    w.particle({ x: w.support, y: 0 }),
-    w.particle({ x: -0.001, y: 0 }),
-  ];
-  assert.deepEqual(w.buildNeighbors(state, true).lists, [[0, 2], [1], [0, 2]]);
-});
-test("SPH pressure and artificial viscosity give opposite pair forces and dissipative power", () => {
-  const state = w.makeState("pair");
-  state.walls = [];
-  state.particles[0].density = 1100;
-  state.particles[1].density = 1200;
-  w.computePressure(state, 12);
-  close(state.particles[0].pressure, 14400);
+test("P50 nonzero pair pressure and viscosity match independent C++ numeric oracle", () => {
+  const value = w.inspectPair();
+  close(value.pressureA, 40000);
+  close(value.pressureB, 80000);
+  close(value.pressureForce, -962.899070255326, 1e-8);
+  close(value.power, -224.529475242557, 1e-8);
+  const s = empty();
+  s.particles = [w.particle(2, 2, 1), w.particle(2 + w.h, 2, -1)];
+  s.particles[0].density = 1100;
+  s.particles[1].density = 1200;
   const settings = { ...w.defaultSettings, gravity: 0, alpha: 0 },
-    neighbors = w.buildNeighbors(state, false);
-  const pressure = w.accelerations(state, neighbors, settings, 6);
-  assert.ok(pressure[0].x < 0 && pressure[1].x > 0);
-  close(pressure[0].x + pressure[1].x, 0);
-  const viscous = w.accelerations(state, neighbors, { ...settings, alpha: 0.15 }, 6);
-  close(viscous[0].x + viscous[1].x, 0);
-  const power = state.particles.reduce(
-    (sum, p, i) => sum + w.mass * w.dot(p.velocity, w.subtract(viscous[i], pressure[i])),
+    search = w.buildNeighbors(s, false);
+  w.computePressure(s, settings);
+  w.computeForces(s, search, settings);
+  close(w.mass * s.particles[0].ax, value.pressureForce, 1e-8);
+  close(w.mass * (s.particles[0].ax + s.particles[1].ax), 0, 1e-8);
+  const separate = w.inspectPair({ ...w.defaultPair, approaching: false });
+  assert.equal(separate.pi, 0);
+  assert.equal(separate.power, 0);
+  close(separate.pressureForce, value.pressureForce);
+});
+test("P50 pressure clamp and alpha zero do not add hidden attraction or damping", () => {
+  assert.equal(w.pressure(900, 20), 0);
+  assert.equal(
+    w.artificialViscosity(-w.h, 0, 2, 0, 1100, 1200, { ...w.defaultSettings, alpha: 0 }),
     0,
   );
-  assert.ok(power < 0);
-  assert.equal(w.artificialViscosity({ x: 0.1, y: 0 }, { x: 1, y: 0 }, 1000, 1000, 12, 0.15), 0);
-  state.particles[0].density = 900;
-  w.computePressure(state, 12);
-  assert.equal(state.particles[0].pressure, 0);
+  assert.equal(w.artificialViscosity(-w.h, 0, -2, 0, 1100, 1200, w.defaultSettings), 0);
 });
-test("SPH integration reads all old forces and collision reflects only an outward normal", () => {
-  const state = w.makeState("empty");
-  state.particles = [w.particle({ x: 0.5, y: 0.5 })];
-  state.walls = [];
-  w.integrate(state, [{ x: 0, y: -9.81 }], 0.001);
-  close(state.particles[0].velocity.y, -0.00981);
-  close(state.particles[0].position.y, 0.49999019);
-  const position = { x: -0.2, y: 0.4 },
-    velocity = { x: -2, y: 3 };
-  w.collide(position, velocity);
-  close(position.x, w.spacing / 2);
-  close(velocity.x, 0.2);
-  close(velocity.y, 3);
-  const inward = { x: 2, y: 0 };
-  w.collide({ x: -1, y: 0.4 }, inward);
-  close(inward.x, 2);
-});
-test("SPH isolated pair inspector matches the lesson without solving density or advancing time", () => {
-  const report = w.inspectPair();
-  assert.deepEqual(
-    report.state.particles.map((p) => p.density),
-    [1100, 1200],
-  );
-  assert.deepEqual(
-    report.state.particles.map((p) => p.pressure),
-    [14400, 28800],
-  );
-  assert.equal(report.state.walls.length, 0);
-  assert.equal(report.state.time, 0);
-  close(report.gradient.x, 1617.2744726384344, 1e-9);
-  close(report.pressureForce[0].x, -211.56105354248845, 1e-9);
-  close(report.pressureForce[1].x, 211.56105354248845, 1e-9);
-  close(report.pi, 0.0009070297226124577);
-  close(report.viscosityPower, -3.609163493617516, 1e-9);
-  close(report.netForce.x, 0);
-  close(report.netForce.y, 0);
-  const separated = w.inspectPair({ ...w.defaultPair, approaching: false });
-  assert.equal(separated.pi, 0);
-  close(separated.viscosityPower, 0);
-  assert.deepEqual(separated.pressureForce, report.pressureForce);
-  const noViscosity = w.inspectPair(w.defaultPair, { ...w.defaultSettings, alpha: 0 });
-  close(noViscosity.viscosityPower, 0);
-  const lowDensity = w.inspectPair({ ...w.defaultPair, densityA: 900, densityB: 900 });
-  assert.ok(lowDensity.pressureForce.every((f) => f.x === 0 && f.y === 0));
-  const stiffer = w.inspectPair(w.defaultPair, { ...w.defaultSettings, soundSpeed: 20 });
-  close(stiffer.pressureForce[0].x / report.pressureForce[0].x, 20 ** 2 / 12 ** 2);
-  assert.throws(() => w.inspectPair({ ...w.defaultPair, densityA: NaN }), RangeError);
-});
-test("SPH emitter conserves fixed mass, rejects overlap/nonfinite and respects capacity", () => {
-  const state = w.makeState("empty");
-  assert.equal(w.pour(state, { x: 0.5, y: 0.7 }), true);
-  close(w.measure(state).mass, w.mass);
-  assert.equal(w.pour(state, { x: 0.5, y: 0.7 }), false);
-  assert.equal(w.pour(state, { x: NaN, y: 0.7 }), false);
-  state.particles = Array.from({ length: w.capacity }, () => w.particle({ x: 0.1, y: 0.1 }));
-  assert.equal(w.pour(state, { x: 0.5, y: 0.7 }), false);
-  assert.equal(state.particles.length, w.capacity);
-});
-test("SPH timestep respects acoustic/force bounds and limits stalled frames", () => {
-  const state = w.makeState("pair");
-  state.walls = [];
-  const settings = { ...w.defaultSettings, gravity: 0 };
-  const acceleration = [
-    { x: 100, y: 0 },
-    { x: -100, y: 0 },
+test("P50 grid exactly matches all-pairs at negative cells, corners and cutoff", () => {
+  const s = empty();
+  s.particles = [
+    w.particle(0.1, 0.1),
+    w.particle(0.1 + w.support, 0.1),
+    w.particle(0.1 + w.support - 1e-8, 0.1),
+    w.particle(-0.03, 0.1),
   ];
-  const dt = w.chooseDt(state, acceleration, settings);
-  assert.ok(dt <= (0.25 * w.h) / (12 + 0.3));
-  assert.ok(dt <= 0.25 * Math.sqrt(w.h / 100));
-  assert.ok(dt <= w.maxDt);
-  const plan = w.advanceFrame(state, settings, 0, 2, false, { x: 0.6, y: 0.7 });
-  assert.ok(plan.steps <= 64);
-  assert.ok(plan.dropped >= 1.95);
-  assert.throws(() => w.advanceFrame(state, settings, 0, -1, false, { x: 0, y: 0 }), RangeError);
-  assert.throws(() => w.prepare(state, { ...settings, soundSpeed: Infinity }), RangeError);
+  s.walls = [w.particle(-0.035, -0.035)];
+  assert.deepEqual(w.buildNeighbors(s, true).lists, w.buildNeighbors(s, false).lists);
+  const grid = new w.Grid();
+  assert.throws(() => grid.cell(1e300, 0));
+  assert.throws(() => grid.cell(NaN, 0));
+  assert.throws(() => w.buildNeighbors(w.makeState(), false));
 });
-test("SPH acoustic and force timestep limits each become active independently", () => {
-  const state = w.makeState("pair");
-  state.walls = [];
-  for (const p of state.particles) p.velocity = { x: 0, y: 0 };
-  const zero = state.particles.map(() => ({ x: 0, y: 0 }));
-  const acoustic = w.chooseDt(state, zero, { ...w.defaultSettings, soundSpeed: 20 });
-  close(acoustic, (0.25 * w.h) / 20);
-  assert.ok(acoustic < w.maxDt);
-  const forcing = state.particles.map(() => ({ x: 1e6, y: 0 }));
-  const force = w.chooseDt(state, forcing, w.defaultSettings);
-  close(force, 0.25 * Math.sqrt(w.h / 1e6));
-  assert.ok(force < acoustic);
-  close(w.chooseDt(state, zero, w.defaultSettings), w.maxDt);
-  for (const magnitude of [1e12, NaN, Infinity])
-    assert.throws(
-      () =>
-        w.chooseDt(
-          state,
-          state.particles.map(() => ({ x: magnitude, y: 0 })),
-          w.defaultSettings,
+test("P50 search keeps density pressure force and trajectory of a perturbed fixture", () => {
+  const a = empty();
+  a.walls = w.makeState("empty").walls;
+  for (let y = 0; y < 5; y++)
+    for (let x = 0; x < 8; x++)
+      a.particles.push(
+        w.particle(
+          0.03 + x * w.spacing,
+          0.03 + y * w.spacing,
+          0.1 * Math.sin(x + y),
+          0.1 * Math.cos(x - y),
         ),
-      RangeError,
-    );
-  assert.throws(() => w.chooseDt(state, [], w.defaultSettings), RangeError);
-  state.particles[0].velocity.x = 1e9;
-  assert.throws(() => w.chooseDt(state, zero, w.defaultSettings), RangeError);
-});
-test("SPH simulation is deterministic across 30/60/120 frame schedules when no time is discarded", () => {
-  const runs = [30, 60, 120].map((fps) => {
-    const state = w.makeState("pair");
-    state.walls = [];
-    let accumulator = 0,
-      discarded = 0;
-    for (let frame = 0; frame < fps; frame++) {
-      const plan = w.advanceFrame(
-        state,
-        { ...w.defaultSettings, gravity: 0 },
-        accumulator,
-        1 / fps,
-        false,
-        { x: 0.6, y: 0.7 },
       );
-      accumulator = plan.remainder;
-      discarded += plan.dropped;
-    }
-    close(discarded, 0);
-    return state;
-  });
-  for (const state of runs) {
-    close(state.time, 1, 1e-9);
-    close(state.particles[0].position.x, runs[0].particles[0].position.x, 1e-9);
+  const b = structuredClone(a),
+    grid = w.buildNeighbors(a, true),
+    all = w.buildNeighbors(b, false);
+  assert.deepEqual(grid.lists, all.lists);
+  assert.ok(grid.candidates < all.candidates);
+  for (const [s, search] of [
+    [a, grid],
+    [b, all],
+  ]) {
+    w.computeDensity(s, search);
+    w.computePressure(s, w.defaultSettings);
+    w.computeForces(s, search, w.defaultSettings);
+  }
+  for (let i = 0; i < a.particles.length; i++)
+    for (const key of ["density", "pressure", "ax", "ay"])
+      close(a.particles[i][key], b.particles[i][key], 1e-9);
+  for (let k = 0; k < 40; k++) {
+    w.step(a);
+    w.step(b, { ...w.defaultSettings, useGrid: false });
+  }
+  for (let i = 0; i < a.particles.length; i++) {
+    close(a.particles[i].x, b.particles[i].x, 1e-9);
+    close(a.particles[i].y, b.particles[i].y, 1e-9);
   }
 });
-test("SPH finite dam fixture stays in bounds and grid matches the brute solver", () => {
-  const grid = w.makeState(),
-    brute = structuredClone(grid);
-  for (let i = 0; i < 150; i++) {
-    w.step(grid);
-    w.step(brute, { ...w.defaultSettings, useGrid: false });
+test("P50 early gravity checkpoint has analytic semi-implicit discrete trajectory", () => {
+  const s = empty();
+  s.particles = [w.particle(5, 5)];
+  for (let i = 0; i < 10; i++) w.step(s, w.defaultSettings, 2);
+  close(s.time, 0.1, 1e-12);
+  close(s.particles[0].vy, -0.981, 1e-12);
+  close(s.particles[0].y, 5 - 0.053955, 1e-12);
+});
+test("P50 equilibrium reference is independent and does not mutate a session", () => {
+  const session = new w.WaterSession(12),
+    before = structuredClone(session.state);
+  const result = session.verify();
+  assert.equal(result.passed, true);
+  close(result.integral, 1, 1e-6);
+  assert.ok(result.equilibriumDrift < 1e-4);
+  assert.deepEqual(session.state, before);
+});
+test("P50 dam and pool update all 5000 particles and report density distribution/leakage", () => {
+  for (const preset of ["dam", "pool"]) {
+    const s = w.makeState(preset);
+    for (let k = 0; k < 8; k++) w.step(s);
+    w.inspectCurrent(s);
+    const metrics = w.measure(s);
+    assert.equal(s.particles.length, 5000);
+    assert.equal(s.updated, 5000);
+    assert.equal(s.tick, 8);
+    assert.equal(metrics.leaked, 0);
+    assert.ok(metrics.minimum > 0 && metrics.median > 0.95 && metrics.maximum < 1.5);
+    assert.ok(s.dt > 0 && s.dt <= w.maxDt);
   }
-  assert.deepEqual(grid, brute);
-  assert.ok(w.finiteState(grid));
+});
+test("P50 acoustic and force timestep bounds are independently active", () => {
+  const s = empty();
+  s.particles = [w.particle(2, 2)];
+  const settings = { ...w.defaultSettings, soundSpeed: 40 };
+  close(w.chooseDt(s, settings), (0.25 * w.h) / 43, 1e-12);
+  s.particles[0].ax = 1e8;
+  close(w.chooseDt(s, settings), 0.25 * Math.sqrt(w.h / 1e8), 1e-12);
+  s.particles[0].ax = 1e20;
+  assert.throws(() => w.chooseDt(s, settings));
+  s.particles[0].ax = NaN;
+  assert.throws(() => w.chooseDt(s, settings));
+});
+test("P50 invalid inputs fail without pretending finite overflow is success", () => {
+  const s = empty();
+  s.particles = [w.particle(2, 2)];
+  const before = structuredClone(s);
+  assert.throws(() => w.step(s, { ...w.defaultSettings, soundSpeed: Infinity }));
+  assert.deepEqual(s, before);
+  s.particles[0].vx = Infinity;
+  assert.throws(() => w.step(s));
+  assert.throws(() => w.emitBurst(before, { x: NaN, y: 1 }));
+  assert.throws(() => w.targetPaddle(before, Infinity, 1));
+});
+test("P50 emission conserves explicit mass, rejects overlap and never evicts at capacity", () => {
+  const s = empty();
+  assert.equal(w.emitBurst(s, { x: 8.6, y: 6.5 }), 7);
+  close(w.mass * s.particles.length, 34.3, 1e-10);
+  assert.equal(w.emitBurst(s, { x: 8.6, y: 6.5 }), 0);
+  assert.equal(s.emitted, 7);
+  assert.equal(s.rejected, 7);
+  while (s.particles.length < w.capacity) s.particles.push(w.particle(1, 1));
+  const first = s.particles[0];
+  assert.equal(w.emitBurst(s, { x: 4, y: 4 }), 0);
+  assert.equal(s.particles.length, w.capacity);
+  assert.equal(s.particles[0], first);
+});
+test("P50 four walls preserve inward velocity and reflect only outward normals", () => {
+  const s = empty(),
+    p = w.particle(-1, 1, 2, 3);
+  w.collide(s, p);
+  assert.equal(p.vx, 2);
+  assert.equal(p.vy, 3);
+  p.x = -1;
+  p.vx = -2;
+  w.collide(s, p);
+  close(p.vx, 0.1);
+  assert.equal(p.vy, 3);
+});
+test("P50 kinematic target is not teleport, sample velocity and center collision are finite", () => {
+  const s = empty();
+  s.paddle.enabled = true;
+  const x = s.paddle.x;
+  w.targetPaddle(s, x + 2, s.paddle.y);
+  assert.equal(s.paddle.x, x);
+  w.movePaddle(s, 0.001);
+  close(s.paddle.x - x, 0.003, 1e-12);
+  const p = w.particle(s.paddle.x, s.paddle.y);
+  w.collide(s, p);
   assert.ok(
-    grid.particles.every(
-      (p) =>
-        p.position.x >= w.spacing / 2 &&
-        p.position.x <= 1 - w.spacing / 2 &&
-        p.position.y >= w.spacing / 2 &&
-        p.position.y <= 0.8 - w.spacing / 2,
-    ),
+    Math.hypot(p.x - s.paddle.x, p.y - s.paddle.y) >= s.paddle.radius + w.spacing / 2 - 1e-10,
   );
-  assert.ok(w.validateWater().every((result) => result.pass));
+  assert.ok(w.samples(s).every((p) => Number.isFinite(p.x) && Number.isFinite(p.vx)));
+});
+test("P50 surface consumes all particles and never changes solver data", () => {
+  const s = w.makeState(),
+    before = structuredClone(s),
+    surface = new w.WaterSurface();
+  surface.reconstruct(s);
+  surface.shade();
+  assert.equal(surface.drawn, 5000);
+  assert.equal(surface.rgba.length, 720 * 432 * 4);
+  assert.ok(surface.coverage.some((v) => v > 0.5));
+  assert.deepEqual(s, before);
+  s.particles = [];
+  surface.reconstruct(s);
+  assert.equal(surface.drawn, 0);
+  assert.ok(surface.coverage.every((v) => v === 0));
+});
+test("P50 session budgets work, N pauses running, reset retains chosen configuration, dispose stops", () => {
+  const s = new w.WaterSession(12);
+  s.chooseScene("empty");
+  s.state.particles = [w.particle(3, 3)];
+  s.resume();
+  let clock = 0;
+  s.advance(0.5, 0, () => ++clock);
+  assert.ok(s.state.tick <= 1);
+  assert.ok(s.dropped > 0.45);
+  s.singleStep();
+  assert.equal(s.paused, true);
+  s.chooseCount(1000);
+  s.parameter({ soundSpeed: 28 });
+  s.reset();
+  assert.equal(s.preset, "empty");
+  assert.equal(s.count, 1000);
+  assert.equal(s.settings.soundSpeed, 28);
+  assert.equal(s.state.time, 0);
+  s.dispose();
+  const time = s.state.time;
+  s.resume();
+  s.advance(0.02);
+  assert.equal(s.state.time, time);
+  assert.equal(s.paused, true);
+  assert.throws(() => s.advance(NaN));
+});
+test("P50 session mouse and keyboard preserve model time until physics runs", () => {
+  const s = new w.WaterSession(12);
+  s.chooseScene("empty");
+  s.beginStroke({ x: 8.6, y: 6.5 });
+  s.moveStroke({ x: 9, y: 6.5 });
+  s.endStroke();
+  assert.equal(s.state.emitted, 7);
+  assert.equal(s.state.time, 0);
+  s.tool = "paddle";
+  s.state.paddle.enabled = true;
+  const x = s.state.paddle.x;
+  s.beginStroke({ x: 8, y: 2 });
+  s.endStroke();
+  assert.equal(s.state.paddle.x, x);
+  assert.equal(s.state.paddle.targetX, 8);
+  s.singleStep();
+  assert.ok(s.state.paddle.x > x);
 });
