@@ -1,85 +1,79 @@
-import {
-  signedColor,
-  toScreen,
-  velocity,
-  type FluidGrid,
-  type Layer,
-} from "@/lib/labs/stable-fluids";
+import { cellColor, viewport, velocityAt, type FluidSession } from "@/lib/labs/stable-fluids";
 import { setupCanvas, type CanvasSize } from "../lab-shared";
-export function drawFluid(
-  ctx: CanvasRenderingContext2D,
-  size: CanvasSize,
-  grid: FluidGrid,
-  layer: Layer,
-  arrows: boolean,
-  cursor: { x: number; y: number },
-  stage: number,
-) {
-  setupCanvas(ctx, size);
-  const n = grid.n,
-    screen = (x: number, y: number) => toScreen(size.width, size.height, { x, y });
-  for (let y = 0; y < n; y++)
-    for (let x = 0; x < n; x++) {
-      const i = y * n + x;
-      if (layer === "smoke") {
-        const value = Math.round(12 + 235 * Math.max(0, Math.min(1, grid.density[i])));
-        ctx.fillStyle = "rgb(" + value + "," + value + "," + value + ")";
-      } else
-        ctx.fillStyle =
-          "rgb(" +
-          signedColor(
-            layer === "pressure" ? grid.pressure[i] : grid.div[i],
-            layer === "pressure" ? 4 : 2,
-          ).join(",") +
-          ")";
-      const a = screen(x * grid.h, (y + 1) * grid.h),
-        b = screen((x + 1) * grid.h, y * grid.h);
-      ctx.fillRect(a.x, a.y, b.x - a.x + 0.25, b.y - a.y + 0.25);
+export class FluidPainter {
+  private readonly canvas = document.createElement("canvas");
+  private readonly context = this.canvas.getContext("2d");
+  private pixels: ImageData | null = null;
+  draw(ctx: CanvasRenderingContext2D, size: CanvasSize, session: FluidSession) {
+    setupCanvas(ctx, size);
+    if (!this.context) return;
+    ctx.fillStyle = "#070c15";
+    ctx.fillRect(0, 0, size.width, size.height);
+    const grid = session.grid,
+      n = grid.n;
+    if (!this.pixels || this.pixels.width !== n) {
+      this.canvas.width = n;
+      this.canvas.height = n;
+      this.pixels = this.context.createImageData(n, n);
     }
-  if (stage >= 4 && arrows) {
-    ctx.strokeStyle = "#6ebeff";
-    ctx.lineWidth = 1.5;
-    const stride = Math.max(2, Math.floor(n / 8));
-    for (let y = 0; y < n; y += stride)
-      for (let x = 0; x < n; x += stride) {
-        const p = { x: (x + 0.5) * grid.h, y: (y + 0.5) * grid.h },
-          flow = velocity(grid, p),
-          speed = Math.hypot(flow.x, flow.y);
-        if (speed < 1e-12) continue;
-        const length = Math.min(0.06, 0.12 * speed),
-          a = screen(p.x, p.y),
-          b = screen(p.x + (length * flow.x) / speed, p.y + (length * flow.y) / speed);
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-        const dx = b.x - a.x,
-          dy = b.y - a.y;
-        ctx.moveTo(b.x, b.y);
-        ctx.lineTo(b.x - 0.35 * dx - 0.18 * dy, b.y - 0.35 * dy + 0.18 * dx);
-        ctx.moveTo(b.x, b.y);
-        ctx.lineTo(b.x - 0.35 * dx + 0.18 * dy, b.y - 0.35 * dy - 0.18 * dx);
-        ctx.stroke();
+    const data = this.pixels.data;
+    for (let y = 0; y < n; y++)
+      for (let x = 0; x < n; x++) {
+        const color = cellColor(grid, x, y, session.layer, session.colored, session.stage),
+          i = ((n - 1 - y) * n + x) * 4;
+        data[i] = color[0];
+        data[i + 1] = color[1];
+        data[i + 2] = color[2];
+        data[i + 3] = 255;
       }
+    this.context.putImageData(this.pixels, 0, 0);
+    const view = viewport(size.width, size.height);
+    const screen = (x: number, y: number) => ({
+      x: view.x + view.size * x,
+      y: view.y + view.size * (1 - y),
+    });
+    ctx.imageSmoothingEnabled = n >= 64;
+    ctx.drawImage(this.canvas, view.x, view.y, view.size, view.size);
+    if (
+      session.stage >= 4 &&
+      (session.layer === "velocity" || (session.vectors && !session.clean))
+    ) {
+      ctx.strokeStyle = "#8ccbeb";
+      ctx.lineWidth = 1.25;
+      const stride = Math.max(2, Math.floor(n / 12));
+      for (let y = 0; y < n; y += stride)
+        for (let x = 0; x < n; x += stride) {
+          const p = { x: (x + 0.5) * grid.h, y: (y + 0.5) * grid.h },
+            flow = velocityAt(grid, p),
+            speed = Math.hypot(flow.x, flow.y);
+          if (speed < 1e-10) continue;
+          const length = Math.min(0.05, 0.15 * speed),
+            a = screen(p.x, p.y),
+            b = screen(p.x + (length * flow.x) / speed, p.y + (length * flow.y) / speed),
+            dx = b.x - a.x,
+            dy = b.y - a.y;
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.lineTo(b.x - 0.3 * dx - 0.2 * dy, b.y - 0.3 * dy + 0.2 * dx);
+          ctx.moveTo(b.x, b.y);
+          ctx.lineTo(b.x - 0.3 * dx + 0.2 * dy, b.y - 0.3 * dy - 0.2 * dx);
+          ctx.stroke();
+        }
+    }
+    if (session.stage >= 2 && !session.clean) {
+      const a = screen(session.selectedX * grid.h, (session.selectedY + 1) * grid.h);
+      ctx.strokeStyle = "#7affd0";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(a.x, a.y, view.size * grid.h, view.size * grid.h);
+    }
+    ctx.strokeStyle = "#2b3c4f";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(view.x - 0.5, view.y - 0.5, view.size + 1, view.size + 1);
   }
-  if (stage >= 2) {
-    const a = screen(cursor.x * grid.h, (cursor.y + 1) * grid.h),
-      b = screen((cursor.x + 1) * grid.h, cursor.y * grid.h);
-    ctx.strokeStyle = "#78ffb4";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
-    if (stage >= 4) {
-      for (const [x, y, color] of [
-        [cursor.x * grid.h, (cursor.y + 0.5) * grid.h, "#6ebeff"],
-        [(cursor.x + 1) * grid.h, (cursor.y + 0.5) * grid.h, "#6ebeff"],
-        [(cursor.x + 0.5) * grid.h, cursor.y * grid.h, "#fbbf24"],
-        [(cursor.x + 0.5) * grid.h, (cursor.y + 1) * grid.h, "#fbbf24"],
-      ] as const) {
-        const p = screen(x, y);
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 3, 0, 2 * Math.PI);
-        ctx.fill();
-      }
-    }
+  dispose() {
+    this.pixels = null;
+    this.canvas.width = 0;
+    this.canvas.height = 0;
   }
 }

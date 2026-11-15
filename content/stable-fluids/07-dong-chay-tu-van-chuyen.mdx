@@ -1,0 +1,80 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho dòng chảy tự vận chuyển chính nó
+
+## Vấn đề cần giải quyết
+
+Khói đã đi theo velocity, nhưng field vận tốc vẫn gần như một bản đồ cho sẵn. Một dòng chảy phải tự mang vận tốc của nó tới nơi khác. Ta dùng lại backtrace và sampler, nhưng lần này đích nằm trên cạnh, không phải tâm ô.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tại một cạnh u, ta cần **đủ vector** để tìm đường đi ngược: lấy u từ lattice u và v từ lattice v. Sau đó chỉ lấy mẫu thành phần u cũ để ghi uNext. Với cạnh v làm tương tự. Không được coi giá trị u là cả vector hoặc dùng cùng offset cho hai mảng.
+
+$$u^{new}(p_u)=u^{old}(\operatorname{backtrace}(p_u)),\qquad v^{new}(p_v)=v^{old}(\operatorname{backtrace}(p_v)).$$
+
+Cả hai lượt đều dùng velocity cũ. Nếu swap u trước khi tính vNext, v sẽ dùng một nửa state mới, một nửa state cũ. Kết quả có thể vẫn chuyển động trông hợp lý nhưng phụ thuộc thứ tự cài đặt.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-7" />
+
+Thử cảnh Vortex, tiến từng bước rồi nhìn cả scalar lẫn lớp Velocity. Trước khi đọc tiếp, dự đoán velocity đã divergence-free trước vận chuyển có còn như vậy sau nội suy không.
+
+## Viết code từng bước
+
+{/* snippet include/fluid/transport.hpp#advect-velocity */}
+
+```cpp title="include/fluid/transport.hpp — cập nhật cả hai lattice từ state cũ"
+inline void advectVelocity(Grid& grid) {
+    for (int y = 0; y < grid.n; ++y) {
+        for (int x = 0; x <= grid.n; ++x) {
+            const Vec2 point{x * grid.h, (y + 0.5) * grid.h};
+            grid.uNext[y * (grid.n + 1) + x] = sample(grid, grid.u, grid.n + 1, grid.n, {0, 0.5}, backtrace(grid, point, fixedDt));
+        }
+    }
+    for (int y = 0; y <= grid.n; ++y) {
+        for (int x = 0; x < grid.n; ++x) {
+            const Vec2 point{(x + 0.5) * grid.h, y * grid.h};
+            grid.vNext[y * grid.n + x] = sample(grid, grid.v, grid.n, grid.n + 1, {0.5, 0}, backtrace(grid, point, fixedDt));
+        }
+    }
+    // Cả hai lượt đã đọc cùng u/v cũ. Chỉ bây giờ mới thay state.
+    grid.u.swap(grid.uNext);
+    grid.v.swap(grid.vNext);
+    enforceWalls(grid);
+}
+```
+
+Vòng u đi x=0..N, y=0..N−1; vòng v đi x=0..N−1, y=0..N. Offset và stride phải theo đúng bảng ở bài 4. Hai mảng chỉ swap sau khi cả hai vòng đã xong. `enforceWalls` cuối hàm khôi phục cạnh normal; backtrace có thể lấy mẫu sát tường nhưng không cho phép normal velocity xuyên tường.
+
+## Ghép các phần lại
+
+{/* snippet include/fluid/solver.hpp#step */}
+
+```cpp title="include/fluid/solver.hpp — project lại sau velocity advection"
+inline bool step(Grid& grid, const Parameters& parameters, [[maybe_unused]] Scene scene) {
+    if (!validParameters(parameters) || !finiteState(grid)) {
+        return false;
+    }
+    advectVelocity(grid);
+    project(grid, parameters);
+    advectSmoke(grid);
+    divergence(grid);
+    ++grid.tick;
+    return finiteState(grid);
+}
+```
+
+Nội suy từng thành phần không bảo toàn ràng buộc divergence-free rời rạc. Vì thế ta project sau khi advect velocity, rồi mới dùng nó để vận chuyển khói. Đặt project trước advection mà bỏ bước sau không kiểm soát được divergence vừa sinh thêm.
+
+Build `project_49_checkpoint_7`. `App::singleStep` và input không thay: kernel được nối vào đúng điểm gọi cũ. Đổi lớp hiển thị không reset hoặc tính lại velocity; nó chỉ giúp ta nhìn cùng dữ liệu ở cách khác.
+
+## Thử làm sai để hiểu đúng
+
+Swap u ngay sau vòng đầu, so kết quả với bản đúng sau một bước Vortex. Đừng chỉ so ảnh: lấy max chênh v. Sau khi sửa, tạm bỏ projection sau advection, đo div. Field có hình xoáy không phải bằng chứng div bằng 0.
+
+## Tự kiểm tra kết quả
+
+Đối chiếu vNext với kết quả lấy mẫu từ một bản sao đầy đủ của state trước bước; test này bắt được lỗi swap sớm. Tường vẫn 0. Scalar hằng vẫn hằng. Luồng xoáy và khói có thể nhòe dần vì semi-Lagrangian; đừng thêm fade hoặc khuấy ngẫu nhiên để che nó. Các bài 12–13 xử lý chất lượng hình có lý do cụ thể.
+
+## Bài tập mở rộng
+
+Viết một phiên bản duyệt ngược và kiểm nó cho cùng kết quả trong sai số làm tròn. Sau đó [thêm nguồn khói và thao tác khuấy](/projects/stable-fluids/08-nguon-khoi-va-luc-noi).

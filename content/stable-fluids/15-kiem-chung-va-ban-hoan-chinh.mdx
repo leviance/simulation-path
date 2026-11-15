@@ -1,0 +1,128 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng rồi bàn giao hộp khói hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Hình khói đã có luồng, dải mảnh và xoáy nhỏ. Trước khi gọi đây là sản phẩm hoàn chỉnh, ta phải trả lời được nó đang tính bao nhiêu dữ liệu, giải pressure chính xác đến đâu và khi máy chậm thì chương trình xử lý thế nào. Test toán học, kiểm thao tác và đánh giá hình ảnh là ba việc khác nhau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một oracle phải có đáp án độc lập. “Hàm A cho số giống hàm B” chưa đủ nếu cả hai sao chép cùng một sai công thức. Ta dùng affine cho sampler, phép dịch giải tích cho advection, cặp Jacobi tính tay và eigenmode Neumann có pressure/eigenvalue biết trước. Sau đó mới kiểm toàn pipeline trên các cảnh tương tác.
+
+PASS của ca chuẩn riêng không thay thế div/residual của cảnh đang xem. Cảnh có nguồn và lực mỗi tick không nhất thiết hội tụ về ảnh đứng yên. Khói là scalar không bảo toàn chính xác bởi phương pháp vận chuyển này; chỉ số năng lượng không phải chứng nhận mô phỏng nhiệt động học.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-15" />
+
+## Viết code từng bước
+
+### 1. Thêm bộ kiểm hữu hạn trong ứng dụng
+
+{/* snippet include/fluid/reference.hpp#validation */}
+
+```cpp title="include/fluid/reference.hpp — ca chuẩn không đụng cảnh đang xem"
+inline ReferenceReport validate() {
+    ReferenceReport result;
+    Parameters jacobi;
+    jacobi.method = PressureMethod::Jacobi;
+    jacobi.pressureBudget = 160;
+    auto small = makeScene(16, Scene::Compression);
+    result.small = project(small, jacobi);
+    auto large = makeScene(128, Scene::Empty);
+    impulseAt(large, {0.37, 0.42}, {0.12, 0.07});
+    impulseAt(large, {0.65, 0.61}, {-0.08, 0.11});
+    result.large = project(large, Parameters{});
+    auto constant = makeScene(16, Scene::Vortex);
+    std::fill(constant.density.begin(), constant.density.end(), 0.4);
+    advectSmoke(constant);
+    for (const double value : constant.density) {
+        result.constantError = std::max(result.constantError, std::abs(value - 0.4));
+    }
+    result.passed = result.small.after < 0.08 * result.small.before && result.large.converged && result.large.after < 0.001 * result.large.before && std::abs(result.large.after - fixedDt * result.large.residual) < 1e-9 && result.constantError < 1e-12;
+    return result;
+}
+```
+
+N=16 dùng Jacobi để kiểm công thức nhỏ; N=128 dùng PCG cho workload thật. Chúng tạo Grid riêng, không reset hoặc tiến tick của App. Nút V dừng rồi chạy bộ kiểm hữu hạn này. Ca Jacobi có thể chưa đạt target pressure nhưng vẫn đạt tiêu chí giảm div đã công bố; report giữ rõ hai ý nghĩa ấy.
+
+### 2. Kiểm pressure biết trước trong CTest
+
+{/* snippet tests/tests.cpp#known-pressure */}
+
+```cpp title="tests/tests.cpp — eigenmode Neumann với đáp án giải tích"
+// Neumann eigenmode có eigenvalue giải tích; RHS không dùng multiplyPressure để sinh.
+for (const auto method : {fluid::PressureMethod::CG, fluid::PressureMethod::PCG}) {
+    fluid::Grid grid(32);
+    std::vector<double> exact(grid.density.size());
+    const double pi = std::acos(-1.0);
+    const double eigenvalue = (4 * std::pow(std::sin(pi / 64), 2) + 4 * std::pow(std::sin(pi / 32), 2)) / (grid.h * grid.h);
+    for (int y = 0; y < 32; ++y) {
+        for (int x = 0; x < 32; ++x) {
+            exact[y * 32 + x] = std::cos(pi * (x + 0.5) / 32) * std::cos(2 * pi * (y + 0.5) / 32);
+        }
+    }
+    for (int y = 0; y < 32; ++y) {
+        for (int x = 1; x < 32; ++x) {
+            grid.u[y * 33 + x] = fluid::fixedDt * (exact[y * 32 + x] - exact[y * 32 + x - 1]) / grid.h;
+        }
+    }
+    for (int y = 1; y < 32; ++y) {
+        for (int x = 0; x < 32; ++x) {
+            grid.v[y * 32 + x] = fluid::fixedDt * (exact[y * 32 + x] - exact[(y - 1) * 32 + x]) / grid.h;
+        }
+    }
+    fluid::preparePressure(grid, false);
+    for (std::size_t i = 0; i < exact.size(); ++i) {
+        require(near(grid.rhs[i], eigenvalue * exact[i], 1e-10), "analytic Neumann RHS");
+    }
+    fluid::Parameters p;
+    p.method = method;
+    const auto solved = fluid::project(grid, p);
+    double error = 0;
+    for (std::size_t i = 0; i < exact.size(); ++i) {
+        error = std::max(error, std::abs(grid.pressure[i] - exact[i]));
+    }
+    require(solved.converged && error < 5e-5, "known-pressure error CG and PCG");
+}
+```
+
+RHS được đối chiếu với eigenvalue giải tích, không được sinh bằng `multiplyPressure` rồi lấy chính hàm đó để công nhận nghiệm. Cả CG và PCG phải đạt target, khớp pressure với sai số max nhỏ hơn 5e−5. `require` ném lỗi, không dùng assert bị tắt bởi NDEBUG. Bộ tests còn kiểm scalar hằng, limiter, tường, thứ tự đọc u/v, phương trình implicit, impulse và lịch clock.
+
+## Ghép các phần lại
+
+[Tải toàn bộ dự án](/downloads/project-49-stable-fluids.zip). `final/` có ứng dụng hoàn chỉnh, `starter/` là khung để tự làm, `checkpoints/01..15/` là các chương trình độc lập sau từng bài. Không phải chép một loạt code block rồi tự đoán include hoặc chỗ gọi. Phần mã đầy đủ ngay cuối trang đọc từ chính source được đóng gói.
+
+```bash title="Terminal — bản cuối và kiểm thử có giới hạn"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --parallel 1
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 1
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+.\build\Release\project_49_final.exe
+```
+
+Trên generator một cấu hình, dùng hai build directory Debug/Release với `CMAKE_BUILD_TYPE` tương ứng. Không chạy build song song hoặc để test mở cửa sổ chờ vô hạn. CLI `--verify` chạy ca chuẩn thuần CPU; lệnh capture bắt buộc có giới hạn giây:
+
+```bash title="Terminal — kiểm hữu hạn và ảnh từ solver thật"
+.\build\Release\project_49_final.exe --verify
+.\build\Release\project_49_final.exe --hidden --resolution=128 --seconds=30 --ticks=120 --capture=smoke.bmp
+```
+
+30 giây là deadline, không phải thời gian mô hình. 120 tick là hai giây mô hình. Nếu máy không xử lý kịp, chương trình báo tick deadline exceeded và trả lỗi; đừng tăng thời gian vô hạn. Bản 256² có thể tốn hơn nhiều; bắt đầu với số tick nhỏ và thời hạn tối đa 60 giây.
+
+## Thử làm sai để hiểu đúng
+
+Đổi target để một case đang fail thành pass là sửa đề, không sửa solver. Bỏ limiter rồi dùng tone mapping che density âm cũng vậy. Khi có NaN, dừng và kiểm dữ liệu/đơn vị tại stage đầu sinh lỗi; không clamp mọi velocity về một khoảng để giữ hình còn chạy.
+
+## Tự kiểm tra kết quả
+
+- Final mặc định 128²: cấp phát/vận chuyển/vẽ đủ 16.384 ô, 33.024 cạnh. G chọn 256²: 65.536 ô, 131.584 cạnh; glyph lấy thưa không giảm solver.
+- Click thêm khói; drag chỉ khuấy; Paint/Erase/Probe và chuột phải đúng vai trò. Mũi tên/Enter/WASD dùng được; không kẹt capture khi ra ngoài hoặc mất focus.
+- Space/N/R và preset đúng; reset giữ cảnh/lưới/tham số. F1 debug, F2 tracer, F3 MacCormack, F4 confinement; H mở ca 8², J/Z kiểm Jacobi.
+- Pressure/divergence có legend cố định; màu bão hòa không sửa số. Last projection giữ đúng method/budget/residual của lần giải đó; impulse hủy kết quả cũ.
+- Pause/reduced-motion dừng thời gian, không tự chạy lại sau blur; resize/DPR không đổi dữ liệu. Kiểm riêng native và Canvas, không suy ra một bản đã đạt từ bản kia.
+- Đo Release có warm-up; tách kernel khỏi draw. Báo model time, dropped và cấu hình. Không dùng ảnh đẹp thay oracle hoặc số FPS thay đáp án đúng.
+
+## Bài tập mở rộng
+
+Tự làm một bản báo cáo nhỏ gồm hình cùng thời gian mô hình, bảng residual/chi phí cho 128² và 256², cùng giới hạn của phương pháp. Sau đó mở [Project 50](/projects/sph-water) để so mô hình trường trên lưới với mô hình hạt, không coi các kết quả kiểm của bài này tự áp dụng sang solver khác.

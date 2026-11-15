@@ -1,0 +1,114 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Phun khói liên tục và khuấy bằng chuột
+
+## Vấn đề cần giải quyết
+
+Một vệt đặt lúc đầu chưa thành luồng khói. Ta cần nguồn liên tục ở đáy, lực làm nó đi lên và thao tác kéo đổi hướng dòng chảy. Phải tách rõ click thêm scalar với drag sửa velocity; nếu mỗi điểm chuột lại vẽ một đĩa, hình sẽ giống chuỗi dấu bút thay vì khói bị khuấy.
+
+## Hiểu ý tưởng trước khi viết code
+
+Nguồn scalar có đơn vị concentration/giây nên cộng `dt*rate`. Buoyancy là gia tốc, cộng `dt*β*concentration` vào v. Đây là mô hình lực nổi đồ họa đơn giản, chưa có nhiệt hoặc quá trình cháy.
+
+Impulse của chuột khác: ta chọn quy tắc tăng velocity theo **quãng kéo world**, không phải lực giữ trong dt. Vì vậy không nhân dt thêm lần nữa. Bút đặt giá trị, emitter phát theo thời gian, impulse sửa vận tốc: ba việc này không dùng chung đơn vị.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-8" />
+
+Ở checkpoint này vẫn tiến bằng N. Click rồi kéo ở vùng khác: click để lại khói, drag không vẽ thêm khói. Khói đã có chỉ đổi hình sau bước solver.
+
+## Viết code từng bước
+
+### 1. Phát scalar từ hai vòi
+
+{/* snippet include/fluid/sources.hpp#emit-smoke */}
+
+```cpp title="include/fluid/sources.hpp — nguồn khói theo giây"
+inline void emitSmoke(Grid& grid) {
+    for (int y = 0; y < grid.n; ++y) {
+        for (int x = 0; x < grid.n; ++x) {
+            const int i = y * grid.n + x;
+            const double px = (x + 0.5) * grid.h;
+            const double py = (y + 0.5) * grid.h;
+            const double left = fixedDt * 4 * nozzle(px, py, 0.34);
+            const double right = fixedDt * 3.4 * nozzle(px, py, 0.66);
+            grid.density[i] += left + right;
+            grid.pigment[0][i] += left * cyan.r + right * amber.r;
+            grid.pigment[1][i] += left * cyan.g + right * amber.g;
+            grid.pigment[2][i] += left * cyan.b + right * amber.b;
+        }
+    }
+}
+```
+
+Hai Gaussian hẹp tại x=0,34 và 0,66, y=0,09 tạo nguồn mềm. Tracer RGB được phát cùng scalar, mỗi kênh là một trường thụ động được vận chuyển bằng cùng công thức. Mặc định chỉ hiện khói trắng; F2 bật màu để thấy hai nguồn trộn. Đây không phải mô phỏng ánh sáng 3D.
+
+### 2. Tác dụng lực trên đúng cạnh
+
+{/* snippet include/fluid/sources.hpp#forces */}
+
+```cpp title="include/fluid/sources.hpp — buoyancy và vận tốc phun"
+inline void addForces(Grid& grid, const Parameters& parameters, Scene scene) {
+    for (int y = 1; y < grid.n; ++y) {
+        for (int x = 0; x < grid.n; ++x) {
+            const double concentration = 0.5 * (grid.density[y * grid.n + x] + grid.density[(y - 1) * grid.n + x]);
+            double acceleration = parameters.buoyancy * concentration;
+            if (parameters.emit && scene == Scene::TwinJets) {
+                acceleration += 2.2 * nozzle((x + 0.5) * grid.h, y * grid.h, 0.34) + 1.8 * nozzle((x + 0.5) * grid.h, y * grid.h, 0.66);
+            }
+            grid.v[y * grid.n + x] += fixedDt * acceleration;
+        }
+    }
+    if (parameters.emit && scene == Scene::TwinJets) {
+        for (int y = 0; y < grid.n; ++y) {
+            for (int x = 1; x < grid.n; ++x) {
+                const double acceleration = 0.45 * nozzle(x * grid.h, (y + 0.5) * grid.h, 0.34) - 0.35 * nozzle(x * grid.h, (y + 0.5) * grid.h, 0.66);
+                grid.u[y * (grid.n + 1) + x] += fixedDt * acceleration;
+            }
+        }
+    }
+    enforceWalls(grid);
+}
+```
+
+Cạnh v đọc trung bình concentration hai ô kề. Gia tốc vòi phun chỉ bật khi emit và đang ở cảnh TwinJets; chọn Vortex/Empty không vô tình mở nguồn ở đáy. Nguồn tạo chuyển động ngay cả khi buoyancy=0, vì nozzle còn có lực phun riêng.
+
+### 3. Chia quãng kéo thành impulse mềm
+
+`impulseAt` dùng Gaussian compact với σ=max(0,05;2h), về 0 tại 3σ; cộng `6*displacement*weight` vào các cạnh nội bộ. Hàm này không chạm density, giữ tường và hủy report/RHS cũ. `stirStroke` nối nó dọc đường:
+
+{/* snippet include/fluid/brush.hpp#stir-stroke */}
+
+```cpp title="include/fluid/brush.hpp — khuấy dọc đoạn kéo"
+inline void stirStroke(Grid& grid, Vec2 from, Vec2 to) {
+    if (!inside(from) || !inside(to)) {
+        return;
+    }
+    const double sigma = std::max(0.05, 2 * grid.h);
+    const int count = std::max(1, static_cast<int>(std::ceil(std::hypot(to.x - from.x, to.y - from.y) / (0.5 * sigma))));
+    const Vec2 increment{(to.x - from.x) / count, (to.y - from.y) / count};
+    for (int i = 0; i < count; ++i) {
+        const double t = (i + 0.5) / count;
+        impulseAt(grid, {from.x + t * (to.x - from.x), from.y + t * (to.y - from.y)}, increment);
+    }
+}
+```
+
+Tổng displacement không tăng theo số đoạn chia. Tuy nhiên, lấy mẫu Gaussian hữu hạn chỉ xấp xỉ tích phân đường; ta không tuyên bố mọi tần suất mouse event cho đúng từng bit.
+
+## Ghép các phần lại
+
+Trong `step`, thêm emit và forces trước các bước velocity. Trong input, tool mặc định chuyển thành Stir: mouse-down chưa đặt khói, mouse-motion chỉ khuấy, mouse-up chỉ đặt một đĩa nếu chưa đi quá 0,004 world. Chuột phải không đặt khói; Paint/Erase vẫn dùng brush riêng. Mất focus hủy nét, không tạo click giả. WASD gọi cùng `impulseAt` tại ô chọn; Enter đặt khói.
+
+Build `project_49_checkpoint_8`. E đổi emitter, B đổi lực nổi, M chọn tool, 1/2/3 chọn ink. Dùng N để thấy tác động từng bước trước khi bật chạy liên tục ở bài 10.
+
+## Thử làm sai để hiểu đúng
+
+Bỏ dt ở nguồn: lượng phát phụ thuộc số tick thay vì thời gian mô hình. Nhân dt thêm vào impulse: cùng một quãng kéo khuấy yếu đi mà không có lý do về đơn vị. Sửa lại, rồi thử drag trên hộp Empty: velocity đổi nhưng tích phân scalar vẫn 0.
+
+## Tự kiểm tra kết quả
+
+Click thêm khói, drag không thêm scalar, Probe không sửa cả hai. E tắt chỉ ngừng nguồn và lực vòi, không xóa khói đang có; B=0 tắt buoyancy. Pause ở các checkpoint sau vẫn cho phép sửa dữ liệu. Report projection biến mất sau impulse và xuất hiện lại sau bước solve.
+
+## Bài tập mở rộng
+
+Đặt một nozzle lệch sang bên và đo tổng nguồn mỗi giây. Tiếp theo, [phân biệt độ nhớt với việc khói bị nhòe](/projects/stable-fluids/09-do-nhot-va-do-nhoe).

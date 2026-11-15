@@ -1,0 +1,118 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tìm pressure từ một ca nhỏ tính được bằng tay
+
+## Vấn đề cần giải quyết
+
+Ta muốn sửa velocity thành `v−dt*Gp` sao cho div gần 0. Chưa cần sửa ngay: bài này chỉ tìm pressure trên một RHS cố định rồi xem từng vòng giải. Nếu kết quả nhỏ còn chưa đọc được, tăng lên hàng nghìn ô chỉ khiến lỗi khó tìm hơn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Với density chất lưu chuẩn hóa bằng 1:
+
+$$D(v-\Delta t Gp)=0\ \Rightarrow\ Ap=b,\qquad A=-DG,\quad b=-D(v)/\Delta t.$$
+
+Trên MAC, A tại ô là `(count*p−sumNeighbour)/h²`. Ô trong miền có bốn hàng xóm; ô sát tường có ba, góc có hai. Thiếu hàng xóm là hệ quả của normal wall=0, không phải tùy tiện bỏ một lực.
+
+Pressure cộng cùng một hằng vẫn cho cùng gradient. Ta chọn **mean pressure bằng 0** để có một đại diện dễ so. RHS hộp kín phải có mean 0; loại phần mean rất nhỏ do làm tròn trước khi giải. Không lấy thao tác này làm cách sửa một nguồn flux xuyên tường bị viết sai.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-5" />
+
+## Viết code từng bước
+
+### 1. Chốt RHS trước khi lặp
+
+{/* snippet include/fluid/poisson.hpp#prepare-pressure */}
+
+```cpp title="include/fluid/poisson.hpp — chuẩn bị bài toán cố định"
+inline void preparePressure(Grid& grid, bool clear) {
+    if (!finiteState(grid)) {
+        throw std::invalid_argument("Nonfinite pressure input");
+    }
+    enforceWalls(grid);
+    if (!std::isfinite(divergence(grid))) {
+        throw std::overflow_error("Divergence norm overflow");
+    }
+    for (std::size_t i = 0; i < grid.rhs.size(); ++i) {
+        grid.rhs[i] = -grid.divergence[i] / fixedDt;
+    }
+    removeMean(grid.rhs);
+    if (!std::isfinite(rms(grid.rhs))) {
+        throw std::overflow_error("Pressure RHS norm overflow");
+    }
+    if (clear) {
+        std::fill(grid.pressure.begin(), grid.pressure.end(), 0);
+    }
+    grid.iterations = 0;
+    grid.pressureReady = true;
+    grid.projection.available = false;
+}
+```
+
+J chỉ gọi chuẩn bị khi chưa có RHS; Z xóa pressure và bắt đầu lại. Không tính lại RHS từ một velocity đang thay qua từng vòng. Cả hai thao tác chưa đổi u/v, concentration hoặc tick.
+
+### 2. Viết weighted Jacobi
+
+Từ phương trình một ô, candidate là `(sumNeighbour+h²*b)/count`. Ta đi 75% từ p cũ tới candidate, dùng buffer khác cho kết quả. Weighted Jacobi với ω=0,75 giúp tránh dao động của cập nhật Jacobi không giảm chấn trên mẫu xen kẽ.
+
+{/* snippet include/fluid/poisson.hpp#jacobi */}
+
+```cpp title="include/fluid/poisson.hpp — một vòng weighted Jacobi"
+inline void jacobiIteration(Grid& grid) {
+    if (!grid.pressureReady || grid.iterations >= 160) {
+        throw std::invalid_argument("Jacobi requires a prepared RHS and at most 160 rounds");
+    }
+    for (int y = 0; y < grid.n; ++y) {
+        for (int x = 0; x < grid.n; ++x) {
+            grid.pressureNext[y * grid.n + x] = inspectJacobi(grid, x, y).weighted;
+        }
+    }
+    removeMean(grid.pressureNext);
+    grid.pressure.swap(grid.pressureNext);
+    ++grid.iterations;
+}
+```
+
+`inspectJacobi` trả cả số cũ, b, tổng/count và candidate, nên bảng đọc dùng chính phép tính solver đang chạy. Trừ mean sau cả lượt không đổi gradient pressure. Đừng thay RHS trong vòng lặp.
+
+### 3. Đo xem phương trình còn sai bao nhiêu
+
+{/* snippet include/fluid/poisson.hpp#pressure-residual */}
+
+```cpp title="include/fluid/poisson.hpp — residual của phương trình gốc"
+inline double pressureResidual(const Grid& grid) {
+    double sum = 0;
+    for (int y = 0; y < grid.n; ++y) {
+        for (int x = 0; x < grid.n; ++x) {
+            const int i = y * grid.n + x;
+            const auto adjacent = neighbours(grid, grid.pressure, x, y);
+            const double residual = (adjacent.count * grid.pressure[i] - adjacent.sum) / (grid.h * grid.h) - grid.rhs[i];
+            if (!std::isfinite(residual)) {
+                return std::numeric_limits<double>::infinity();
+            }
+            sum += residual * residual;
+        }
+    }
+    return std::sqrt(sum / grid.pressure.size());
+}
+```
+
+Residual là RMS(Ap−b), không phải độ thay đổi của p giữa hai vòng. Nó vẫn có đơn vị của RHS sau khi nhân/chia h; ghi rõ công thức khi so các lưới.
+
+## Ghép các phần lại
+
+Build `project_49_checkpoint_5`. Cảnh mặc định **Ca Jacobi 8×8** có một cạnh u nội bộ tạo b=+64 tại A=(3,3), b=−64 tại B=(4,3). Pressure ban đầu bằng 0. Bấm J một lần: candidate A=0,25, weighted A=0.1875, B=−0.1875. Residual khi đó là √14. Vòng hai A bằng **0.19921875**. Chọn A, bật số đo để tự đọc tổng hàng xóm trước khi bấm lần tiếp theo.
+
+N ở checkpoint này chạy trọn ngân sách giải trong `step`, nhưng **không đổi u/v**. Sau bài 6, N mới có projection. H đưa các checkpoint sau về đúng ca 8×8 này; P rời ca để chọn cảnh thông thường.
+
+## Thử làm sai để hiểu đúng
+
+Ghi p tại chỗ: A/B mất đối xứng trong vòng đầu vì một bên đọc dữ liệu mới. Dùng count=4 tại góc: bạn đã đổi điều kiện biên và hệ tuyến tính. Khôi phục rồi thử chỉ 40 so với 160 vòng; hình pressure mượt chưa chứng minh residual đạt ngưỡng.
+
+## Tự kiểm tra kết quả
+
+Kiểm ba số 0.1875, √14, 0.19921875 bằng tay. Mean p gần 0, RHS không đổi qua J, tick giữ nguyên. Residual có thể giảm nhưng chưa đạt `max(1e−6,1e−4*RMS(b))` khi hết 160 vòng. Đây là kết quả phải báo trung thực, không sửa nhãn thành PASS.
+
+## Bài tập mở rộng
+
+Đặt một cặp RHS gần tường và tự viết candidate với count=3. Tiếp theo, [dùng pressure để sửa velocity](/projects/stable-fluids/06-project-velocity).

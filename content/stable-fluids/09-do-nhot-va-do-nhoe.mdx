@@ -1,0 +1,129 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Thêm độ nhớt mà không nhầm với khói bị nhòe
+
+## Vấn đề cần giải quyết
+
+Khói mềm dần do nội suy không có nghĩa velocity đã có viscosity. Độ nhớt ở bài này làm chênh vận tốc giữa các vùng giảm bớt; nó tác động vào u/v, không phải một bộ lọc blur lên hình sau khi vẽ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta giải bước diffusion implicit cho từng thành phần velocity:
+
+$$ (I-\nu\Delta t L)w^{new}=w^{source},\qquad a=\nu\Delta t/h^2.$$
+
+Tại một sample, candidate là `(source+a*sumNeighbour)/(1+a*count)`. Source phải giữ nguyên suốt solve. Nếu thay source bằng kết quả vòng trước, ta đang giải một bài toán khác sau mỗi vòng.
+
+Implicit giúp tránh giới hạn ổn định tường minh `a≤1/4` trên stencil 2D chuẩn. Nhưng solve chỉ có 48 vòng và điều kiện biên cụ thể, nên vẫn phải kiểm residual/độ chính xác; “implicit” không có nghĩa chính xác tuyệt đối hoặc rẻ với mọi N.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-9" />
+
+Chọn Vortex, tắt buoyancy/nguồn, so ν=0 và ν=0,003 sau cùng số bước từ reset. Năng lượng giảm trong bước viscosity không chứng minh toàn pipeline có năng lượng giảm, vì các bước lực và confinement có thể thêm năng lượng.
+
+## Viết code từng bước
+
+{/* snippet include/fluid/viscosity.hpp#viscosity */}
+
+```cpp title="include/fluid/viscosity.hpp — solve implicit trên hai lattice"
+inline void diffuseVelocity(Grid& grid, double viscosity) {
+    if (!std::isfinite(viscosity) || viscosity < 0 || viscosity > 0.003) {
+        throw std::invalid_argument("Viscosity must be in [0,0.003]");
+    }
+    if (viscosity == 0) {
+        return;
+    }
+    const auto sourceU = grid.u;
+    const auto sourceV = grid.v;
+    const double a = viscosity * fixedDt / (grid.h * grid.h);
+    const int n = grid.n;
+    for (int iteration = 0; iteration < 48; ++iteration) {
+        for (int y = 0; y < n; ++y) {
+            for (int x = 0; x <= n; ++x) {
+                const int i = y * (n + 1) + x;
+                if (x == 0 || x == n) {
+                    grid.uNext[i] = 0;
+                    continue;
+                }
+                double sum = grid.u[i - 1] + grid.u[i + 1];
+                int count = 2;
+                if (y > 0) {
+                    sum += grid.u[i - n - 1];
+                    ++count;
+                }
+                if (y + 1 < n) {
+                    sum += grid.u[i + n + 1];
+                    ++count;
+                }
+                grid.uNext[i] = (sourceU[i] + a * sum) / (1 + a * count);
+            }
+        }
+        for (int y = 0; y <= n; ++y) {
+            for (int x = 0; x < n; ++x) {
+                const int i = y * n + x;
+                if (y == 0 || y == n) {
+                    grid.vNext[i] = 0;
+                    continue;
+                }
+                double sum = grid.v[i - n] + grid.v[i + n];
+                int count = 2;
+                if (x > 0) {
+                    sum += grid.v[i - 1];
+                    ++count;
+                }
+                if (x + 1 < n) {
+                    sum += grid.v[i + 1];
+                    ++count;
+                }
+                grid.vNext[i] = (sourceV[i] + a * sum) / (1 + a * count);
+            }
+        }
+        grid.u.swap(grid.uNext);
+        grid.v.swap(grid.vNext);
+    }
+    enforceWalls(grid);
+}
+```
+
+SourceU/SourceV là bản sao velocity trước solve. Mỗi vòng vẫn dùng hai buffer lặp. Ở normal wall, ta gán 0. Ở tiếp tuyến free-slip, thiếu hàng xóm ngoài miền tương ứng đạo hàm normal bằng 0; vì vậy count chỉ đếm hàng xóm có thật. Đừng đặt count giống nhau cho mọi sample.
+
+ν=0 trả về ngay, không chạy 48 vòng làm việc vô ích. Giá trị ν phải hữu hạn và trong [0,0.003]. Đây là phạm vi đã chọn để thí nghiệm, không phải giới hạn vật lý chung của chất lưu.
+
+## Ghép các phần lại
+
+{/* snippet include/fluid/solver.hpp#step */}
+
+```cpp title="include/fluid/solver.hpp — viscosity và hai lần projection"
+inline bool step(Grid& grid, const Parameters& parameters, [[maybe_unused]] Scene scene) {
+    if (!validParameters(parameters) || !finiteState(grid)) {
+        return false;
+    }
+    if (parameters.emit && scene == Scene::TwinJets) {
+        emitSmoke(grid);
+    }
+    addForces(grid, parameters, scene);
+    diffuseVelocity(grid, parameters.viscosity);
+    project(grid, parameters);
+    advectVelocity(grid);
+    project(grid, parameters);
+    advectSmoke(grid);
+    divergence(grid);
+    ++grid.tick;
+    return finiteState(grid);
+}
+```
+
+Sau nguồn/lực, ta diffuse velocity và project. Tiếp đó advect velocity và project lần nữa trước scalar. Hai projection xử lý hai nguyên nhân tạo divergence khác nhau; không bỏ một bước chỉ để FPS trông cao hơn mà không đo hệ quả.
+
+Build `project_49_checkpoint_9`. Q đổi ν, P chọn Vortex để so riêng; panel đọc năng lượng `0.5*h²*(sum(u²)+sum(v²))`. Đây là chỉ số rời rạc thuận tiện để so, không được gán đơn vị Joule khi mô hình chưa khai báo đơn vị vật lý.
+
+## Thử làm sai để hiểu đúng
+
+Thay sourceU bằng u trong RHS từng vòng: nghiệm tiếp tục khuếch tán theo số vòng thay vì hội tụ tới cùng một solve. Làm mờ density thay cho velocity: hình đổi nhưng vận tốc không đúng mô hình. Khôi phục rồi đo phương trình implicit để phát hiện lỗi, không chỉ so ảnh.
+
+## Tự kiểm tra kết quả
+
+ν=0 giữ nguyên u/v trong riêng hàm diffusion. Với ca Vortex N=16, ν=0,003, năng lượng giảm và thế nghiệm vào `(I−νdtL)w−source` cho sai số nhỏ. Normal wall giữ 0, field hữu hạn. Độ nhòe scalar vẫn có thể xuất hiện khi ν=0 vì advection nội suy.
+
+## Bài tập mở rộng
+
+Ghi residual implicit theo số vòng 12/24/48 trên cùng nguồn; tăng N để xem cùng 48 vòng có còn đủ không. Tiếp theo, [nối kernel với đồng hồ và vòng lặp](/projects/stable-fluids/10-timestep-va-pipeline).

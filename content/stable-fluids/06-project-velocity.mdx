@@ -1,0 +1,105 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dùng pressure để sửa vận tốc
+
+## Vấn đề cần giải quyết
+
+Bài trước giải được pressure nhưng hình khói chưa nhờ thế mà khác đi: u/v chưa được sửa. Bây giờ ta trừ gradient pressure trên từng cạnh, rồi đo lại dòng ra. Nếu chỉ tô lớp pressure cho đẹp mà không đưa kết quả vào velocity, ta chưa làm projection.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một cạnh u ngăn ô trái/phải. Gradient x ở đó là chênh pressure hai ô chia h. Cạnh v tương tự với ô dưới/trên:
+
+$$u'=u-\Delta t\frac{p_R-p_L}{h},\qquad v'=v-\Delta t\frac{p_T-p_B}{h}.$$
+
+Ta chỉ sửa cạnh nội bộ. Normal wall giữ 0; không cần tạo giá trị pressure giả bên ngoài hộp. Vì A=−DG và b=−D(v)/dt, divergence còn lại thỏa `D(v')=dt*(Ap−b)`, bỏ qua phần mean RHS rất nhỏ đã loại vì làm tròn. Bởi vậy RMS div sau phải gần **dt*residual**. Đây là phép kiểm toán tử, không phải chỉ số trang trí.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-6" />
+
+Chọn Compression, xem div trước khi bấm N. Dự đoán nó về đúng 0 hay còn sai số khi ta chỉ dùng 160 vòng Jacobi.
+
+## Viết code từng bước
+
+Thêm hàm `project` vào `fluid/project.hpp`:
+
+{/* snippet include/fluid/project.hpp#project */}
+
+```cpp title="include/fluid/project.hpp — giải và sửa velocity"
+inline Projection project(Grid& grid, const Parameters& parameters) {
+    const int budget = parameters.pressureBudget;
+    int maximum = 160;
+    if (!availablePressureMethod(parameters.method) || budget < 1 || budget > maximum || !finiteState(grid)) {
+        throw std::invalid_argument("Invalid projection input");
+    }
+    enforceWalls(grid);
+    Projection report;
+    report.method = parameters.method;
+    report.budget = budget;
+    report.before = divergence(grid);
+    if (!std::isfinite(report.before)) {
+        throw std::overflow_error("Projection divergence norm overflow");
+    }
+    solveJacobi(grid, budget);
+    report.residual = pressureResidual(grid);
+    report.target = std::max(1e-6, 1e-4 * rms(grid.rhs));
+    report.iterations = grid.iterations;
+    report.converged = std::isfinite(report.residual) && std::isfinite(report.target) && report.residual <= report.target;
+    for (int y = 0; y < grid.n; ++y) {
+        for (int x = 1; x < grid.n; ++x) {
+            grid.u[y * (grid.n + 1) + x] -= fixedDt * (grid.pressure[y * grid.n + x] - grid.pressure[y * grid.n + x - 1]) / grid.h;
+        }
+    }
+    for (int y = 1; y < grid.n; ++y) {
+        for (int x = 0; x < grid.n; ++x) {
+            grid.v[y * grid.n + x] -= fixedDt * (grid.pressure[y * grid.n + x] - grid.pressure[(y - 1) * grid.n + x]) / grid.h;
+        }
+    }
+    enforceWalls(grid);
+    report.after = divergence(grid);
+    report.available = true;
+    grid.projection = report;
+    grid.pressureReady = false;
+    return report;
+}
+```
+
+Đọc hàm theo ba đoạn: giữ tường/đo before; giải và ghi residual/target/iterations; trừ gradient rồi giữ tường/đo after. `report` giữ thông tin của **lần giải đó**. Nếu bạn đổi ngân sách trong panel sau khi dừng, kết quả cũ không được đổi nhãn theo lựa chọn mới.
+
+Target là `max(1e−6,1e−4*RMS(b))`. Một div nhỏ hơn trước chưa đảm bảo target đã đạt. Ca Jacobi nhỏ vẫn có thể chưa hội tụ sau 160 vòng; báo điều đó trung thực. Bài 11 sẽ thay cách giải, không thay yêu cầu kiểm residual.
+
+Các số dùng để kết luận hội tụ phải hữu hạn. Nếu dữ liệu quá lớn làm norm tràn thành Infinity, ta dừng và báo lỗi; không để phép so sánh `Infinity <= Infinity` biến một lần giải hỏng thành kết quả đạt ngưỡng.
+
+## Ghép các phần lại
+
+Đây là toàn bước hiện tại, không chỉ một lời nhắc “thêm projection đâu đó”:
+
+{/* snippet include/fluid/solver.hpp#step */}
+
+```cpp title="include/fluid/solver.hpp — pipeline tại checkpoint 06"
+inline bool step(Grid& grid, const Parameters& parameters, [[maybe_unused]] Scene scene) {
+    if (!validParameters(parameters) || !finiteState(grid)) {
+        return false;
+    }
+    project(grid, parameters);
+    advectSmoke(grid);
+    divergence(grid);
+    ++grid.tick;
+    return finiteState(grid);
+}
+```
+
+`App::singleStep` gọi hàm này khi nhận N. Pressure sửa velocity trước khi `advectSmoke` lấy vận tốc để vận chuyển scalar. Bài này chưa có velocity tự advection; nếu bấm N nhiều lần, projection xử lý field hiện tại, không tự phát sinh một luồng mới.
+
+Build `project_49_checkpoint_6`, bật số đo. Reset Compression, ghi before/after/residual, rồi kiểm after/(dt*residual) gần 1 khi residual đủ lớn để tỉ số có nghĩa. Với số sát 0, so sai số tuyệt đối thay vì chia.
+
+## Thử làm sai để hiểu đúng
+
+Đổi dấu trừ gradient thành cộng: divergence có thể tăng thay vì giảm. Dùng pressure cách hai ô để tính gradient tại cạnh: D và G không còn tạo đúng A đang giải, nên quan hệ residual/div bị phá. Khôi phục công thức; không chữa bằng thêm nhiều vòng Jacobi.
+
+## Tự kiểm tra kết quả
+
+Với N=16 Compression, 160 vòng weighted Jacobi đưa RMS div xuống dưới 8% ban đầu. Tường giữ đúng 0. Vortex divergence-free gần như không đổi sau projection. Nếu input khuấy velocity sau một lần giải, report cũ phải bị hủy; không trình bày nó như số đo của state mới.
+
+## Bài tập mở rộng
+
+So ngân sách 40/80/160 trên cùng state sau reset, ghi cả residual và thời gian. Tiếp theo, [cho velocity tự vận chuyển](/projects/stable-fluids/07-dong-chay-tu-van-chuyen).

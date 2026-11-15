@@ -1,0 +1,73 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giữ những dải khói mảnh bằng MacCormack
+
+## Vấn đề cần giải quyết
+
+Lưới đã mịn hơn nhưng vận chuyển bậc một vẫn làm các dải khói tan thành mảng mềm. Tăng contrast chỉ làm ảnh gắt hơn, không khôi phục cấu trúc đã mất trong dữ liệu. Ta cải thiện bước vận chuyển scalar bằng cách ước lượng sai số lượt đi/về.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gọi A(dt) là semi-Lagrangian vừa viết. Ta tính forward=A(dt)d, backward=A(−dt)forward, rồi hiệu chỉnh:
+
+$$d_{new}=d_{forward}+\tfrac12(d_{old}-d_{backward}).$$
+
+Nếu lượt đi/về làm mất chi tiết, chênh lệch cho biết một phần sai số để bù. Đây là **modified MacCormack hai lượt**, không gọi nhầm là BFECC ba lượt. Xem [Selle và cộng sự](https://physbam.stanford.edu/papers/stanford2006-09.pdf) về công thức và kiểm soát overshoot.
+
+Bù sai số có thể tạo concentration âm hoặc viền sáng vượt max. Vì thế mỗi ô phải bị giới hạn trong min/max của bốn donor **cũ** quanh điểm backtrace. Nếu điểm lấy mẫu ở ngoài lattice tâm ô, ta fallback về kết quả bậc một; không dùng công thức hiệu chỉnh ngoài vùng hỗ trợ rồi mong clamp toàn cục cứu được.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-12" />
+
+So hai lần reset cùng cảnh, cùng số tick, chỉ thay F3/MacCormack. Đừng so hai hình ở thời gian khác nhau.
+
+## Viết code từng bước
+
+{/* snippet include/fluid/detail.hpp#maccormack */}
+
+```cpp title="include/fluid/detail.hpp — hiệu chỉnh có limiter"
+inline void advectDetailed(Grid& grid, const std::vector<double>& input, std::vector<double>& output) {
+    advectField(grid, input, grid.scalarForward, grid.forwardOrigin);
+    advectField(grid, grid.scalarForward, grid.scalarBackward, grid.backwardOrigin);
+    for (int y = 0; y < grid.n; ++y) {
+        for (int x = 0; x < grid.n; ++x) {
+            const int i = y * grid.n + x;
+            const Vec2 origin = grid.forwardOrigin[i];
+            const double gx = origin.x / grid.h - 0.5;
+            const double gy = origin.y / grid.h - 0.5;
+            if (gx < 0 || gy < 0 || gx > grid.n - 1 || gy > grid.n - 1) {
+                output[i] = grid.scalarForward[i];
+                continue;
+            }
+            const int left = std::min(grid.n - 2, static_cast<int>(std::floor(gx)));
+            const int lower = std::min(grid.n - 2, static_cast<int>(std::floor(gy)));
+            const int j = lower * grid.n + left;
+            const double minimum = std::min({input[j], input[j + 1], input[j + grid.n], input[j + grid.n + 1]});
+            const double maximum = std::max({input[j], input[j + 1], input[j + grid.n], input[j + grid.n + 1]});
+            const double corrected = grid.scalarForward[i] + 0.5 * (input[i] - grid.scalarBackward[i]);
+            output[i] = std::clamp(corrected, minimum, maximum);
+        }
+    }
+}
+```
+
+`advectField` chỉ lấy mẫu theo một mảng origin đã chuẩn bị. `advectSmokeDetailed` tính forwardOrigin và backwardOrigin tại mỗi tâm ô bằng cùng velocity hiện tại, rồi tái dùng cho density và ba pigment. Đây là tối ưu hợp lệ vì cả bốn scalar đi cùng field; nó không giảm số ô hoặc bỏ kênh dữ liệu.
+
+Ở gx đúng N−1, left được giới hạn N−2 để có đủ hai donor. Cả đầu và cuối lattice vẫn được lấy mẫu; giới hạn tọa độ donor khác với clamp density toàn lưới. Không có bước fade hoặc noise ngẫu nhiên sau khi vận chuyển.
+
+## Ghép các phần lại
+
+Thêm scalarForward/scalarBackward và hai mảng Vec2 origin vào Grid. Cuối `step`, nếu highOrder thì gọi `advectSmokeDetailed`, nếu không dùng `advectSmoke`. Hai nhánh đều đọc scalar cũ và swap sau cả lượt. Velocity vẫn dùng semi-Lagrangian cũ; bài này chưa thay phương pháp vận chuyển velocity.
+
+Build `project_49_checkpoint_12`. F3 dừng mô phỏng rồi bật/tắt phương pháp, để bạn có thời gian reset và so. Tắt emitter khi muốn nhìn một vệt ban đầu bị hao chi tiết thế nào. Màu tracer cũng được limiter riêng từng kênh; ratio RGB chỉ phục vụ hiển thị, không hồi tiếp vào solver.
+
+## Thử làm sai để hiểu đúng
+
+Bỏ limiter trên vệt có cạnh sắc: có thể thấy viền sáng/âm, dù phần lớn hình đẹp hơn. Dùng min/max của toàn miền thay vì bốn donor: không còn ngăn cực trị cục bộ giả. Khôi phục rồi kiểm cả dữ liệu, không chỉ tone mapping vì màu có thể che giá trị âm.
+
+## Tự kiểm tra kết quả
+
+Scalar hằng vẫn hằng. Mọi giá trị hữu hạn sau lượt có limiter nằm trong khoảng donor hợp lệ; vùng fallback khớp lượt bậc một. Affine translation trong miền có đáp án độc lập. Chi tiết giữ tốt hơn không chứng minh bảo toàn tổng scalar hoặc chính xác vật lý tuyệt đối; theo dõi tích phân và Courant như trước.
+
+## Bài tập mở rộng
+
+Cho một vệt quay một vòng, đo sai số so state đầu với hai phương pháp trên cùng field cố định. Tiếp theo, [giữ các xoáy nhỏ trong velocity](/projects/stable-fluids/13-giu-cac-xoay-nho).

@@ -1,0 +1,137 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dùng nhiều thang lưới để giải pressure nhanh hơn
+
+## Vấn đề cần giải quyết
+
+Ở 256², dải khói giữ được nhiều chi tiết hơn nhưng có 65.536 ẩn pressure và hai solve mỗi tick. Chỉ tăng budget CG không chắc đem lại tương tác tốt. Ta giúp CG bằng một phép giải gần đúng trên nhiều thang, nhưng **không giảm resolution của dữ liệu khói**.
+
+## Hiểu ý tưởng trước khi viết code
+
+Sai số gợn nhanh theo ô thường giảm tốt bằng cập nhật cục bộ. Sai số thay đổi chậm trên cả miền lại dễ xử lý hơn khi nhìn trên lưới thô. Một V-cycle làm mượt trên lưới mịn, chuyển **residual** xuống thô để tìm correction, đưa correction lên rồi làm mượt lại. Ta không chuyển cả nghiệm khói xuống thô và vẽ phóng to.
+
+Mỗi level giải stencil B=count*value−sumNeighbour. P chép một correction thô vào khối 2×2 mịn. Ở biên giữa hai khối có hai cạnh mịn, nên `Pᵀ Bfine P=2 Bcoarse`. Chọn **R=0.5 Pᵀ** để `R Bfine P=Bcoarse`. Vì vậy restriction là nửa tổng bốn residual, không phải trung bình một phần tư. Hệ số này đi cùng P và stencil B đã chọn; không bê nguyên sang một multigrid khác.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-14" />
+
+## Viết code từng bước
+
+### 1. Làm mượt theo hai màu
+
+{/* snippet include/fluid/multigrid.hpp#multigrid-smooth */}
+
+```cpp title="include/fluid/multigrid.hpp — red-black Gauss–Seidel"
+inline void smooth(MultigridLevel& level, bool reverse) {
+    const int n = level.n;
+    for (int pass = 0; pass < 2; ++pass) {
+        int color = pass;
+        if (reverse) {
+            color = 1 - pass;
+        }
+        for (int y = 0; y < n; ++y) {
+            for (int x = (y + color) % 2; x < n; x += 2) {
+                const int i = y * n + x;
+                double sum = 0;
+                int count = 0;
+                if (x > 0) {
+                    sum += level.value[i - 1];
+                    ++count;
+                }
+                if (x + 1 < n) {
+                    sum += level.value[i + 1];
+                    ++count;
+                }
+                if (y > 0) {
+                    sum += level.value[i - n];
+                    ++count;
+                }
+                if (y + 1 < n) {
+                    sum += level.value[i + n];
+                    ++count;
+                }
+                level.value[i] = (level.rhs[i] + sum) / count;
+            }
+        }
+    }
+}
+```
+
+Các ô cùng màu không kề nhau. Lượt trước đi đỏ rồi đen; lượt sau đi đen rồi đỏ để preconditioner đối xứng. Đây không phải hàm Jacobi ở bài 5: việc ghi tại chỗ được cố ý chọn trong Gauss–Seidel, không phải lỗi double buffer.
+
+### 2. Viết chu trình mịn → thô → mịn
+
+{/* snippet include/fluid/multigrid.hpp#multigrid-cycle */}
+
+```cpp title="include/fluid/multigrid.hpp — V-cycle cho correction"
+inline void vCycle(std::vector<MultigridLevel>& levels, std::size_t index) {
+    auto& fine = levels[index];
+    if (index + 1 == levels.size()) {
+        for (int i = 0; i < 8; ++i) {
+            smooth(fine, false);
+        }
+        for (int i = 0; i < 8; ++i) {
+            smooth(fine, true);
+        }
+        removeMean(fine.value);
+        return;
+    }
+    smooth(fine, false);
+    levelResidual(fine);
+    auto& coarse = levels[index + 1];
+    std::fill(coarse.value.begin(), coarse.value.end(), 0);
+    for (int y = 0; y < coarse.n; ++y) {
+        for (int x = 0; x < coarse.n; ++x) {
+            const int i = 2 * y * fine.n + 2 * x;
+            // P chép một giá trị vào 2×2 ô. R=0.5 P^T để R B P vẫn là stencil B.
+            coarse.rhs[y * coarse.n + x] = 0.5 * (fine.residual[i] + fine.residual[i + 1] + fine.residual[i + fine.n] + fine.residual[i + fine.n + 1]);
+        }
+    }
+    removeMean(coarse.rhs);
+    vCycle(levels, index + 1);
+    for (int y = 0; y < fine.n; ++y) {
+        for (int x = 0; x < fine.n; ++x) {
+            fine.value[y * fine.n + x] += coarse.value[(y / 2) * coarse.n + x / 2];
+        }
+    }
+    // Đảo thứ tự màu ở hậu làm mượt để preconditioner đối xứng.
+    smooth(fine, true);
+    removeMean(fine.value);
+}
+```
+
+`levelResidual` tính `rhs−B*value` trên level hiện tại. Coarse.value bắt đầu bằng 0 mỗi lần vì đang giải correction mới; coarse.rhs không phải pressure cũ. Ở level nhỏ nhất 4², dùng tám lượt xuôi và tám lượt ngược. Loại mean giữ correction trong không gian tương thích với hệ Neumann.
+
+### 3. Dùng V-cycle làm preconditioner
+
+{/* snippet include/fluid/multigrid.hpp#precondition */}
+
+```cpp title="include/fluid/multigrid.hpp — z gần bằng B nghịch đảo nhân r"
+inline void precondition(Grid& grid) {
+    auto& fine = grid.hierarchy.front();
+    fine.rhs = grid.residualWork;
+    removeMean(fine.rhs);
+    std::fill(fine.value.begin(), fine.value.end(), 0);
+    vCycle(grid.hierarchy, 0);
+    grid.preconditioned = fine.value;
+}
+```
+
+Trong CG, thay hướng khởi đầu r bằng z; thay r·r ở alpha/beta bằng r·z. Residual recurrence vẫn là `r−alpha*Bq`; không thay bằng residual thô. Đọc lại hàm `solveCG` trong source checkpoint 14 để thấy cả ba chỗ `usePreconditioner`, không chỉ chỗ gọi V-cycle. Grid cấp phát hierarchy N,N/2,…,4 một lần và tái dùng.
+
+## Ghép các phần lại
+
+`project` thêm lựa chọn PCG; mặc định từ bài này là PCG + multigrid, tối đa 384 vòng, cùng target vật lý. C chuyển Jacobi/CG/PCG; G có thêm 256². Build `project_49_checkpoint_14` bằng Release. Đổi N dựng lại scene và pause; đổi solver chỉ pause, nên reset trước khi muốn so cùng dữ liệu đầu.
+
+128² là cấu hình tương tác mặc định. 256² xử lý toàn bộ 65.536 scalar và 131.584 cạnh velocity, đổi tốc độ lấy chi tiết. Lưới thô chỉ phục vụ **pressure correction**; scalar luôn được vận chuyển và vẽ đủ độ phân giải chọn.
+
+## Thử làm sai để hiểu đúng
+
+Đổi restriction thành 0,25 tổng nhưng giữ stencil/P: bạn đã đổi hiệu lực correction. Không đảo thứ tự smooth sau: có thể làm preconditioner mất tính đối xứng cần cho PCG. Nếu solver giảm residual chậm hoặc thất bại, không tăng target để che lỗi. Kiểm lại R/P, boundary và gauge.
+
+## Tự kiểm tra kết quả
+
+CG/PCG đều khớp pressure biết trước và residual đo lại bằng A gốc. So thời gian **toàn solve**, không chỉ số vòng vì một vòng PCG đắt hơn. Đo Release sau warm-up, ghi N, budget, threshold, nguồn và thời gian mô hình. Không hứa 60 FPS hoặc gọi stable là accurate.
+
+## Bài tập mở rộng
+
+Đo median và p95 cho từng stage 128²/256² trên máy bạn; thử cache đường backtrace so với tính lại bốn lần nhưng kiểm kết quả không đổi. Tiếp theo, [nghiệm thu và chạy source hoàn chỉnh](/projects/stable-fluids/15-kiem-chung-va-ban-hoan-chinh).

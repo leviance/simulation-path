@@ -225,6 +225,30 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
     workload:
       "Final 65×49 = 3.185 mẫu thật, có 129×97; 221 glyph và 128 tracer. 33×25 chỉ là lưới học.",
   },
+  "49": {
+    previousTitle: "Khói bị chuột khuấy: Stable Fluids 2D từng bước",
+    replacement: {
+      slug: "stable-fluids",
+    },
+    summary:
+      "Từ vệt khói đứng yên tới hai luồng khói trắng cuộn trong hộp, với MAC, advection và pressure solver tự viết.",
+    outcome:
+      "Buồng khói C++/SDL3 có click thêm khói, drag khuấy, brush riêng, các lớp debug và xem sạch. Mặc định 128×128; tùy chọn 256×256 giữ dải khói mảnh hơn.",
+    question:
+      "Vì sao một vệt khói uốn thành dòng khi kéo chuột, và pressure thực sự sửa vận tốc thế nào?",
+    interactions: [
+      "Click thêm khói, drag chỉ khuấy; Paint/Erase/Probe và bàn phím tương đương.",
+      "Pause/step/reset, preset/lưới, tracer màu, so Jacobi/CG/PCG và kiểm ca chuẩn riêng.",
+    ],
+    concepts: [
+      "MAC, bilinear/RK2, viscosity và pressure Poisson với boundary nhất quán.",
+      "Jacobi/CG/multigrid, MacCormack có limiter, confinement, residual và ngân sách timestep/work.",
+    ],
+    prerequisites:
+      "SDL/input/grid từ 01–05, trường và sai phân từ 47–48; Poisson/CG được giải thích tại chỗ, không cần GPU.",
+    workload:
+      "128² = 16.384 ô/33.024 cạnh; 256² = 65.536 ô/131.584 cạnh thật. Dt=1/60, PCG≤384 vòng; báo thời gian bỏ qua khi quá tải.",
+  },
 };
 
 export const rebuildRevisions = Object.fromEntries(

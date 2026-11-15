@@ -1,0 +1,115 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giải pressure trên lưới 128×128 bằng CG
+
+## Vấn đề cần giải quyết
+
+32² thuận tiện để đọc stencil nhưng chưa đủ cho dải khói mảnh. Tăng lên 128² tạo 16.384 ẩn pressure. Cùng 160 vòng Jacobi không còn là lời hứa sai số đủ nhỏ; sửa bằng cách ghi PASS sau khi chạy đủ vòng là sai. Ta giữ nguyên hệ Poisson và thay **cách giải** bằng Conjugate Gradient (CG).
+
+## Hiểu ý tưởng trước khi viết code
+
+Jacobi truyền thông tin cục bộ qua hàng xóm; các sai số biến đổi chậm trên cả miền giảm rất chậm. CG chọn các hướng tìm kiếm phù hợp với hệ đối xứng. Với hộp kín, A có nullspace hằng; ta làm việc trong không gian mean 0, nơi hệ là xác định dương. Bài này không áp dụng CG bừa cho mọi ma trận.
+
+Đặt `B=h²A`, `f=h²b` để stencil không cần chia h² mỗi lần nhân. Bước đầu `r=f−Bp`, q=r. Mỗi vòng:
+
+$$\alpha=\frac{r\cdot r}{q\cdot Bq},\quad p\leftarrow p+\alpha q,\quad r_{new}=r-\alpha Bq,$$
+$$\beta=\frac{r_{new}\cdot r_{new}}{r\cdot r},\qquad q\leftarrow r_{new}+\beta q.$$
+
+Tích vô hướng là tổng tích tương ứng của hai mảng. q không chỉ là gradient mới; nó giữ thêm hướng cũ theo β để không liên tục phá tiến bộ vừa đạt. Đọc [giải thích CG của Shewchuk](https://www.cs.cmu.edu/~quake-papers/painless-conjugate-gradient.pdf) nếu muốn xem hình học và chứng minh đầy đủ.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-11" />
+
+## Viết code từng bước
+
+### 1. Không tạo ma trận đặc
+
+Ma trận 16.384×16.384 dạng double sẽ rất lớn dù mỗi hàng chỉ liên hệ vài hàng xóm. Ta chỉ viết phép nhân:
+
+{/* snippet include/fluid/cg.hpp#multiply-pressure */}
+
+```cpp title="include/fluid/cg.hpp — nhân B bằng stencil"
+inline void multiplyPressure(const Grid& grid, const std::vector<double>& input, std::vector<double>& output) {
+    for (int y = 0; y < grid.n; ++y) {
+        for (int x = 0; x < grid.n; ++x) {
+            const int i = y * grid.n + x;
+            const auto adjacent = neighbours(grid, input, x, y);
+            output[i] = adjacent.count * input[i] - adjacent.sum;
+        }
+    }
+}
+```
+
+Đó là đúng count/sum ở bài 5, không có một mô hình pressure mới. Cạnh và góc vẫn dùng boundary cũ.
+
+### 2. Viết vòng giải có tiêu chí dừng
+
+{/* snippet include/fluid/cg.hpp#cg */}
+
+```cpp title="include/fluid/cg.hpp — Conjugate Gradient có budget"
+inline void solveCG(Grid& grid, int budget) {
+    if (budget < 1 || budget > 384) {
+        throw std::invalid_argument("CG budget must be in [1,384]");
+    }
+    // Pressure cũ chỉ là phỏng đoán ban đầu. Residual mới luôn được tính từ RHS hiện tại.
+    preparePressure(grid, false);
+    const double hSquared = grid.h * grid.h;
+    const double target = std::max(1e-6, 1e-4 * rms(grid.rhs));
+    const double targetSquared = target * target * hSquared * hSquared * grid.rhs.size();
+    multiplyPressure(grid, grid.pressure, grid.matrixDirection);
+    for (std::size_t i = 0; i < grid.rhs.size(); ++i) {
+        grid.residualWork[i] = hSquared * grid.rhs[i] - grid.matrixDirection[i];
+        grid.direction[i] = grid.residualWork[i];
+    }
+    double residualSquared = dot(grid.residualWork, grid.residualWork);
+    if (residualSquared <= targetSquared) {
+        removeMean(grid.pressure);
+        return;
+    }
+    double residualDotDirection = residualSquared;
+    for (int iteration = 0; iteration < budget && residualSquared > targetSquared; ++iteration) {
+        multiplyPressure(grid, grid.direction, grid.matrixDirection);
+        const double denominator = dot(grid.direction, grid.matrixDirection);
+        if (!std::isfinite(denominator) || denominator <= 0) {
+            break;
+        }
+        const double alpha = residualDotDirection / denominator;
+        for (std::size_t i = 0; i < grid.pressure.size(); ++i) {
+            grid.pressure[i] += alpha * grid.direction[i];
+            grid.residualWork[i] -= alpha * grid.matrixDirection[i];
+        }
+        ++grid.iterations;
+        const double nextSquared = dot(grid.residualWork, grid.residualWork);
+        double nextDotDirection = nextSquared;
+        const double beta = nextDotDirection / residualDotDirection;
+        for (std::size_t i = 0; i < grid.direction.size(); ++i) {
+            double newResidual = grid.residualWork[i];
+            grid.direction[i] = newResidual + beta * grid.direction[i];
+        }
+        residualSquared = nextSquared;
+        residualDotDirection = nextDotDirection;
+    }
+    removeMean(grid.pressure);
+}
+```
+
+Pressure cũ dùng làm phỏng đoán ban đầu, nhưng RHS và residual luôn được tính lại. Nếu RHS mới bằng 0 mà pressure cũ không hằng, không được trả về chỉ vì b=0: vẫn phải sửa pressure cũ. Ngược lại, nếu residual ban đầu đã đạt target, không cần một vòng CG giả.
+
+`targetSquared` đổi ngưỡng RMS của **A** sang bình phương norm của residual **B** bằng h⁴ và số ô. Kết thúc solve, `project` vẫn tính `pressureResidual` từ phương trình gốc; sai số làm tròn của recurrence không được dùng để tự công nhận hội tụ.
+
+## Ghép các phần lại
+
+Grid thêm ba vector workspace: residualWork, direction, matrixDirection; cấp phát một lần, tái dùng mỗi solve. `project` chọn CG khi method=CG, còn công thức sửa u/v không đổi. Bản checkpoint 11 mở ở 128²; C đổi Jacobi/CG, T đổi budget, G chọn 16/32/64/128. Build `project_49_checkpoint_11` bằng Release để đo tốc độ, không lấy bản Debug làm chuẩn hiệu năng.
+
+Reset cùng cảnh trước mỗi lần so solver. Nếu chỉ đổi method rồi bấm N, velocity đã khác sau lần trước: bạn đang so hai RHS khác nhau. Ảnh tĩnh không thể thay phép kiểm pressure biết trước ở bài cuối.
+
+## Thử làm sai để hiểu đúng
+
+Bỏ h⁴ trong targetSquared: CG có thể dừng quá sớm nhưng vẫn báo đủ vòng. Cho warm start nhưng đặt r=f thay vì f−Bp: giải sai bài toán khi pressure cũ khác 0. Khôi phục và kiểm bằng eigenmode Neumann, không chỉ trường ngẫu nhiên.
+
+## Tự kiểm tra kết quả
+
+Ca hai impulse N=128, CG≤384 phải đạt residual target và giảm div xuống dưới 0,1% ban đầu. `divAfter≈dt*residual` vẫn đúng. Report ghi method, budget và số vòng thực của lần giải. Cấp phát và vận chuyển đủ N² ô, 2N(N+1) cạnh, không nâng một ảnh 32² lên rồi gọi đó là mô phỏng 128².
+
+## Bài tập mở rộng
+
+Đo cold start so với warm start trên cùng chuỗi RHS, ghi cả thời gian và số vòng. Tiếp theo, [giữ dải khói mảnh bằng MacCormack](/projects/stable-fluids/12-giu-dai-khoi-manh).

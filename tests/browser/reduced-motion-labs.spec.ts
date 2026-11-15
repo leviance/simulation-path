@@ -21,9 +21,9 @@ const cases = [
   },
   {
     project: 49,
-    route: "stable-fluids/11-kiem-chung-va-hoan-thien",
+    route: "stable-fluids/15-kiem-chung-va-ban-hoan-chinh",
     step: "Tiến một bước",
-    label: "Tick",
+    label: "Thời gian mô phỏng",
   },
   {
     project: 50,

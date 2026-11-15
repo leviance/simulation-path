@@ -1,0 +1,83 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đặt vận tốc trên cạnh để đo dòng ra
+
+## Vấn đề cần giải quyết
+
+Gió đều giúp ta học vận chuyển, nhưng chưa phải dòng chảy được tính trong hộp. Trước khi sửa velocity, ta cần đo mỗi ô đang nhận vào hay đẩy ra bao nhiêu. Dùng đúng velocity trên cạnh khiến phép đo này ghép được với pressure ở bài sau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Scalar và pressure nằm tại tâm ô. `u` là thành phần x ở cạnh dọc, có `(N+1)*N` mẫu; `v` là thành phần y ở cạnh ngang, có `N*(N+1)` mẫu. Không phải mỗi tâm ô giữ hai số velocity.
+
+| Dữ liệu | Index | Vị trí world |
+| --- | --- | --- |
+| scalar | y*N+x | ((x+0.5)h,(y+0.5)h) |
+| u | y*(N+1)+x | (xh,(y+0.5)h) |
+| v | y*N+x | ((x+0.5)h,yh) |
+
+Dòng ra bên phải trừ dòng vào bên trái, cộng dòng ra phía trên trừ dòng vào phía dưới:
+
+$$D_{xy}=\frac{u_R-u_L+v_T-v_B}{h}.$$
+
+Div dương là đang giãn, âm là đang nén. Một ô có div=0 vẫn có thể có dòng đi xuyên qua; nó chỉ nhận và nhả cân bằng. Thử chọn lớp Velocity trước khi xem Divergence để tránh đồng nhất hai khái niệm.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-4" />
+
+## Viết code từng bước
+
+### 1. Giữ tường kín
+
+{/* snippet include/fluid/field.hpp#walls */}
+
+```cpp title="include/fluid/field.hpp — normal wall bằng 0"
+inline void enforceWalls(Grid& grid) {
+    for (int y = 0; y < grid.n; ++y) {
+        grid.u[y * (grid.n + 1)] = 0;
+        grid.u[y * (grid.n + 1) + grid.n] = 0;
+    }
+    for (int x = 0; x < grid.n; ++x) {
+        grid.v[x] = 0;
+        grid.v[grid.n * grid.n + x] = 0;
+    }
+}
+```
+
+Ta đặt u ở tường trái/phải bằng 0, v ở đáy/trên bằng 0. Không đặt mọi thành phần gần tường về 0: mô hình cho trượt tiếp tuyến, tức free-slip. Pressure sau này dùng đúng điều kiện này.
+
+### 2. Đo divergence từ bốn cạnh
+
+{/* snippet include/fluid/field.hpp#divergence */}
+
+```cpp title="include/fluid/field.hpp — flux trên MAC"
+inline double divergence(Grid& grid) {
+    for (int y = 0; y < grid.n; ++y) {
+        for (int x = 0; x < grid.n; ++x) {
+            const int faceU = y * (grid.n + 1) + x;
+            const int faceV = y * grid.n + x;
+            grid.divergence[y * grid.n + x] = (grid.u[faceU + 1] - grid.u[faceU] + grid.v[faceV + grid.n] - grid.v[faceV]) / grid.h;
+        }
+    }
+    return rms(grid.divergence);
+}
+```
+
+Hàm vừa ghi div từng ô để tô màu, vừa trả RMS để đo cả miền. RMS không triệt tiêu dấu như tổng đại số. Khi cộng div của mọi ô, mỗi cạnh nội bộ xuất hiện một lần dương và một lần âm; chỉ flux tại tường còn lại. Vì tường kín, tổng gần 0 nhưng RMS có thể lớn.
+
+## Ghép các phần lại
+
+Thêm các mảng u/uNext/v/vNext/divergence trong Grid như source checkpoint 04. `makeScene` tạo Compression bằng sin hoặc Vortex từ sai phân streamfunction; sau khi gieo velocity, gọi `enforceWalls` rồi `divergence`. `velocityAt` nay lấy mẫu u với offset `(0,0.5)`, v với `(0.5,0)`. Không sửa `backtrace`.
+
+Build `project_49_checkpoint_4`. Bật Hiện số đo, chọn ô bằng chuột/mũi tên và tự thế bốn số vào công thức D. L đổi lớp; P đổi cảnh. Bài này chưa có pressure sửa dòng: Compression vẫn nén/giãn là điều được cố ý giữ lại để so ở bài 6.
+
+## Thử làm sai để hiểu đúng
+
+Đọc u bằng stride N thay vì N+1: đầu hàng có thể trông đúng, các hàng sau sai dần. Cho cả u/v offset tâm: lấy được số nhưng sai vị trí. Sửa cả hai rồi kiểm lại ở ô sát tường, không chỉ giữa miền.
+
+## Tự kiểm tra kết quả
+
+N=32 có 1.024 scalar và 2.112 cạnh velocity. Tường normal đúng 0; tổng divergence gần 0. Vortex từ streamfunction có RMS div gần sai số làm tròn, còn Compression có RMS khác 0. Resize và đổi lớp không sửa velocity. Lấy thưa mũi tên chỉ giảm glyph, không giảm dữ liệu đo.
+
+## Bài tập mở rộng
+
+Tính tổng flux một hình chữ nhật gồm nhiều ô và so với tổng div*h² trong vùng. Tiếp theo, [dùng phép đo này để dựng bài toán pressure](/projects/stable-fluids/05-giai-pressure-jacobi).

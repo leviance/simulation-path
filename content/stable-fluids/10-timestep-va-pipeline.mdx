@@ -1,0 +1,113 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ghép mô phỏng và giữ cửa sổ phản hồi được
+
+## Vấn đề cần giải quyết
+
+N đã chạy được một bước đúng. Muốn khói chuyển động liên tục, ta không thể gọi một bước mỗi frame rồi hy vọng mọi máy có cùng tốc độ. Cũng không được chạy bù hàng nghìn bước khi cửa sổ vừa bị treo: chương trình cần trả quyền xử lý input.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một tick mô hình luôn là 1/60 giây. Elapsed của frame được cộng vào accumulator; lấy ra số tick nguyên, giữ phần dư nhỏ hơn dt. Chấp nhận tối đa 0,25 giây elapsed và thực hiện tối đa bốn tick/frame. Phần không làm được được cộng vào `dropped`, không giấu đi.
+
+Khi kernel đắt hơn ngân sách giao diện, App hoàn thành trọn tick đang chạy rồi trả về. Không dừng giữa hai toán tử hoặc chỉ cập nhật một góc lưới. Lúc đó thời gian mô hình có thể đi chậm hơn đồng hồ thật, nhưng vẫn có định nghĩa rõ ràng và cửa sổ không bị vòng catch-up vô hạn chiếm dụng.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-10" />
+
+## Viết code từng bước
+
+### 1. Chốt pipeline trước khi viết clock
+
+{/* snippet include/fluid/solver.hpp#step */}
+
+```cpp title="include/fluid/solver.hpp — một tick hoàn chỉnh"
+inline bool step(Grid& grid, const Parameters& parameters, [[maybe_unused]] Scene scene) {
+    if (!validParameters(parameters) || !finiteState(grid)) {
+        return false;
+    }
+    if (parameters.emit && scene == Scene::TwinJets) {
+        emitSmoke(grid);
+    }
+    addForces(grid, parameters, scene);
+    diffuseVelocity(grid, parameters.viscosity);
+    project(grid, parameters);
+    advectVelocity(grid);
+    project(grid, parameters);
+    advectSmoke(grid);
+    divergence(grid);
+    ++grid.tick;
+    return finiteState(grid);
+}
+```
+
+Nguồn và lực đi trước viscosity; projection chuẩn bị velocity cho advection; velocity mới được chiếu lại trước scalar. Các bài sau chỉ thêm bước giữ chi tiết và cách giải pressure, không biến kernel thành một hàm render. `finiteState` kiểm đầu vào/cuối bước; tham số sai bị từ chối trước khi sửa dữ liệu.
+
+### 2. Tách việc lập kế hoạch khỏi SDL
+
+{/* snippet include/fluid/solver.hpp#step-plan */}
+
+```cpp title="include/fluid/solver.hpp — kế hoạch có work hữu hạn"
+inline StepPlan planSteps(double accumulator, double elapsed) {
+    if (!std::isfinite(accumulator) || accumulator < 0 || accumulator >= fixedDt) {
+        accumulator = 0;
+    }
+    if (!std::isfinite(elapsed) || elapsed < 0) {
+        elapsed = 0;
+    }
+    const double accepted = std::min(elapsed, 0.25);
+    const double total = accumulator + accepted;
+    const double due = std::floor((total + 1e-10) / fixedDt);
+    StepPlan result;
+    result.steps = static_cast<int>(std::min(4.0, due));
+    result.remainder = std::max(0.0, total - due * fixedDt);
+    result.dropped = elapsed - accepted + (due - result.steps) * fixedDt;
+    return result;
+}
+```
+
+Hàm thuần này dễ kiểm với các lịch 15/30/120 FPS. Dung sai nhỏ trong floor xử lý sai số cộng số thực quanh đúng một tick; nó không đổi dt. `dropped` gồm cả phần elapsed bị cắt và số tick nguyên vượt giới hạn. Phần dư vẫn được giữ.
+
+## Ghép các phần lại
+
+Trong `src/main.cpp`, sau vòng event, lấy `SDL_GetTicksNS`, đổi chênh thành giây và gọi `app.advance(elapsed)`. App gọi `planSteps`, chạy `singleStep` tối đa số bước đã hẹn, rồi ngừng khi đã dùng 12 ms tính kernel. Tick đầu có thể dài hơn 12 ms vì phải hoàn thành nó; đây không phải hard realtime deadline. Những tick chưa chạy được cộng vào dropped.
+
+Space chạy/dừng; N pause rồi tiến đúng một bước; R dựng lại Grid từ cảnh/lưới/tham số hiện tại. Pause và mất focus xóa accumulator. Main giới hạn 256 event/frame để chuỗi input dài không giữ mãi vòng vẽ. Build `project_49_checkpoint_10` và so model time với thời gian thật khi tăng độ phân giải ở các bài sau.
+
+Đây là chỗ thực hiện kế hoạch, nối trực tiếp clock với kernel đã viết:
+
+{/* snippet include/app/state.hpp#advance */}
+
+```cpp title="include/app/state.hpp — thực hiện tick rồi trả quyền xử lý input"
+void advance(double elapsed) {
+    if (paused) {
+        return;
+    }
+    const auto plan = fluid::planSteps(accumulator, elapsed);
+    accumulator = plan.remainder;
+    dropped += plan.dropped;
+    const auto started = std::chrono::steady_clock::now();
+    int completed = 0;
+    for (int i = 0; i < plan.steps; ++i) {
+        if (!singleStep()) {
+            break;
+        }
+        ++completed;
+        if (std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count() >= 12) {
+            break;
+        }
+    }
+    dropped += (plan.steps - completed) * fluid::fixedDt;
+}
+```
+
+## Thử làm sai để hiểu đúng
+
+Thay fixed dt bằng một tick/frame rồi chạy ở 15 và 120 FPS: thời gian mô hình thay đổi theo tốc độ vẽ. Dùng while catch-up không giới hạn rồi giả lập elapsed=10 giây: cửa sổ phải làm 600 tick trước khi đọc input. Khôi phục giới hạn; không sửa bằng tăng timeout hoặc vô hiệu hóa nút dừng.
+
+## Tự kiểm tra kết quả
+
+Lịch 15/30/120 FPS trong một giây cho 60 tick khi không bỏ thời gian. Elapsed=10 chỉ hẹn bốn tick, phần dư hợp lệ và dropped lớn hơn 9,9 giây. Pause/reset không tự chạy bù. Số cập nhật/vẽ vẫn đủ N²; lấy thưa glyph chỉ ảnh hưởng quan sát.
+
+## Bài tập mở rộng
+
+Thêm log thời gian riêng cho hai projection, velocity advection, scalar advection và draw. Đo Release, warm-up và median, không lấy một frame đầu làm kết luận. Tiếp theo, [giải pressure ở 128×128 bằng CG](/projects/stable-fluids/11-conjugate-gradient).

@@ -1,56 +1,69 @@
 import type { ProjectLabMeta } from "../../labs/types";
 const lab = {
   base: {
-    label: "STABLE FLUIDS LAB",
-    title: "Khuấy khói và đọc từng bước của solver",
+    label: "SMOKE CHAMBER",
+    title: "Thả khói vào hộp rồi thử khuấy",
     description:
-      "Khói, velocity MAC, pressure và divergence có số đo riêng. Canvas dùng cùng công thức, preset và giới hạn với source C++.",
+      "Khói trắng được tính trên lưới MAC thật. Click thêm khói, kéo để khuấy; mở tham số để xem pressure, divergence hoặc chọn 256×256 cho các dải khói mảnh hơn.",
   },
   modes: {
     "fluid-1": {
-      title: "Đám khói đứng yên",
-      description: "Nhìn concentration tại tâm ô trước khi thêm chuyển động.",
+      title: "Vệt khói đầu tiên",
+      description: "Scalar đứng yên; chưa có solver vận tốc.",
     },
-    "fluid-2": {
-      title: "Brush scalar",
-      description: "Đặt/xóa khói bằng chuột hoặc Enter, đọc dữ liệu bằng inspector.",
-    },
+    "fluid-2": { title: "Vẽ và xóa", description: "Brush theo khoảng cách, không theo số event." },
     "fluid-3": {
-      title: "Backtrace scalar",
-      description: "N tiến một bước với gió cho trước (0.2,0); chưa có velocity solver.",
+      title: "Đi ngược để lấy mẫu",
+      description: "Gió cho trước (0,18;0), N tiến 1/60 giây.",
     },
     "fluid-4": {
-      title: "Lưới MAC và flux",
-      description: "Đọc bốn cạnh của ô, so divergence với dòng xoáy từ streamfunction.",
+      title: "Dòng ra qua bốn cạnh",
+      description: "Đọc số tại bốn cạnh MAC và so với divergence.",
     },
     "fluid-5": {
-      title: "Giải pressure",
-      description:
-        "Ca 8×8 có đáp án tính tay: J chạy từng vòng Jacobi, inspector đọc RHS và pressure hàng xóm. N giải trọn budget, chưa sửa velocity.",
+      title: "Jacobi 8×8",
+      description: "J giải từng vòng trên RHS cố định; p(3,3) lần đầu là 0,1875.",
     },
     "fluid-6": {
-      title: "Projection",
-      description: "So div trước/sau với dt nhân residual; tường giữ normal velocity 0.",
+      title: "Pressure sửa velocity",
+      description: "So div trước/sau với dt nhân residual.",
     },
     "fluid-7": {
-      title: "Advection velocity",
-      description: "u và v đọc cùng state cũ rồi project lại trước scalar.",
+      title: "Dòng chảy tự vận chuyển",
+      description: "u và v cùng đọc state cũ; projection sửa divergence sinh thêm.",
     },
     "fluid-8": {
-      title: "Viscosity implicit",
-      description: "Đổi ν và xem sự suy giảm chỉ số năng lượng vận tốc.",
+      title: "Nguồn và lực",
+      description: "Click thêm khói; kéo chỉ khuấy. So impulse với lực nổi tích phân theo dt.",
     },
     "fluid-9": {
-      title: "Khuấy và lực nổi",
-      description: "Chuột/WASD tạo impulse, buoyancy cộng theo dt; tiến từng bước để quan sát.",
+      title: "Độ nhớt",
+      description: "Đổi ν rồi tiến từng bước; theo dõi chỉ số năng lượng velocity.",
     },
     "fluid-10": {
-      title: "Pipeline và fixed dt",
-      description: "Chạy liên tục có giới hạn work, đổi FPS và đọc thời gian bị bỏ qua.",
+      title: "Pipeline chạy liên tục",
+      description: "Pause/step/reset và giới hạn công việc mỗi frame.",
     },
     "fluid-11": {
-      title: "Solver hoàn chỉnh",
-      description: "Kiểm ca chuẩn riêng và tiếp tục đọc sai số của cấu hình đang chạy.",
+      title: "128×128 với CG",
+      description: "So CG/Jacobi trên cùng hệ; ít vòng chưa chắc đạt ngưỡng.",
+    },
+    "fluid-12": {
+      title: "Dải khói mảnh",
+      description: "Bật/tắt MacCormack có limiter trên cùng cảnh sau reset.",
+    },
+    "fluid-13": {
+      title: "Những xoáy nhỏ",
+      description: "So ε=0 và ε=8; confinement không phải nhiễu hình ảnh.",
+    },
+    "fluid-14": {
+      title: "PCG và nhiều thang lưới",
+      description: "Chọn 128 hoặc 256; đo thời gian, residual và số vòng thực.",
+    },
+    "fluid-15": {
+      title: "Hộp khói hoàn chỉnh",
+      description:
+        "Xem sạch, tương tác và kiểm ca chuẩn riêng. Canvas minh họa; sản phẩm chính là ứng dụng C++ trong ZIP.",
     },
   },
 } satisfies ProjectLabMeta;

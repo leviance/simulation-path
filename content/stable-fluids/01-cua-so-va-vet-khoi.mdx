@@ -1,0 +1,141 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Mở hộp khói và vẽ vệt khói đầu tiên
+
+## Vấn đề cần giải quyết
+
+Ở Project 48, bạn cho sẵn công thức của gió. Lần này, ta sẽ tự tính dòng chảy để khói cuộn lên khi được phun và đổi hướng khi bị khuấy. Nhưng trước hết, hãy mở một cửa sổ thật và vẽ được dữ liệu. Chưa cần giải phương trình nào.
+
+[Tải ZIP Project 49](/downloads/project-49-stable-fluids.zip), giải nén và mở terminal tại thư mục chứa `CMakeLists.txt`:
+
+```bash title="Terminal — Visual Studio 2022"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_49_starter --parallel 1
+.\build\Debug\project_49_starter.exe
+```
+
+Starter mở hộp trống với panel. Viết tiếp trong `starter/`, hoặc mở `checkpoints/01/` để đối chiếu sau bài. Trên Linux/macOS, thêm `-DCMAKE_BUILD_TYPE=Debug`; executable thường nằm ngay trong `build/`. SDL 3.4.8 được CMake lấy đúng phiên bản, không cần chép thư viện vào source.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta chia miền `[0,1]²` thành 32×32 ô. Mỗi ô giữ một số `density`, ở đây hiểu là concentration của khói: 0 là không có khói, giá trị lớn hơn là đậm hơn. Nó **không phải density của toàn bộ không khí**. World y hướng lên; chỉ phần vẽ mới đảo y.
+
+$$h=1/N,\qquad p_{xy}=((x+0.5)h,(y+0.5)h),\qquad index=yN+x.$$
+
+Hai tâm Gaussian gần đáy tạo vệt khói mềm, thay vì một hình đĩa có viền cứng. Chúng chỉ là dữ liệu ban đầu. Chưa có vận tốc, nên khói đứng yên là đúng. Thử đoán: resize cửa sổ có nên làm thay đổi mảng khói không?
+
+<InteractiveLab demo="stable-fluids" mode="fluid-1" />
+
+## Viết code từng bước
+
+### 1. Biết phần nào được cấp sẵn
+
+`src/main.cpp` quản lý SDL và vòng lặp. `app/state.hpp` giữ Grid giữa các frame; `app/image.hpp` chuyển dữ liệu thành texture; `app/hud.hpp` và `input.hpp` nối panel/phím. Phần trình bày được cấp sẵn để bạn không phải viết lại widget. Không có thuật toán vận chuyển hay pressure giấu trong đó.
+
+Renderer được tạo và kiểm lỗi riêng, sau khi window đã thành công:
+
+{/* snippet src/main.cpp#renderer */}
+
+```cpp title="src/main.cpp — tạo renderer"
+SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
+if (!renderer) {
+    std::cerr << SDL_GetError() << '\n';
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return EXIT_FAILURE;
+}
+```
+
+Logical presentation là 1280×900, LETTERBOX. Hộp khói 768×768 bắt đầu tại `(24,105)`; panel nằm bên phải. Giữ layout này khi resize để phép đổi tọa độ chuột ở bài sau vẫn khớp.
+
+### 2. Gieo scalar vào Grid
+
+Trong `fluid/state.hpp`, constructor Grid kiểm N là lũy thừa hai trong 8..256, đặt `h=1/N` và tạo `density`, `densityNext` dài N². Hai mảng không phải hai lớp khói: mảng sau dành cho kết quả cập nhật chưa được phép ghi đè mảng cũ.
+
+Mở `makeScene` trong `fluid/scenes.hpp`, thêm vòng gieo dữ liệu sau khi tạo `Grid grid(n)`:
+
+{/* snippet include/fluid/scenes.hpp#seed-smoke */}
+
+```cpp title="include/fluid/scenes.hpp — tạo hai vệt khói"
+for (int y = 0; y < n; ++y) {
+    for (int x = 0; x < n; ++x) {
+        const double px = (x + 0.5) * grid.h;
+        const double py = (y + 0.5) * grid.h;
+        double left = std::exp(-((px - 0.34) * (px - 0.34) / 0.002 + (py - 0.18) * (py - 0.18) / 0.009));
+        double right = std::exp(-((px - 0.66) * (px - 0.66) / 0.002 + (py - 0.18) * (py - 0.18) / 0.009));
+        if (scene == Scene::Empty || scene == Scene::JacobiPair) {
+            left = 0;
+            right = 0;
+        }
+        if (scene == Scene::Vortex) {
+            left = std::exp(-((px - 0.30) * (px - 0.30) + (py - 0.50) * (py - 0.50)) / 0.003);
+            right = std::exp(-((px - 0.70) * (px - 0.70) + (py - 0.50) * (py - 0.50)) / 0.003);
+        }
+        grid.density[y * n + x] = left + right;
+    }
+}
+```
+
+`px`, `py` là tâm ô. Hai bề rộng khác nhau theo x/y làm vệt ban đầu cao hơn rộng. Ô có chỉ số y lớn nằm cao hơn trong world. Cảnh Empty đặt hai đóng góp bằng 0; Vortex đổi vị trí vệt để dùng ở bài sau. Max không nhất thiết bằng 1 vì tâm Gaussian có thể nằm giữa các mẫu.
+
+### 3. Đưa đủ N² mẫu lên cửa sổ
+
+Đọc hàm trình bày được cấp sẵn này một lần; các bài tiếp theo giữ nguyên đường đi dữ liệu:
+
+{/* snippet include/app/image.hpp#image */}
+
+```cpp title="include/app/image.hpp — ghi và vẽ texture streaming"
+bool draw(SDL_Renderer* renderer, const fluid::Grid& grid, fluid::Layer layer, bool colored) {
+    if (n != grid.n) {
+        dispose();
+        texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, grid.n, grid.n);
+        if (!texture || !SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_LINEAR)) {
+            return false;
+        }
+        n = grid.n;
+    }
+    void* pixels = nullptr;
+    int pitch = 0;
+    if (!SDL_LockTexture(texture, nullptr, &pixels, &pitch)) {
+        return false;
+    }
+    for (int row = 0; row < n; ++row) {
+        auto* output = static_cast<Uint8*>(pixels) + row * pitch;
+        for (int x = 0; x < n; ++x) {
+            const auto color = cellColor(grid, x, n - 1 - row, layer, colored);
+            output[x * 4] = color.r;
+            output[x * 4 + 1] = color.g;
+            output[x * 4 + 2] = color.b;
+            output[x * 4 + 3] = 255;
+        }
+    }
+    SDL_UnlockTexture(texture);
+    const SDL_FRect destination{viewX, viewY, viewSize, viewSize};
+    return SDL_RenderTexture(renderer, texture, nullptr, &destination);
+}
+```
+
+Texture chỉ được tạo lại khi N đổi. `pitch` là số byte giữa hai hàng do SDL trả về, không được tự thay bằng `N*4`. Hàng texture `row` đọc hàng world `N−1−row`; đó là chỗ đảo y. Texture có N×N pixel nhưng được phóng lên viewport; không cấp phát thêm ô mô phỏng để vừa màn hình. Xem [SDL_LockTexture](https://wiki.libsdl.org/SDL3/SDL_LockTexture) về quy tắc ghi toàn vùng đã lock.
+
+## Ghép các phần lại
+
+`App app` được tạo **trước** vòng while. Nó gọi `makeScene` một lần, giữ Grid qua các frame. Main đọc event, gọi `smoke::draw(renderer, app, image)` rồi `SDL_RenderPresent`; `draw` gọi `image.draw` trước khi vẽ panel. Checkpoint 01 chưa gọi solver.
+
+```bash title="Terminal — chạy kết quả sau bài 1"
+cmake --build build --config Debug --target project_49_checkpoint_1 --parallel 1
+.\build\Debug\project_49_checkpoint_1.exe
+```
+
+Phần mã đầy đủ cuối trang chứa cả scaffold lẫn thay đổi vừa làm; không chỉ một hàm rời.
+
+## Thử làm sai để hiểu đúng
+
+Đổi `n−1−row` thành `row`: khói xuất hiện ở phía trên dù dữ liệu vẫn gần y=0,18. Khôi phục trước khi thêm input. Tiếp đó thử tạo App trong vòng while: mọi chỉnh sửa dữ liệu bị mất sau một frame. Dữ liệu phải sống lâu hơn một lần vẽ.
+
+## Tự kiểm tra kết quả
+
+32² có 1.024 scalar; `(3,2)` có index 67. Hai vệt nằm thấp, không tự bay hoặc mờ đi. Resize không đổi N hoặc concentration. Đóng cửa sổ giải phóng texture trước renderer, rồi window và SDL.
+
+## Bài tập mở rộng
+
+Thêm một Gaussian thứ ba hoặc tạo hình chữ nhật bằng dữ liệu, không sửa hàm vẽ. Sau đó sang [bài 2: đặt khói bằng chuột](/projects/stable-fluids/02-ve-khoi-bang-chuot).

@@ -1,241 +1,211 @@
-#include "diagnostics.hpp"
+#include "fluid/reference.hpp"
 #include <cstdlib>
 #include <iostream>
-#include <limits>
-#include <string_view>
+#include <stdexcept>
 
-int failures = 0;
-
-void check(bool condition, std::string_view label) {
-    // Kiểm tra vẫn hoạt động khi Release định nghĩa NDEBUG.
+namespace {
+void require(bool condition, const char* message) {
     if (!condition) {
-        ++failures;
-        std::cerr << "FAIL: " << label << '\n';
+        throw std::runtime_error(message);
     }
 }
 
-bool near(double actual, double expected, double tolerance = 1e-10) {
-    return std::isfinite(actual) && std::abs(actual - expected) < tolerance;
+bool near(double a, double b, double tolerance = 1e-10) {
+    return std::abs(a - b) <= tolerance;
 }
 
-void checkWalls(const fluid::Grid& grid) {
-    for (int y = 0; y < grid.n; ++y) {
-        check(grid.u[y * (grid.n + 1)] == 0 && grid.u[y * (grid.n + 1) + grid.n] == 0, "u normal wall zero");
-    }
-    for (int x = 0; x < grid.n; ++x) {
-        check(grid.v[x] == 0 && grid.v[grid.n * grid.n + x] == 0, "v normal wall zero");
-    }
-}
-
-int main() {
-    bool rejectedSize = false;
-    try {
-        fluid::Grid invalid(7);
-    } catch (const std::invalid_argument&) {
-        rejectedSize = true;
-    }
-    check(rejectedSize, "invalid dimensions rejected");
-    auto grid = fluid::makeGrid(16, fluid::Preset::Empty);
-    check(grid.density.size() == 256 && grid.u.size() == 272 && grid.v.size() == 272, "MAC array dimensions");
-    fluid::paintStroke(grid, {0, 0.5}, {1, 0.5}, 1, 1);
-    for (int x = 0; x < 16; ++x) {
-        check(grid.density[7 * 16 + x] == 1, "brush stroke stays connected");
-    }
-
-    // Oracle affine dùng vị trí mẫu thật của từng lattice.
-    grid = fluid::makeGrid(8, fluid::Preset::Empty);
-    for (int y = 0; y < 8; ++y) {
-        for (int x = 0; x < 8; ++x) {
-            grid.density[y * 8 + x] = 2 * (x + 0.5) * grid.h - 3 * (y + 0.5) * grid.h + 1;
+void samplerAndTransport() {
+    fluid::Grid grid(16);
+    // Affine oracle: bilinear phải khớp tại cả ba offset, không chỉ tại tâm ô.
+    for (const auto offset : {fluid::Vec2{0.5, 0.5}, fluid::Vec2{0, 0.5}, fluid::Vec2{0.5, 0}}) {
+        std::vector<double> values(16 * 16);
+        for (int y = 0; y < 16; ++y) {
+            for (int x = 0; x < 16; ++x) {
+                values[y * 16 + x] = 2 * (x + offset.x) * grid.h - 3 * (y + offset.y) * grid.h + 4;
+            }
         }
+        require(near(fluid::sample(grid, values, 16, 16, offset, {0.37, 0.63}), 2 * 0.37 - 3 * 0.63 + 4), "affine sampler oracle");
     }
-    for (int y = 0; y < 8; ++y) {
-        for (int x = 0; x <= 8; ++x) {
-            grid.u[y * 9 + x] = 2 * x * grid.h - 3 * (y + 0.5) * grid.h + 1;
-        }
-    }
-    for (int y = 0; y <= 8; ++y) {
-        for (int x = 0; x < 8; ++x) {
-            grid.v[y * 8 + x] = 2 * (x + 0.5) * grid.h - 3 * y * grid.h + 1;
-        }
-    }
-    const fluid::Vec2 probe{0.41, 0.37};
-    const double expected = 2 * probe.x - 3 * probe.y + 1;
-    check(near(fluid::sample(grid, grid.density, 8, 8, {0.5, 0.5}, probe), expected), "scalar affine sampling");
-    check(near(fluid::sample(grid, grid.u, 9, 8, {0, 0.5}, probe), expected), "u affine sampling");
-    check(near(fluid::sample(grid, grid.v, 8, 9, {0.5, 0}, probe), expected), "v affine sampling");
-    check(near(fluid::sample(grid, grid.density, 8, 8, {0.5, 0.5}, {-1, -1}), grid.density[0]), "constant edge extension");
-
-    grid = fluid::makeGrid(8, fluid::Preset::Empty);
-    std::fill(grid.u.begin(), grid.u.end(), 0.2);
-    for (int y = 0; y < 8; ++y) {
-        for (int x = 0; x < 8; ++x) {
-            grid.density[y * 8 + x] = (x + 0.5) / 8.0;
-        }
-    }
-    fluid::advectDensity(grid);
-    check(near(grid.density[3 * 8 + 4], 4.5 / 8 - fluid::dt * 0.2), "scalar backtrace sign and world units");
+    std::fill(grid.u.begin(), grid.u.end(), 0.18);
+    const auto origin = fluid::backtrace(grid, {0.5, 0.5}, fluid::fixedDt);
+    require(near(origin.x, 0.497) && near(origin.y, 0.5), "backtrace sign and midpoint");
     std::fill(grid.density.begin(), grid.density.end(), 0.4);
-    fluid::advectDensity(grid);
-    for (const auto value : grid.density) {
-        check(near(value, 0.4), "constant scalar invariant");
+    fluid::advectSmoke(grid);
+    for (const double value : grid.density) {
+        require(near(value, 0.4), "constant scalar advection");
     }
-
-    // Exact 8x8 teaching fixture: all updates read the previous pressure buffer.
-    auto dipole = fluid::makeGrid(8, fluid::Preset::PressureDipole);
-    const auto dipoleU = dipole.u;
-    const auto dipoleV = dipole.v;
-    const auto dipoleDensity = dipole.density;
-    fluid::beginPressure(dipole);
-    check(near(dipole.rhs[27], 64) && near(dipole.rhs[28], -64), "dipole opposite RHS");
-    check(near(fluid::pressureResidual(dipole), std::sqrt(128.0)), "dipole initial residual oracle");
-    const auto first = fluid::jacobiIteration(dipole, 3, 3);
-    check(first.count == 4 && near(first.sum, 0) && near(first.candidate, 0.25), "first Jacobi stencil");
-    check(near(first.gauge, 0) && near(first.result, 0.1875) && near(dipole.pressure[28], -0.1875), "first weighted Jacobi exact values");
-    check(near(fluid::pressureResidual(dipole), std::sqrt(14.0)), "one-round residual oracle");
-    const auto second = fluid::jacobiIteration(dipole, 3, 3);
-    check(near(second.sum, -0.1875) && near(second.candidate, 0.203125) && near(second.result, 0.19921875), "second round reads old neighbors");
-    check(fluid::inspectJacobiCell(dipole, 0, 0).count == 2 && fluid::inspectJacobiCell(dipole, 0, 3).count == 3, "Jacobi Neumann edge degrees");
-    check(dipole.u == dipoleU && dipole.v == dipoleV && dipole.density == dipoleDensity && dipole.tick == 0, "Jacobi does not advance simulation");
-    fluid::beginPressure(dipole);
-    check(dipole.pressureIterations == 0 && near(dipole.pressure[27], 0), "restart Jacobi without resetting velocity");
-
-    grid = fluid::makeGrid(16, fluid::Preset::Compressing);
-    fluid::computeDivergence(grid);
-    double fluxSum = 0;
-    for (const auto value : grid.div) {
-        fluxSum += value;
+    fluid::advectSmokeDetailed(grid);
+    for (const double value : grid.density) {
+        require(near(value, 0.4), "constant MacCormack");
     }
-    check(near(fluxSum, 0), "closed-box flux telescopes");
-    const auto beforeU = grid.u;
-    const double lowResidual = fluid::solvePressure(grid, 20);
-    const double highResidual = fluid::solvePressure(grid, 160);
-    check(highResidual < lowResidual / 20 && grid.u == beforeU, "pressure budget reduces residual without projecting");
-    double residualSquared = 0;
     for (int y = 0; y < 16; ++y) {
         for (int x = 0; x < 16; ++x) {
-            const int i = y * 16 + x;
-            double lap = 0;
-            const int neighbours[][2] = {{x - 1, y}, {x + 1, y}, {x, y - 1}, {x, y + 1}};
-            for (const auto& point : neighbours) {
-                if (point[0] >= 0 && point[0] < 16 && point[1] >= 0 && point[1] < 16) {
-                    lap += grid.pressure[point[1] * 16 + point[0]] - grid.pressure[i];
-                }
+            grid.density[y * 16 + x] = x * grid.h;
+        }
+    }
+    fluid::advectSmoke(grid);
+    require(near(grid.density[8 * 16 + 8], 0.5 - 0.18 * fluid::fixedDt), "independent affine translation oracle");
+    auto detail = fluid::makeScene(32, fluid::Scene::Vortex);
+    double before = 0;
+    for (const double value : detail.density) {
+        before = std::max(before, value);
+    }
+    fluid::advectSmokeDetailed(detail);
+    for (const double value : detail.density) {
+        require(value >= 0 && value <= before + 1e-14, "MacCormack limiter extrema");
+    }
+    // Hai thành phần phải đọc cùng state cũ, kể cả nếu duyệt theo thứ tự ngược.
+    auto flow = fluid::makeScene(16, fluid::Scene::Vortex);
+    const auto old = flow;
+    fluid::advectVelocity(flow);
+    for (int y = 1; y < 16; ++y) {
+        for (int x = 0; x < 16; ++x) {
+            const fluid::Vec2 p{(x + 0.5) * old.h, y * old.h};
+            const double expected = fluid::sample(old, old.v, 16, 17, {0.5, 0}, fluid::backtrace(old, p, fluid::fixedDt));
+            require(near(flow.v[y * 16 + x], expected), "velocity reads common old state");
+        }
+    }
+}
+
+void pressureOracles() {
+    auto pair = fluid::makeScene(8, fluid::Scene::JacobiPair);
+    fluid::preparePressure(pair, true);
+    require(near(pair.rhs[27], 64) && near(pair.rhs[28], -64), "Jacobi fixed RHS oracle");
+    fluid::jacobiIteration(pair);
+    require(near(pair.pressure[27], 0.1875) && near(pair.pressure[28], -0.1875), "Jacobi first round oracle");
+    require(near(fluid::pressureResidual(pair), std::sqrt(14.0)), "independent Poisson residual oracle");
+    fluid::jacobiIteration(pair);
+    require(near(pair.pressure[27], 0.19921875), "Jacobi second round oracle");
+    const auto report = fluid::validate();
+    require(report.passed, "shared C++ and Canvas projection fixture");
+    require(near(report.large.after, 0.00010725079495922615, 1e-10), "cross-language fixture after divergence");
+    // [snippet known-pressure]
+    // Neumann eigenmode có eigenvalue giải tích; RHS không dùng multiplyPressure để sinh.
+    for (const auto method : {fluid::PressureMethod::CG, fluid::PressureMethod::PCG}) {
+        fluid::Grid grid(32);
+        std::vector<double> exact(grid.density.size());
+        const double pi = std::acos(-1.0);
+        const double eigenvalue = (4 * std::pow(std::sin(pi / 64), 2) + 4 * std::pow(std::sin(pi / 32), 2)) / (grid.h * grid.h);
+        for (int y = 0; y < 32; ++y) {
+            for (int x = 0; x < 32; ++x) {
+                exact[y * 32 + x] = std::cos(pi * (x + 0.5) / 32) * std::cos(2 * pi * (y + 0.5) / 32);
             }
-            const double r = -lap / (grid.h * grid.h) - grid.rhs[i];
-            residualSquared += r * r;
         }
+        for (int y = 0; y < 32; ++y) {
+            for (int x = 1; x < 32; ++x) {
+                grid.u[y * 33 + x] = fluid::fixedDt * (exact[y * 32 + x] - exact[y * 32 + x - 1]) / grid.h;
+            }
+        }
+        for (int y = 1; y < 32; ++y) {
+            for (int x = 0; x < 32; ++x) {
+                grid.v[y * 32 + x] = fluid::fixedDt * (exact[y * 32 + x] - exact[(y - 1) * 32 + x]) / grid.h;
+            }
+        }
+        fluid::preparePressure(grid, false);
+        for (std::size_t i = 0; i < exact.size(); ++i) {
+            require(near(grid.rhs[i], eigenvalue * exact[i], 1e-10), "analytic Neumann RHS");
+        }
+        fluid::Parameters p;
+        p.method = method;
+        const auto solved = fluid::project(grid, p);
+        double error = 0;
+        for (std::size_t i = 0; i < exact.size(); ++i) {
+            error = std::max(error, std::abs(grid.pressure[i] - exact[i]));
+        }
+        require(solved.converged && error < 5e-5, "known-pressure error CG and PCG");
     }
-    check(near(std::sqrt(residualSquared / 256), highResidual), "independent Poisson residual oracle");
-    const double beforeEnergy = fluid::measure(grid).energy;
-    const auto projection = fluid::project(grid, 160);
-    check(projection.after < projection.before * 0.08, "projection reduces divergence in standard fixture");
-    check(near(projection.after, fluid::dt * projection.residual), "divergence equals scaled residual");
-    check(fluid::measure(grid).energy < beforeEnergy, "projection reduces velocity norm in fixture");
-    check(near(projection.before, 1.8728670913548304) && near(projection.after, 0.011600476804628381), "shared C++ and Canvas projection fixture");
-    checkWalls(grid);
+    // [/snippet known-pressure]
+    auto vortex = fluid::makeScene(16, fluid::Scene::Vortex);
+    require(fluid::divergence(vortex) < 1e-12, "discrete streamfunction div-free");
+    const auto before = vortex;
+    fluid::project(vortex, fluid::Parameters{});
+    for (std::size_t i = 0; i < vortex.u.size(); ++i) {
+        require(near(vortex.u[i], before.u[i]), "projection preserves div-free velocity");
+    }
+}
 
-    auto vortex = fluid::makeGrid(8, fluid::Preset::Vortex);
-    check(near(fluid::computeDivergence(vortex), 0), "streamfunction is discretely divergence-free");
-    const auto vortexU = vortex.u;
-    fluid::project(vortex, 160);
-    for (std::size_t i = 0; i < vortexU.size(); ++i) {
-        check(near(vortex.u[i], vortexU[i]), "projection preserves divergence-free velocity");
-    }
-
-    // Duyệt ngược nhưng cùng đọc state cũ để bắt swap sớm trong advection.
-    auto oracleU = vortex.u;
-    auto oracleV = vortex.v;
-    for (int y = 7; y >= 0; --y) {
-        for (int x = 8; x >= 0; --x) {
-            const fluid::Vec2 p{x * vortex.h, (y + 0.5) * vortex.h};
-            const auto flow = fluid::velocity(vortex, p);
-            oracleU[y * 9 + x] = fluid::sample(vortex, vortex.u, 9, 8, {0, 0.5}, {p.x - fluid::dt * flow.x, p.y - fluid::dt * flow.y});
-        }
-    }
-    for (int y = 8; y >= 0; --y) {
-        for (int x = 7; x >= 0; --x) {
-            const fluid::Vec2 p{(x + 0.5) * vortex.h, y * vortex.h};
-            const auto flow = fluid::velocity(vortex, p);
-            oracleV[y * 8 + x] = fluid::sample(vortex, vortex.v, 8, 9, {0.5, 0}, {p.x - fluid::dt * flow.x, p.y - fluid::dt * flow.y});
-        }
-    }
-    fluid::advectVelocity(vortex);
-    for (int y = 0; y < 8; ++y) {
-        for (int x = 1; x < 8; ++x) {
-            check(near(vortex.u[y * 9 + x], oracleU[y * 9 + x]), "u advection uses old state");
-        }
-    }
-    for (int y = 1; y < 8; ++y) {
-        for (int x = 0; x < 8; ++x) {
-            check(near(vortex.v[y * 8 + x], oracleV[y * 8 + x]), "v advection uses old state");
-        }
-    }
-    checkWalls(vortex);
-
-    auto viscous = fluid::makeGrid(16, fluid::Preset::Vortex);
-    const auto sourceU = viscous.u;
-    const double energy = fluid::measure(viscous).energy;
-    fluid::diffuseVelocity(viscous, 0);
-    check(viscous.u == sourceU, "zero viscosity leaves velocity unchanged");
-    fluid::diffuseVelocity(viscous, 0.003);
-    check(fluid::measure(viscous).energy < energy, "viscosity reduces velocity energy");
-    const double a = 0.003 * fluid::dt / (viscous.h * viscous.h);
-    for (int y = 0; y < 16; ++y) {
+void forcesAndViscosity() {
+    auto grid = fluid::makeScene(16, fluid::Scene::Vortex);
+    const auto old = grid;
+    fluid::diffuseVelocity(grid, 0);
+    require(grid.u == old.u && grid.v == old.v, "nu zero identity");
+    fluid::diffuseVelocity(grid, 0.003);
+    require(fluid::diagnose(grid).energy < fluid::diagnose(old).energy, "viscosity energy decay");
+    const double a = 0.003 * fluid::fixedDt / (grid.h * grid.h);
+    for (int y = 1; y < 15; ++y) {
         for (int x = 1; x < 16; ++x) {
             const int i = y * 17 + x;
-            double lap = viscous.u[i - 1] + viscous.u[i + 1] - 2 * viscous.u[i];
-            if (y > 0) {
-                lap += viscous.u[i - 17] - viscous.u[i];
-            }
-            if (y < 15) {
-                lap += viscous.u[i + 17] - viscous.u[i];
-            }
-            check(near(viscous.u[i] - a * lap, sourceU[i]), "implicit viscosity equation oracle");
+            const double lhs = (1 + 4 * a) * grid.u[i] - a * (grid.u[i - 1] + grid.u[i + 1] + grid.u[i - 17] + grid.u[i + 17]);
+            require(near(lhs, old.u[i]), "implicit viscosity equation oracle");
         }
     }
-    checkWalls(viscous);
-
-    auto forced = fluid::makeGrid(8, fluid::Preset::Empty);
-    std::fill(forced.density.begin(), forced.density.end(), 1);
-    fluid::addBuoyancy(forced, 0.8);
-    check(near(forced.v[3 * 8 + 3], fluid::dt * 0.8), "buoyancy includes dt");
-    auto one = fluid::makeGrid(8, fluid::Preset::Empty);
-    auto two = one;
-    fluid::addImpulse(one, {0.5, 0.5}, {0.1, -0.2});
-    fluid::addImpulse(two, {0.5, 0.5}, {0.05, -0.1});
-    fluid::addImpulse(two, {0.5, 0.5}, {0.05, -0.1});
-    check(one.u == two.u && one.v == two.v, "split displacement impulse at fixed center");
-    fluid::Settings invalid;
-    invalid.viscosity = std::numeric_limits<double>::quiet_NaN();
-    const auto previous = one.density;
-    check(!fluid::step(one, invalid) && one.tick == 0 && one.density == previous, "invalid settings rejected before mutation");
-
-    fluid::Settings settings;
-    settings.iterations = 40;
-    settings.buoyancy = 0;
-    auto reference = fluid::makeGrid(8, fluid::Preset::Vortex);
-    for (int i = 0; i < 60; ++i) {
-        fluid::step(reference, settings);
+    const auto viscous = grid;
+    fluid::confineVorticity(grid, 0);
+    require(grid.u == viscous.u && grid.v == viscous.v, "epsilon zero identity");
+    fluid::confineVorticity(grid, 8);
+    require(fluid::finiteState(grid) && grid.u != viscous.u, "confinement changes actual velocity");
+    for (int y = 0; y < 16; ++y) {
+        require(grid.u[y * 17] == 0 && grid.u[y * 17 + 16] == 0, "normal walls");
     }
+    auto smoke = fluid::makeScene(32, fluid::Scene::Empty);
+    fluid::paintStroke(smoke, {0.2, 0.5}, {0.8, 0.5}, 2, false, fluid::cyan);
+    for (int x = 7; x < 25; ++x) {
+        require(smoke.density[16 * 32 + x] == 1, "stroke has no gaps");
+    }
+    const auto painted = smoke.density;
+    fluid::paintStroke(smoke, {0.2, 0.5}, {0.8, 0.5}, 2, false, fluid::cyan);
+    require(smoke.density == painted, "brush idempotence");
+    fluid::impulseAt(smoke, {0.5, 0.5}, {0.05, 0});
+    require(!smoke.projection.available && !smoke.pressureReady, "impulse invalidates old report");
+}
+
+void limitsAndClock() {
     for (const int fps : {15, 30, 120}) {
-        auto candidate = fluid::makeGrid(8, fluid::Preset::Vortex);
-        double accumulator = 0;
-        for (int frame = 0; frame < fps; ++frame) {
-            const auto plan = fluid::planSteps(accumulator, 1.0 / fps);
-            accumulator = plan.remainder;
-            for (int i = 0; i < plan.steps; ++i) {
-                fluid::step(candidate, settings);
-            }
+        double remainder = 0;
+        int ticks = 0;
+        for (int i = 0; i < fps; ++i) {
+            const auto plan = fluid::planSteps(remainder, 1.0 / fps);
+            ticks += plan.steps;
+            remainder = plan.remainder;
         }
-        check(candidate.tick == 60 && candidate.density == reference.density && candidate.u == reference.u, "fixed ticks independent of render FPS");
+        require(ticks == 60 && remainder < 1e-9, "fixed timestep schedules");
     }
-    const auto hitch = fluid::planSteps(0, 10);
-    check(hitch.steps == 4 && hitch.dropped > 9.9 && hitch.remainder >= 0 && hitch.remainder < fluid::dt, "stalled frame work bounded");
-    check(fluid::validateFluid().passed, "standard validation passes");
-    std::cout << "Stable Fluids tests: " << failures << " failure(s)\n";
-    if (failures != 0) {
+    const auto stalled = fluid::planSteps(0, 10);
+    require(stalled.steps == 4 && stalled.dropped > 9.9, "bounded catch-up");
+    fluid::Grid large(256);
+    require(large.density.size() == 65536 && large.u.size() + large.v.size() == 131584, "actual 256-square allocation");
+    auto invalid = fluid::makeScene(16, fluid::Scene::Vortex);
+    const auto initial = invalid.density;
+    fluid::Parameters p;
+    p.viscosity = std::numeric_limits<double>::quiet_NaN();
+    require(!fluid::step(invalid, p, fluid::Scene::Vortex) && invalid.density == initial, "reject parameters before mutation");
+    invalid.density[0] = std::numeric_limits<double>::quiet_NaN();
+    require(!fluid::finiteState(invalid), "nonfinite state detection");
+    invalid.density = initial;
+    invalid.pressure[0] = std::numeric_limits<double>::quiet_NaN();
+    require(!fluid::finiteState(invalid), "nonfinite warm-start pressure detection");
+    fluid::Grid overflow(16);
+    std::fill(overflow.u.begin(), overflow.u.end(), 1e308);
+    bool rejected = false;
+    try {
+        fluid::project(overflow, fluid::Parameters{});
+    } catch (const std::overflow_error&) {
+        rejected = true;
+    }
+    require(rejected && !overflow.projection.converged, "overflow never reports infinity <= infinity as converged");
+}
+} // namespace
+
+int main() {
+    try {
+        samplerAndTransport();
+        pressureOracles();
+        forcesAndViscosity();
+        limitsAndClock();
+        std::cout << "Project 49: all independent CPU checks passed\n";
+        return EXIT_SUCCESS;
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
         return EXIT_FAILURE;
     }
-    return EXIT_SUCCESS;
 }

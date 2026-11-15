@@ -1,0 +1,99 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giữ lại những xoáy nhỏ đang mất dần
+
+## Vấn đề cần giải quyết
+
+MacCormack giữ scalar sắc hơn nhưng velocity vẫn mất các xoáy nhỏ qua nội suy. Hình có thể còn rõ mà dòng chảy đã quá hiền. Ta thêm một lực từ curl thực của field để bù xu hướng mất xoáy ở thang lưới. Không thêm hoạt ảnh gợn hoặc noise sau khi vẽ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trong 2D, curl chỉ còn thành phần z:
+
+$$\omega=\partial_x v-\partial_y u,\quad N=\frac{\nabla|\omega|}{|\nabla|\omega||},\quad F=\varepsilon h(N_y\omega,-N_x\omega).$$
+
+N hướng về nơi độ lớn xoáy tăng. Tích chéo trong công thức tạo lực vuông góc hướng đó, giúp cuộn dòng quanh vùng xoáy. Khi gradient quá nhỏ, ta đặt lực 0 để tránh chia một số gần 0. Hệ số h làm độ bù gắn với độ phân giải; ε là mức điều khiển nghệ thuật, không phải tham số được đo của một chất khí.
+
+Đây là **vorticity confinement** trong [Fedkiw, Stam và Jensen](https://www.graphics.stanford.edu/papers/smoke/). Nó thêm năng lượng vào field. Hình nhiều xoáy hơn không có nghĩa nghiệm Navier–Stokes chính xác hơn trong mọi tình huống.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-13" />
+
+Thử ε=0, 8 và 16 từ cùng reset. Theo dõi năng lượng và Courant chứ không chỉ số dải khói.
+
+## Viết code từng bước
+
+{/* snippet include/fluid/vorticity.hpp#confinement */}
+
+```cpp title="include/fluid/vorticity.hpp — lực từ curl thật của velocity"
+inline void confineVorticity(Grid& grid, double strength) {
+    if (!std::isfinite(strength) || strength < 0 || strength > 20) {
+        throw std::invalid_argument("Confinement strength must be in [0,20]");
+    }
+    if (strength == 0) {
+        return;
+    }
+    const int n = grid.n;
+    for (int y = 0; y < n; ++y) {
+        for (int x = 0; x < n; ++x) {
+            const int left = std::max(0, x - 1);
+            const int right = std::min(n - 1, x + 1);
+            const int lower = std::max(0, y - 1);
+            const int upper = std::min(n - 1, y + 1);
+            const double dvdx = (centerV(grid, right, y) - centerV(grid, left, y)) / ((right - left) * grid.h);
+            const double dudy = (centerU(grid, x, upper) - centerU(grid, x, lower)) / ((upper - lower) * grid.h);
+            grid.curl[y * n + x] = dvdx - dudy;
+        }
+    }
+    for (int y = 0; y < n; ++y) {
+        for (int x = 0; x < n; ++x) {
+            const int i = y * n + x;
+            const int left = std::max(0, x - 1);
+            const int right = std::min(n - 1, x + 1);
+            const int lower = std::max(0, y - 1);
+            const int upper = std::min(n - 1, y + 1);
+            const double gx = (std::abs(grid.curl[y * n + right]) - std::abs(grid.curl[y * n + left])) / ((right - left) * grid.h);
+            const double gy = (std::abs(grid.curl[upper * n + x]) - std::abs(grid.curl[lower * n + x])) / ((upper - lower) * grid.h);
+            const double length = std::hypot(gx, gy);
+            grid.forceX[i] = 0;
+            grid.forceY[i] = 0;
+            if (length > 1e-10) {
+                grid.forceX[i] = strength * grid.h * (gy / length) * grid.curl[i];
+                grid.forceY[i] = -strength * grid.h * (gx / length) * grid.curl[i];
+            }
+        }
+    }
+    for (int y = 0; y < n; ++y) {
+        for (int x = 1; x < n; ++x) {
+            grid.u[y * (n + 1) + x] += fixedDt * 0.5 * (grid.forceX[y * n + x - 1] + grid.forceX[y * n + x]);
+        }
+    }
+    for (int y = 1; y < n; ++y) {
+        for (int x = 0; x < n; ++x) {
+            grid.v[y * n + x] += fixedDt * 0.5 * (grid.forceY[(y - 1) * n + x] + grid.forceY[y * n + x]);
+        }
+    }
+    enforceWalls(grid);
+}
+```
+
+`centerU/centerV` lấy trung bình hai cạnh để đưa velocity về tâm. Sai phân curl và gradient |curl| dùng centered ở trong miền, one-sided tại mép. Có thêm `curl`, `forceX`, `forceY` trong Grid, không cấp phát chúng ở từng frame.
+
+Sau khi có lực tại tâm, u nhận trung bình forceX hai ô trái/phải, v nhận forceY hai ô dưới/trên. Nhân dt vì đây là gia tốc. Normal wall vẫn 0, rồi pressure projection phía sau sửa divergence do lực có thể sinh thêm.
+
+## Ghép các phần lại
+
+Chèn `confineVorticity` sau nguồn/lực và trước viscosity/project trong `step`. Bản checkpoint 13 mặc định ε=8; F4 chuyển 0/4/8/12/16/20 và pause để so. ε=0 trả về ngay, không làm việc không cần thiết. F3 vẫn độc lập: một kỹ thuật tác động scalar, kỹ thuật kia tác động velocity.
+
+Build `project_49_checkpoint_13`. Bật tracer màu nếu muốn quan sát hai nguồn, nhưng trước hết nhìn bản trắng để đánh giá cấu trúc luồng. Tone mapping chỉ đổi độ sáng từ concentration, không được dùng như nguồn lực hoặc dữ liệu curl.
+
+## Thử làm sai để hiểu đúng
+
+Bỏ h: cùng ε sẽ bù quá mạnh khi tăng N. Đảo dấu một thành phần F: xoáy có thể yếu đi hoặc sinh chuyển động sai hướng. Sửa lại và kiểm một vortex có hướng biết trước. Đừng “sửa” bằng vận tốc ngẫu nhiên để hình có vẻ sống động.
+
+## Tự kiểm tra kết quả
+
+ε=0 giữ nguyên velocity trong riêng hàm confinement. Với vortex không đều, ε>0 thay đổi velocity hữu hạn; normal wall vẫn bằng 0. Trường velocity đều không sinh lực. Tham số ngoài [0,20] hoặc NaN bị từ chối. Sau tick, report projection vẫn đo phương trình pressure gốc, không lấy nhiều xoáy làm thước đo correctness.
+
+## Bài tập mở rộng
+
+Vẽ một lớp |curl| riêng mà không làm thay đổi state. So chi phí và độ chi tiết ở 64²/128² khi giữ cùng miền world. Tiếp theo, [giảm chi phí pressure bằng nhiều thang lưới](/projects/stable-fluids/14-pressure-nhieu-thang).

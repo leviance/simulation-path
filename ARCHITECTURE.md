@@ -97,9 +97,9 @@ Payload public vẫn là một JSON versioned cho mỗi snapshot. Server giữ b
 
 ## Giới hạn chống phình file
 
-Code block C++ của Project 01–32, Project 40–48 và từ Project 56 trở đi phải khớp một đoạn token liên tiếp trong đúng source checkpoint, bỏ qua comment và khoảng trắng nhưng giữ literal/toán tử. `tests/source-contract.cases.mjs` dùng `scripts/code-snippets.mjs` cho hợp đồng này; Project 40–45 còn kiểm cả GLSL trong suite riêng. Các project còn lại trong khoảng 33–55 dùng kiểm tra subsequence riêng; test mới không được bỏ qua token như giá trị trả về để làm một snippet sai được chấp nhận.
+Code block C++ của Project 01–32, Project 40–49 và từ Project 56 trở đi phải khớp một đoạn token liên tiếp trong đúng source checkpoint, bỏ qua comment và khoảng trắng nhưng giữ literal/toán tử. `tests/source-contract.cases.mjs` dùng `scripts/code-snippets.mjs` cho hợp đồng này; Project 40–45 còn kiểm cả GLSL trong suite riêng. Các project còn lại trong khoảng 33–55 dùng kiểm tra subsequence riêng; test mới không được bỏ qua token như giá trị trả về để làm một snippet sai được chấp nhận.
 
-Project 47–48 gắn code block với `// [snippet id]` / `// [/snippet id]` trong source. Sau khi sinh checkpoints, chạy `node scripts/sync-marked-snippets.mjs --project=47` hoặc `--project=48`; thêm `--check` để đối chiếu read-only. Script đọc đúng snapshot của lesson, không lấy phần thuật toán tương lai trong source-template; comments MDX giữ đường dẫn/marker để người biên tập tìm lại đoạn gốc.
+Project 47–49 gắn code block với `// [snippet id]` / `// [/snippet id]` trong source. Sau khi sinh checkpoints, chạy `node scripts/sync-marked-snippets.mjs --project=47`, `--project=48` hoặc `--project=49`; thêm `--check` để đối chiếu read-only. Script đọc đúng snapshot của lesson, không lấy phần thuật toán tương lai trong source-template; comments MDX giữ đường dẫn/marker để người biên tập tìm lại đoạn gốc.
 
 `npm run check:architecture` áp dụng các budget:
 

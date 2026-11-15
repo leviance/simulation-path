@@ -1,0 +1,91 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đặt và xóa khói bằng chuột
+
+## Vấn đề cần giải quyết
+
+Vệt khói tạo bằng công thức đã hiện đúng. Bây giờ ta muốn tự đặt khói ở bất kỳ đâu, kéo một nét liền và xóa nó. Input phải sửa scalar trong Grid; tô thêm một hình lên renderer sẽ biến mất ở frame tiếp theo và không thể đi theo dòng chảy.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chuột gửi tọa độ window, còn Grid dùng world. Hàm `world` trong `app/image.hpp` gọi `SDL_RenderCoordinatesFromWindow`, trừ gốc viewport rồi chia cạnh 768. Cuối cùng đổi y bằng `1−y`. Điểm ngoài hộp bị từ chối, không bị kéo về tường.
+
+Bán kính bút tính theo số ô. Một tâm ô được chọn khi khoảng cách tới tâm bút không vượt radius. Bút **đặt** concentration bằng 1 hoặc 0, không cộng thêm mỗi event. Giữ yên không làm đậm dần; nguồn phát theo thời gian là việc khác, sẽ viết ở bài 8.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-2" />
+
+Trước khi kéo nhanh, thử đoán: nếu chỉ đặt một đĩa ở mỗi event, khoảng trống giữa hai mẫu chuột sẽ ra sao?
+
+## Viết code từng bước
+
+### 1. Đặt một đĩa vào dữ liệu
+
+Thêm `paintDisk` trong `fluid/brush.hpp`:
+
+{/* snippet include/fluid/brush.hpp#brush-disk */}
+
+```cpp title="include/fluid/brush.hpp — đặt hoặc xóa một đĩa"
+inline void paintDisk(Grid& grid, Vec2 point, int radius, bool erase, [[maybe_unused]] Ink ink) {
+    if (!inside(point) || radius < 1 || radius > 16 || !std::isfinite(ink.r) || !std::isfinite(ink.g) || !std::isfinite(ink.b) || ink.r < 0 || ink.r > 1 || ink.g < 0 || ink.g > 1 || ink.b < 0 || ink.b > 1) {
+        return;
+    }
+    const int minX = std::max(0, static_cast<int>(std::floor(point.x / grid.h - radius)));
+    const int maxX = std::min(grid.n - 1, static_cast<int>(std::ceil(point.x / grid.h + radius)));
+    const int minY = std::max(0, static_cast<int>(std::floor(point.y / grid.h - radius)));
+    const int maxY = std::min(grid.n - 1, static_cast<int>(std::ceil(point.y / grid.h + radius)));
+    for (int y = minY; y <= maxY; ++y) {
+        for (int x = minX; x <= maxX; ++x) {
+            const double dx = x + 0.5 - point.x / grid.h;
+            const double dy = y + 0.5 - point.y / grid.h;
+            if (dx * dx + dy * dy > radius * radius) {
+                continue;
+            }
+            const int i = y * grid.n + x;
+            grid.density[i] = 1;
+            if (erase) {
+                grid.density[i] = 0;
+            }
+        }
+    }
+}
+```
+
+Vòng lặp chỉ đi qua bounding box của bút. `x+0.5` nhắc lại rằng dữ liệu ở tâm ô; point/h đưa world về đơn vị ô. Kiểm khoảng cách bình phương tránh tính căn cho từng mẫu. Bút không sửa velocity hoặc pressure.
+
+### 2. Nối giữa hai mẫu chuột
+
+{/* snippet include/fluid/brush.hpp#brush-stroke */}
+
+```cpp title="include/fluid/brush.hpp — nối nét theo khoảng cách"
+inline void paintStroke(Grid& grid, Vec2 from, Vec2 to, int radius, bool erase, Ink ink) {
+    if (!inside(from) || !inside(to)) {
+        return;
+    }
+    const double distance = std::hypot(to.x - from.x, to.y - from.y);
+    const int count = std::max(1, static_cast<int>(std::ceil(distance / (0.5 * grid.h))));
+    for (int i = 0; i <= count; ++i) {
+        const double t = static_cast<double>(i) / count;
+        paintDisk(grid, {from.x + t * (to.x - from.x), from.y + t * (to.y - from.y)}, radius, erase, ink);
+    }
+}
+```
+
+Mỗi đoạn con dài tối đa `0.5*h`. Dù chuột gửi ít event, những đĩa trung gian vẫn phủ đoạn đường. Đây là nội suy đường input, không phải nội suy dữ liệu khói dùng trong advection.
+
+## Ghép các phần lại
+
+Trong `app/input.hpp`, nhánh mouse-down chọn ô, lưu `downPoint`, bật capture và gọi `paintDisk`. Mouse-motion khi đang kéo gọi `paintStroke(previous, point, ...)`; sau đó cập nhật previous. Ra ngoài hộp thì xóa `previousValid`, để lần quay vào không nối xuyên vùng bên ngoài. Mouse-up hoặc mất focus giải phóng capture. Phím Enter gọi chính `paintDisk` tại tâm ô chọn bằng mũi tên, không có thuật toán bút thứ hai.
+
+Build `project_49_checkpoint_2`. Dùng M chọn Paint/Erase/Probe, `[ ]` đổi radius; Probe chỉ chọn ô để đọc. Toàn bộ event handler có trong source sau bài. Ở checkpoint này, palette chỉ chuẩn bị lựa chọn màu; scalar vẫn hiển thị đơn sắc.
+
+## Thử làm sai để hiểu đúng
+
+Bỏ `paintStroke`, chỉ đặt ở điểm cuối rồi kéo nhanh: nét đứt phụ thuộc số event. Khôi phục, sau đó bỏ việc hủy previous khi ra miền: nét có thể nối chéo qua hộp lúc quay vào. Không sửa bằng clamp con trỏ vào mép vì như vậy vẫn ghi dữ liệu tại vị trí người dùng không chọn.
+
+## Tự kiểm tra kết quả
+
+Nét nhanh liền; xóa đi qua cùng đường đưa scalar về 0. Đặt lại cùng một nét hai lần không đổi concentration. Resize rồi click bốn góc vẫn đúng. Probe và di chuyển con trỏ không làm tăng tích phân scalar. Mouse-up bên ngoài và mất focus không để bút mắc kẹt.
+
+## Bài tập mở rộng
+
+Thêm bút mềm đặt Gaussian nhưng vẫn dùng cùng đường input; ghi rõ nó đặt hay cộng giá trị. Tiếp theo, [cho khói đi theo một luồng gió đơn giản](/projects/stable-fluids/03-van-chuyen-khoi).

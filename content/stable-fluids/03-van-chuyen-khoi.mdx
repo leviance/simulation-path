@@ -1,0 +1,97 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Khói ở ô này đã đi từ đâu tới?
+
+## Vấn đề cần giải quyết
+
+Ta đã vẽ được khói. Để nó đi sang phải, cách dễ nghĩ là đẩy từng ô theo vận tốc. Nhưng một mẫu có thể rơi giữa các ô, nhiều mẫu đè vào nhau và một số ô không nhận gì. Ta đổi câu hỏi: **muốn đi tới tâm ô này sau dt, khói phải xuất phát từ đâu?**
+
+## Hiểu ý tưởng trước khi viết code
+
+Bài này cho trước gió `(0.18,0)`, chưa giải vận tốc của hộp kín. Với dt=1/60, mỗi bước dịch 0,003 đơn vị world. Ta đi ngược từ tâm ô, lấy mẫu concentration cũ tại điểm xuất phát, rồi ghi vào mảng mới. Đó là semi-Lagrangian.
+
+$$p_{mid}=p-\tfrac12\Delta t\,v(p),\quad p_{old}=p-\Delta t\,v(p_{mid}),\quad d^{new}(p)=d^{old}(p_{old}).$$
+
+Midpoint RK2 dùng vận tốc tại giữa đường, thay vì chỉ tại điểm cuối. Với gió đều nó trùng Euler; lợi ích xuất hiện khi velocity thay đổi theo vị trí. Trước khi bấm N, dự đoán vệt sẽ sang trái hay phải dù backtrace dùng dấu trừ.
+
+<InteractiveLab demo="stable-fluids" mode="fluid-3" />
+
+## Viết code từng bước
+
+### 1. Lấy mẫu giữa các tâm ô
+
+{/* snippet include/fluid/field.hpp#sample */}
+
+```cpp title="include/fluid/field.hpp — nội suy bilinear"
+inline double sample(const Grid& grid, const std::vector<double>& values, int width, int height, Vec2 offset, Vec2 point) {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+        throw std::invalid_argument("Nonfinite sample point");
+    }
+    const double gx = std::clamp(point.x / grid.h - offset.x, 0.0, static_cast<double>(width - 1));
+    const double gy = std::clamp(point.y / grid.h - offset.y, 0.0, static_cast<double>(height - 1));
+    const int x = std::min(width - 2, static_cast<int>(std::floor(gx)));
+    const int y = std::min(height - 2, static_cast<int>(std::floor(gy)));
+    const double tx = gx - x;
+    const double ty = gy - y;
+    const int i = y * width + x;
+    const double lower = (1 - tx) * values[i] + tx * values[i + 1];
+    const double upper = (1 - tx) * values[i + width] + tx * values[i + width + 1];
+    return (1 - ty) * lower + ty * upper;
+}
+```
+
+World/h chưa phải tọa độ mẫu: phải trừ offset `(0.5,0.5)` vì scalar nằm ở tâm. `tx`, `ty` là phần lẻ trong ô nội suy; blend theo x trên hai hàng rồi theo y. Ngoài lattice, ta lặp giá trị sát mép bằng cách giới hạn tọa độ lấy mẫu. Đây là điều kiện lấy mẫu, không phải clamp velocity để giấu lỗi. Ở bài 4, cùng sampler sẽ dùng offset khác cho u và v.
+
+### 2. Đi ngược bằng midpoint
+
+{/* snippet include/fluid/transport.hpp#backtrace */}
+
+```cpp title="include/fluid/transport.hpp — tìm điểm xuất phát"
+inline Vec2 backtrace(const Grid& grid, Vec2 point, double dt) {
+    const Vec2 first = velocityAt(grid, point);
+    const Vec2 middle{point.x - 0.5 * dt * first.x, point.y - 0.5 * dt * first.y};
+    const Vec2 flow = velocityAt(grid, middle);
+    return {point.x - dt * flow.x, point.y - dt * flow.y};
+}
+```
+
+`velocityAt` ở checkpoint 03 trả gió cho trước. Tên hàm giữ nguyên để khi thay bằng MAC, thuật toán backtrace không phải viết lại. `dt` âm ở lượt kiểm sai số bài 12 là một phép vận chuyển ngược riêng; hàm cập nhật thông thường vẫn nhận dt dương.
+
+### 3. Chỉ swap sau cả lượt
+
+{/* snippet include/fluid/transport.hpp#advect-smoke */}
+
+```cpp title="include/fluid/transport.hpp — cập nhật concentration"
+inline void advectSmoke(Grid& grid, double dt = fixedDt) {
+    if (!std::isfinite(dt) || dt <= 0 || dt > 0.1) {
+        throw std::invalid_argument("Advection dt must be in (0,0.1]");
+    }
+    for (int y = 0; y < grid.n; ++y) {
+        for (int x = 0; x < grid.n; ++x) {
+            const int i = y * grid.n + x;
+            const Vec2 point{(x + 0.5) * grid.h, (y + 0.5) * grid.h};
+            const Vec2 origin = backtrace(grid, point, dt);
+            grid.densityNext[i] = sample(grid, grid.density, grid.n, grid.n, {0.5, 0.5}, origin);
+        }
+    }
+    grid.density.swap(grid.densityNext);
+}
+```
+
+Mọi ô đọc density cũ, ghi densityNext. Ghi tại chỗ sẽ khiến ô bên phải đọc kết quả vừa sửa ở ô bên trái; khi đó đổi thứ tự duyệt làm đổi nghiệm.
+
+## Ghép các phần lại
+
+`fluid::step` ở checkpoint 03 chỉ gọi `advectSmoke`, tăng tick và kiểm dữ liệu hữu hạn. N trong panel/phím gọi `App::singleStep`, rồi main vẽ lại đúng Grid đó. Build `project_49_checkpoint_3`; chưa cần chạy tự động. Một tick luôn là 1/60 giây mô hình, không phải thời gian bạn chờ giữa hai lần bấm.
+
+## Thử làm sai để hiểu đúng
+
+Đổi dấu trừ trong backtrace thành cộng: hình đi ngược gió. Bỏ offset 0.5: hình có thể trôi sai dù velocity bằng 0. Sau khi khôi phục, tiến nhiều bước và quan sát vệt mềm dần. Đây là diffusion số của nội suy; **không bảo toàn tổng scalar chính xác**, dù không có bước xóa khói nào.
+
+## Tự kiểm tra kết quả
+
+Scalar hằng 0,4 vẫn là 0,4. Trường affine trong miền dịch đúng `v*dt`; bilinear khớp affine tại điểm giữa mẫu. Một bước không tạo giá trị vượt min/max cũ. Đừng dùng tổng scalar làm tiêu chí phải bằng nhau tuyệt đối, vì cách vận chuyển này không bảo toàn khối lượng rời rạc. Xem [bài gốc của Stam](https://www.research.autodesk.com/app/uploads/2023/03/realtime-fluid-dynamics-for.pdf_recpiqfORriEwf7FN.pdf) về cách tách các bước chất lưu; ta tự triển khai trên MAC, không chép cách bố trí mảng của mã mẫu.
+
+## Bài tập mở rộng
+
+Thử gió dọc, rồi kiểm độ dịch bằng số thay vì nhìn hình. Tiếp theo, [lưu velocity trên cạnh MAC](/projects/stable-fluids/04-van-toc-mac).
