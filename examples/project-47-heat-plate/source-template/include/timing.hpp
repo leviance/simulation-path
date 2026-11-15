@@ -5,12 +5,14 @@
 
 namespace heat {
 
+// dropped tính bằng giây mô hình đã nhân speed, không để thành nợ bù bước.
 struct StepPlan {
     int steps = 0;
     double remainder = 0;
     double dropped = 0;
 };
 
+// [snippet step-plan]
 inline StepPlan planSteps(double accumulator, double elapsed, double dt, double speed = 1) {
     StepPlan plan;
     if (!std::isfinite(dt) || dt <= 0 || !std::isfinite(elapsed) || elapsed < 0 || !std::isfinite(speed) || speed <= 0) {
@@ -42,5 +44,7 @@ inline StepPlan planSteps(double accumulator, double elapsed, double dt, double 
     plan.dropped = (elapsed - accepted) * speed + (due - plan.steps) * dt;
     return plan;
 }
+
+// [/snippet step-plan]
 
 } // namespace heat

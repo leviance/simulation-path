@@ -10,6 +10,7 @@ enum class Boundary {
     ColdRim
 };
 
+// [snippet settings]
 struct Settings {
     double diffusivity = 1.5;
     double dt = 1.0 / 30.0;
@@ -18,6 +19,8 @@ struct Settings {
     Boundary boundary = Boundary::Insulated;
     bool experiment = false;
 };
+
+// [/snippet settings]
 
 struct Stability {
     bool valid = false;
@@ -29,6 +32,7 @@ struct Stability {
 };
 
 // Điều kiện của FTCS này, không phải điều kiện chung cho mọi heat solver.
+// [snippet stability]
 inline Stability stability(const Settings& settings, bool twoDimensions = true) {
     Stability result;
     if (!std::isfinite(settings.diffusivity) || !std::isfinite(settings.dt) || !std::isfinite(settings.dx) || !std::isfinite(settings.dy)) {
@@ -61,5 +65,7 @@ inline Stability stability(const Settings& settings, bool twoDimensions = true) 
     }
     return result;
 }
+
+// [/snippet stability]
 
 } // namespace heat

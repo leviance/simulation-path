@@ -23,6 +23,7 @@ enum class Action {
     Speed
 };
 
+// Nút và phím dùng chung action: không duy trì hai đường sửa dữ liệu khác nhau.
 inline void applyAction(Action action, Field& field, Workshop& state) {
 #if LAB_CHECKPOINT >= 2
     if (action == Action::Hot) {
@@ -89,7 +90,6 @@ inline void applyAction(Action action, Field& field, Workshop& state) {
         state.pause();
         state.settings.experiment = !state.settings.experiment;
         state.dirty = true;
-        field.experimentSteps = 0;
         state.historyCount = 0;
         state.message = "EXPERIMENT: use checker, dt 0.05; step with N; no solver clamping";
     } else if (action == Action::Speed) {

@@ -1,96 +1,150 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Chạy liên tục mà không làm nghiệm phát nổ
+# Tăng dt để nhìn thấy solver mất ổn định
 
 ## Vấn đề cần giải quyết
 
-Bấm N từng bước rất tiện để học công thức. Để quan sát tấm nguội dần, ta muốn chạy tự động. Có hai câu hỏi riêng: mỗi bước solver được phép dài bao nhiêu, và mỗi frame cần chạy bao nhiêu bước?
+Nhấn N rất tiện để kiểm công thức nhưng không tiện ngắm một tấm kim loại nguội dần. Ta cần chạy liên tục, slider đổi D/dt và một cách cho người học **thấy bất ổn thật**, không chỉ đọc thông báo “tham số sai”.
 
-Tăng FPS không chữa được một bước solver quá lớn. Ngược lại, bước ổn định nhưng gọi đúng một lần mỗi frame sẽ làm tốc độ mô phỏng phụ thuộc máy.
+Bắt đầu từ checkpoint 5; đọc 30 phút, viết 55 phút, thử/kiểm 45 phút. Chạy được không có nghĩa bước thời gian nào cũng đúng. Bài này giữ hai chính sách rõ ràng: chế độ thường bảo vệ người dùng, chế độ thí nghiệm chủ động cho phép vượt giới hạn với chốt dừng hữu hạn.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Viết lại stencil để thấy trọng số của từng ô:
+Gom các hệ số của stencil:
 
-$$C_{\mathrm{new}}=(1-2r_x-2r_y)C+r_xL+r_xR+r_yU+r_yD.$$
+$$
+\theta^{n+1}_{x,y}=(1-2r_x-2r_y)\theta^n_{x,y}
++r_x(\theta^n_{x-1,y}+\theta^n_{x+1,y})
++r_y(\theta^n_{x,y-1}+\theta^n_{x,y+1}).
+$$
 
-Tổng trọng số bằng 1. Nếu chúng đều không âm, giá trị mới nằm trong khoảng min/max của các giá trị cũ liên quan. Vì alpha không âm, điều còn lại là:
+Với D≥0, các trọng số không âm khi `rx+ry ≤ 0,5` và tổng bằng 1. Khi đó ứng viên là trung bình có trọng số của các giá trị cũ: không tự tạo cực đại/cực tiểu mới trong bài toán không nguồn với biên phù hợp. Nếu trọng số tâm âm, lập luận này mất hiệu lực; dao động nhỏ có thể lớn dần.
 
-$$r_x+r_y\le\frac12.$$
-
-Khi dx=dy, hai hệ số bằng nhau và mỗi hệ số không vượt 1/4. Mặc định r=0.2. Nếu alpha tăng từ 6 lên 12 mà dt vẫn 1/30 thì r=0.4, trọng số tâm là -0.6. Một xung 1 trong nền 0 sẽ cho tâm âm chỉ sau một bước!
-
-Điều kiện ổn định không đồng nghĩa nghiệm chính xác cao. Sát giới hạn, các dao động ô nóng/lạnh xen kẽ có thể tắt rất chậm hoặc đổi dấu. Giảm dt còn giúp giảm sai số thời gian; giảm kích thước ô cũng buộc xét lại dt vì hệ số chứa dx², dy².
+Với dx=dy=h, điều kiện trở thành `D*dt/h² ≤ 0,25`. Ở h=0,5 và D=1,5, dt tối đa là 1/24≈0,041667 s. Mặc định 1/30 nằm dưới ngưỡng; dt=0,05 nằm trên. Đây là điều kiện của **explicit Euler + stencil này**, không phải của mọi solver nhiệt và cũng không bảo đảm sai số rời rạc nhỏ.
 
 <InteractiveLab demo="heat-plate" mode="heat-6" />
 
-Chọn alpha=12 với dt=1/30. Nút bước/chạy bị khóa và xuất hiện lý do. Đổi dt thành 1/60: r trở về 0.2, solver chạy được. Ứng dụng không âm thầm đổi alpha hoặc clamp nhiệt độ.
+Chọn bàn cờ, đặt D=1,5, dt=0,05. Nhấn từng bước khi chưa bật thí nghiệm để thấy bị chặn. Sau đó bật checkbox và nhấn N vài lần: đọc min/max, không chỉ nhìn màu.
 
 ## Viết code từng bước
 
-### Bước 1 — Chặn trước khi làm thay đổi field
+### 1. Tính điều kiện bằng đúng thông số solver đang dùng
 
-Ngay đầu diffuse đã có:
+`stability` đã được cung cấp từ bước 1D để bảo vệ tham số. Bây giờ ta đọc và hoàn thiện ý nghĩa của nó:
 
-```cpp title="include/diffusion.hpp — từ chối bước không ổn định"
-if (!stable(settings)) {
-    return false;
+{/* snippet include/parameters.hpp#stability */}
+```cpp title="include/parameters.hpp — kiểm hệ số trước khi đổi dữ liệu"
+inline Stability stability(const Settings& settings, bool twoDimensions = true) {
+    Stability result;
+    if (!std::isfinite(settings.diffusivity) || !std::isfinite(settings.dt) || !std::isfinite(settings.dx) || !std::isfinite(settings.dy)) {
+        return result;
+    }
+    if (settings.diffusivity < 0 || settings.dt <= 0 || settings.dx <= 0 || settings.dy <= 0) {
+        return result;
+    }
+    if (settings.boundary != Boundary::Insulated && settings.boundary != Boundary::ColdRim) {
+        return result;
+    }
+    const double squareDx = settings.dx * settings.dx;
+    const double squareDy = settings.dy * settings.dy;
+    if (!std::isfinite(squareDx) || !std::isfinite(squareDy) || squareDx <= 0 || squareDy <= 0) {
+        return result;
+    }
+    result.rx = settings.diffusivity * settings.dt / squareDx;
+    if (twoDimensions) {
+        result.ry = settings.diffusivity * settings.dt / squareDy;
+    }
+    result.sum = result.rx + result.ry;
+    if (!std::isfinite(result.sum)) {
+        return result;
+    }
+    result.valid = true;
+    result.stable = result.sum <= 0.5;
+    result.maximumDt = std::numeric_limits<double>::infinity();
+    if (result.sum > 0) {
+        result.maximumDt = settings.dt * (0.5 / result.sum);
+    }
+    return result;
 }
 ```
 
-Hàm kiểm tra tham số hữu hạn và dương đúng chỗ trước khi tính hệ số. Khi từ chối, current, next và tick chưa bị sửa. Main có trách nhiệm báo lỗi và dừng; không tiếp tục diễn như thể đã mô phỏng một bước.
+Guard kiểm finite và khoảng cách dương trước khi chia, rồi kiểm cả bình phương và tổng hệ số. NaN không phải “một số rất lớn”; so sánh thông thường với NaN có thể khiến guard viết thiếu bị lọt. D=0 hợp lệ: không khuếch tán, không có CFL bound hữu hạn từ khuếch tán, nhưng dt vẫn phải dương/hữu hạn.
 
-### Bước 2 — Tích lũy thời gian thật để quyết định số bước
+### 2. Cho phép nghiệm sai mà không treo ứng dụng
 
-`planSteps` nhận accumulator, elapsed và dt của solver. Phần cốt lõi:
+Solver giữ hai tầng kiểm. Chế độ thường từ chối khi `coefficients.stable` false. Experiment bỏ qua riêng điều kiện đó, **không bỏ kiểm NaN/Inf**. Mỗi bước vẫn tính ứng viên bằng cùng stencil, không dùng một animation khác.
 
-```cpp title="include/timing.hpp — kế hoạch bước cho frame"
-const double accepted = std::min(elapsed, 0.25);
-const double total = accumulator + accepted;
-const double due = std::floor((total + 1e-10) / dt);
-StepPlan plan;
-plan.steps = static_cast<int>(std::min(due, 8.0));
-plan.remainder = std::max(0.0, total - due * dt);
-plan.dropped = elapsed - accepted + (due - plan.steps) * dt;
-return plan;
-```
+Ứng viên chỉ được publish khi hữu hạn và không vượt `|theta|>16`; tối đa 400 bước experiment được chấp nhận trên một field. Hết giới hạn thì pause; reset tạo một thí nghiệm mới. Tắt/bật checkbox không xóa bộ đếm để lách giới hạn. Một ứng viên bị từ chối có thể đã ghi dở `next`, nhưng `current`, tick và time phải giữ nguyên; lần thử sau ghi lại toàn bộ candidate.
 
-`due` là số bước đến hạn; chỉ chạy tối đa tám. Phần dư trừ cả due, không chỉ số bước đã chạy, vì ta chủ động bỏ các bước quá budget. Sai số 1e-10 giây chỉ tránh bỏ sót bước sát ranh giới do làm tròn số.
+Palette thí nghiệm cố định [-1,2], tâm 0,5, để đọc hai phía âm/dương. Renderer có thể bão hòa màu ngoài dải đó; raw theta vẫn giữ nguyên. Đừng thêm clamp trong solver để làm hình “ổn” trở lại.
 
-Không biến elapsed của một frame thành dt rồi đưa thẳng vào diffuse. Một frame đột ngột chậm sẽ làm r tăng mạnh và phá điều kiện ổn định.
+### 3. Đưa slider vào cùng cấu hình
 
-### Bước 3 — Chạy solver rồi mới render
+Native có hai track trên panel: D trong 0–6, dt trong 0,002–0,1. `pollInput` hit-test trong logical coordinates, lưu slider đang kéo và chuyển x thành fraction 0–1. `setSlider` cập nhật đúng `state.settings`; nó pause/reset accumulator chứ không gọi một bước solver.
 
-Trong main, đồng hồ SDL cung cấp elapsed. Khi không pause và không có bước thủ công:
+Phím A/Shift+A đổi D, T/Shift+T chọn các dt mẫu. Nếu dùng bàn phím hoặc Canvas slider, các giá trị vẫn đi vào cùng D/dt. Không tự hạ dt khi D tăng: người học cần thấy ngưỡng thay đổi và tự quyết cách sửa.
 
-```cpp title="src/main.cpp — dùng cùng dt cho scheduler và solver"
-const auto plan = heat::planSteps(accumulator, elapsed, settings.dt);
-accumulator = plan.remainder;
-droppedSeconds += plan.dropped;
-for (int step = 0; step < plan.steps; ++step) {
-    heat::diffuse(field, settings);
+### 4. Tách đồng hồ mô hình khỏi việc vẽ
+
+Khi chạy, frame chỉ gửi elapsed tới bộ lập kế hoạch bước:
+
+{/* snippet include/timing.hpp#step-plan */}
+```cpp title="include/timing.hpp — số bước có giới hạn trong một frame"
+inline StepPlan planSteps(double accumulator, double elapsed, double dt, double speed = 1) {
+    StepPlan plan;
+    if (!std::isfinite(dt) || dt <= 0 || !std::isfinite(elapsed) || elapsed < 0 || !std::isfinite(speed) || speed <= 0) {
+        return plan;
+    }
+    speed = std::clamp(speed, 0.25, 4.0);
+    if (!std::isfinite(elapsed * speed)) {
+        return plan;
+    }
+    if (!std::isfinite(accumulator) || accumulator < 0 || accumulator >= dt) {
+        accumulator = 0;
+    }
+    const double accepted = std::min(elapsed, 0.25);
+    const double total = accumulator + accepted * speed;
+    if (!std::isfinite(total)) {
+        return plan;
+    }
+    const double ratio = total / dt;
+    if (!std::isfinite(ratio)) {
+        // dt cực nhỏ không được làm phép đếm tick overflow hoặc tạo vòng bù vô hạn.
+        plan.steps = 8;
+        plan.remainder = std::fmod(total, dt);
+        plan.dropped = (elapsed - accepted) * speed + total - plan.steps * dt - plan.remainder;
+        return plan;
+    }
+    const double due = std::floor(ratio + 1e-9);
+    plan.steps = static_cast<int>(std::min(due, 8.0));
+    plan.remainder = std::clamp(total - due * dt, 0.0, std::nextafter(dt, 0.0));
+    plan.dropped = (elapsed - accepted) * speed + (due - plan.steps) * dt;
+    return plan;
 }
 ```
 
-N gọi một bước riêng, đồng thời pause và xóa phần dư. Đổi alpha/dt cũng pause để người học xem lại hệ số trước khi chạy. Mất focus dừng cả mô phỏng lẫn nét vẽ.
+`dt` là giây mô hình mỗi tick; `speed` đổi tốc độ mong muốn so với wall time, không đổi công thức một tick. Chỉ nhận tối đa 0,25 s wall time và làm tối đa 8 bước/frame. Phần không làm được được báo bằng `dropped` đã nhân speed; không tích lại thành món nợ vô hạn.
 
 ## Ghép các phần lại
 
-Trong `project_47_checkpoint_6`, Space chạy/dừng, A đổi alpha qua 3/6/12, T đổi dt giữa 1/30 và 1/60. Các tham số và cảnh báo REJECTED hiện ở tiêu đề. Nếu cấu hình không ổn định, main tự chuyển về pause.
+Trong `main`, pause/step không tích accumulator. Khi chạy, `planSteps` cho số lần gọi `diffuse`; cùng vòng update từ bài 3 xử lý mọi bước. Solver từ chối thì dừng ngay batch và báo nguyên nhân. Vẽ vẫn dùng mức thời gian được chấp nhận cuối cùng.
 
-Với dt=1/30, hai giây chia thành frame 15, 30 hoặc 120 FPS đều cần 60 bước nếu không bỏ thời gian. Với dt=1/60 thì cần 120 bước; không lấy 60 bước ở hai dt khác nhau rồi gọi đó là cùng thời gian mô phỏng.
-
-Bộ giới hạn giữ ứng dụng phản hồi khi máy chậm, nhưng khi dropped tăng, mô phỏng **không theo kịp thời gian thật**. Đây là đánh đổi được báo ra, không phải cơ chế tự đảm bảo tốc độ vật lý.
+Build/run `project_47_checkpoint_6`. Mở ở pause. Space chạy/dừng; P ở mốc này chỉ đổi Gaussian/bàn cờ; U bật experiment, N tiến bước. Mất focus tự pause và bỏ thời gian chờ. Trên máy không theo kịp, mô phỏng có thể chậm hơn thời gian thật: đó là chính sách giới hạn công việc, không phải lý do âm thầm tăng dt.
 
 ## Thử làm sai để hiểu đúng
 
-1. Không chạy vòng lặp mất ổn định dài. Chỉ tính bằng tay xung tâm 1 với r=0.4: tâm mới -0.6, bốn bên 0.4. Tổng vẫn bằng 1 nhưng nghiệm đã sai tính dương; bảo toàn tổng chưa đủ.
-2. Tạm gọi diffuse đúng một lần mỗi frame, đổi SDL_Delay từ 16 sang 66. Mô phỏng chậm đi theo FPS. Khôi phục accumulator rồi lặp lại phép thử.
+Với bàn cờ 0,25/0,75, h=0,5, D=1,5, dt=0,05, hệ số của dao động bàn cờ gần `1-8r=-1,4` ở vùng trong. Nó đổi dấu và tăng biên độ. Nhấn từng bước để thấy `min < 0` và `max > 1`, rồi dừng trước khi giá trị vượt giới hạn giữ lại. Ở bản 192², ca chuẩn chấp nhận 12 bước, giữ min≈−13,6735/max≈14,6735 rồi từ chối bước tiếp.
+
+Trở lại chế độ thường, reset cùng bàn cờ và giảm dt về 1/30. Max không còn phình ra. Thử đổi FPS hiển thị 15/120 trong Canvas nhưng giữ D/dt: quãng thời gian mô hình được tính không được phụ thuộc số lần vẽ, trừ khi đã chạm budget và báo dropped.
 
 ## Tự kiểm tra kết quả
 
-alpha=12, dt=1/30 bị từ chối và tick không đổi. dt=1/60 khôi phục ổn định. Space/pause không tích nợ; N chỉ tăng một tick. Frame dài 10 giây không gây vòng bù vô hạn, tối đa tám bước và phần bỏ qua được báo.
+- D/dt slider đổi số trên panel và hệ số thật; đổi tham số pause, không lén tiến tick hoặc sửa dt.
+- Cấu hình thường không ổn định bị từ chối trước swap/tick/time.
+- Experiment có giá trị ngoài 0–1 thật, không publish NaN/Inf hoặc candidate vượt 16; không có vòng lặp thử lại vô hạn.
+- Space, N, pause/mất focus không tạo nợ; số bước mỗi frame ≤8.
+- Chuỗi 15/30/120 FPS trong hai giây cho 60 tick ở dt=1/30, speed 1, nếu không bỏ thời gian.
 
 ## Bài tập mở rộng
 
-Nếu dx và dy cùng giảm một nửa mà alpha giữ nguyên, dt tối đa phải đổi theo tỉ lệ nào? Sau đó đọc [bài 7 — đo trường nhiệt](/projects/heat-plate/07-do-doc-truong-nhiet) để kiểm nghiệm bằng số thay vì dựa vào cảm giác tốc độ.
+Giữ D và miền, giảm h một nửa: bạn cần giảm dt ít nhất bao nhiêu lần để giữ rx/ry? Dự đoán trước khi [nâng lưới lên 192×192 và vẽ bằng texture](/projects/heat-plate/07-texture-va-do-phan-giai). Tham khảo thêm [bài thực hành heat equation của Oxford](https://www.robots.ox.ac.uk/~ian/Teaching/Computation/lab6.pdf), rồi đối chiếu điều kiện với chính scheme vừa viết.

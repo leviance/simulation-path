@@ -357,7 +357,8 @@
     "id": "47",
     "slug": "heat-plate",
     "sourceDirectory": "project-47-heat-plate",
-    "checkpointCount": 8,
+    "checkpointCount": 9,
+    "contentRevision": 2,
     "demoId": "heat-plate"
   },
   {

@@ -1,0 +1,122 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng và chạy tấm kim loại hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Ta đã có ứng dụng tương tác đủ lớn. Trước khi coi nó là một lời giải heat equation, cần kiểm ba việc riêng: thao tác có đúng không, phép cập nhật có đúng không và con số quy mô/hiệu năng có thật không. Một bức hình đẹp không thay được cả ba, nhưng một test PASS cũng không thay được việc mở executable.
+
+Bắt đầu từ checkpoint 8. Bài cuối bổ sung reference, fixture và benchmark hữu hạn, đồng thời bàn giao source đầy đủ. Dự kiến đọc 30 phút, viết 50 phút, kiểm 50 phút; chưa tính thời gian configure/tải SDL hoặc xử lý môi trường.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta dùng nhiều câu hỏi nhỏ có đáp án khác nhau:
+
+1. Xung nhiệt/constant kiểm các trường hợp có thể tính tay.
+2. Oracle theo thông lượng **từng cạnh** kiểm chéo cách viết stencil theo **từng ô**, gồm dx≠dy và biên.
+3. Cosine mode kiểm hệ số suy giảm của scheme rời rạc.
+4. Refinement so scheme với nghiệm PDE liên tục trên cùng miền/thời điểm.
+5. Chạy đủ 192² kiểm visits/ảnh thật; UI và benchmark có checklist riêng.
+
+Gọi `diffuse` hai lần rồi so hai ảnh chỉ kiểm tính lặp lại; cả hai có thể cùng sai. Trong tests, oracle không gọi `sample`, `stability` hoặc `diffuse` của implementation: mỗi cạnh chuyển một lượng từ ô này sang ô kia với dấu đối nhau. Ngoài ra vẫn có đáp án xung tính tay để tránh hai cách viết cùng hiểu sai mô hình.
+
+<InteractiveLab demo="heat-plate" mode="heat-9" />
+
+Nút kiểm dùng fixture nhỏ riêng, không sửa tấm bạn đang vẽ. Chữ PASS ở đây không chứng nhận mọi scene tùy ý hay tốc độ của máy.
+
+## Viết code từng bước
+
+### 1. Phân biệt nghiệm của scheme và nghiệm của PDE
+
+Ở biên cách nhiệt cell-centered, một mode có dạng `cos(kx*pi*(x+0.5)/W)*cos(ky*pi*(y+0.5)/H)`. Sau một bước, biên độ được nhân với:
+
+$$
+G=1-4r_x\sin^2\left(\frac{k_x\pi}{2W}\right)
+-4r_y\sin^2\left(\frac{k_y\pi}{2H}\right).
+$$
+
+Hàm reference tính G trực tiếp từ công thức, không gọi Laplacian của solver:
+
+{/* snippet include/reference.hpp#discrete-amplification */}
+```cpp title="include/reference.hpp — hệ số suy giảm của stencil rời rạc"
+inline double discreteAmplification(const Settings& settings, int width, int height, int modeX, int modeY) {
+    const double rx = settings.diffusivity * settings.dt / (settings.dx * settings.dx);
+    const double ry = settings.diffusivity * settings.dt / (settings.dy * settings.dy);
+    const double sineX = std::sin(std::numbers::pi * modeX / (2.0 * width));
+    const double sineY = std::sin(std::numbers::pi * modeY / (2.0 * height));
+    return 1 - 4 * rx * sineX * sineX - 4 * ry * sineY * sineY;
+}
+```
+
+Với field ban đầu `0.5+0.25*basis`, sau n bước đáp án scheme là `0.5+0.25*G^n*basis`. Tests dùng lưới 17×13, dx=0,7, dy=0,9, D=0,6, dt=0,03; sai số lớn nhất từng ô ≤2e-13 theta. Đây là kiểm parity với scheme, chưa phải chứng minh sai số so với vật lý bằng 0.
+
+Nghiệm PDE liên tục suy giảm theo exponential với chiều dài miền `Lx=W*dx`, `Ly=H*dy`:
+
+{/* snippet include/reference.hpp#continuous-amplitude */}
+```cpp title="include/reference.hpp — biên độ của nghiệm PDE liên tục"
+inline double continuousAmplitude(const Settings& settings, int width, int height, int modeX, int modeY, double time) {
+    const double waveX = std::numbers::pi * modeX / (width * settings.dx);
+    const double waveY = std::numbers::pi * modeY / (height * settings.dy);
+    return 0.25 * std::exp(-settings.diffusivity * (waveX * waveX + waveY * waveY) * time);
+}
+```
+
+`maximumCosineError` kiểm finite rồi lấy chuẩn max trên từng ô. NaN/Inf không được bỏ qua hoặc diễn giải thành sai số 0.
+
+### 2. Giữ đúng miền, thời điểm và điều kiện biên khi refinement
+
+Fixture refinement dùng miền cách nhiệt 16×16, mode (1,1), D=0,5, t=0,4. Chọn N=16/32/64, h=1/0,5/0,25, dt=0,4/0,1/0,025; dt giảm theo h². Mỗi hàng thật sự tính tới cùng t.
+
+Sai số max so với PDE ở ca chuẩn xấp xỉ `1,704e-5 → 4,267e-6 → 1,067e-6` theta, giảm khoảng bốn lần mỗi mức. Test yêu cầu giảm hơn ba lần để có khoảng cho roundoff. Đây là bằng chứng của fixture này, không hứa mọi dữ liệu bất kỳ đều giảm đơn điệu hoặc chính xác bậc hai nếu giữ dt quá lớn.
+
+Ta đang giảm đồng thời sai số không gian và thời gian: sai số không gian bậc hai, explicit Euler theo thời gian bậc một, nhưng dt∝h². Muốn tách từng thành phần, giữ h đủ nhỏ để khảo sát dt, hoặc làm dt đủ nhỏ khi khảo sát h. Sai số mô hình — tấm đồng nhất, không đối lưu/bức xạ — là câu hỏi khác, không giảm chỉ vì thêm ô.
+
+### 3. Giữ test có thể thất bại trong Release
+
+`tests/tests.cpp` dùng bộ đếm failures và trả `EXIT_FAILURE` khi có lỗi, không dựa vào assert có thể bị tắt. Tests bao gồm: kích thước/brush, oracle, xung, symmetry, biên, heater ledger, guard atomically, budget/NaN/overflow, clock, RGBA/padding và commands/CLI.
+
+Ca Gaussian **192×192/120 bước** đòi đủ 36.864 visits mỗi bước. Kiểm I* với `1e-9+|I*ban đầu|*1e-12`, symmetry với 1e-12 theta và min/max với 1e-14 theta. Các ngưỡng không cùng đơn vị và không được gom vào một epsilon tùy tiện.
+
+Thí nghiệm bàn cờ phải bị từ chối ở mode thường; bật experiment phải tạo giá trị âm/vượt 1 thật rồi dừng trước candidate vượt 16. Test giữ bản copy current/time/tick trước bước bị từ chối để bắt việc publish dở chừng.
+
+## Ghép các phần lại
+
+[Tải lại ZIP Project 47](/downloads/project-47-heat-plate.zip) vào thư mục mới. Nó chứa starter, **chín checkpoint**, final, include/src, README và tests; không cần Node.js để học/build C++. Mã đầy đủ của checkpoint 9 hiển thị cuối trang, còn `final/` là bản hoàn chỉnh tương ứng.
+
+```powershell title="Terminal — build và kiểm gói độc lập trên Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --parallel 1
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 1
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+.\build\Release\project_47_final.exe
+```
+
+Mặc định chỉ final/tests được build; `BUILD_CHECKPOINTS=ON` thêm starter và checkpoint 1–9. Trên generator một cấu hình, executable nằm ngay trong build; chọn `-DCMAKE_BUILD_TYPE=Release` lúc configure.
+
+Hai lệnh hữu hạn không tạo window:
+
+```powershell title="Terminal — fixture và benchmark CPU riêng"
+.\build\Release\project_47_final.exe --verify
+.\build\Release\project_47_final.exe --benchmark --size 192 --steps 120 --repeats 7
+```
+
+`--verify` chạy fixture cố định, không nhận thêm cờ viewer/model rồi âm thầm bỏ qua chúng. Benchmark khởi tạo lại cùng input ngoài vùng đo, warm-up 32 bước, lặp 7 batch×120 bước. Công bố raw trung bình ms/bước của từng batch, median/p95 của các batch, CPU/compiler/build/N/D/dt/h/boundary/preset. Vùng đo gồm diffuse và vòng kiểm deadline, không gồm reset, stats, ảnh, upload hoặc render; đây không phải timing GPU. Có deadline 20 giây và giới hạn 100 triệu **timed** cell visits; yêu cầu quá lớn bị từ chối trước khi chạy.
+
+## Thử làm sai để hiểu đúng
+
+Trong bản thử riêng, bỏ hệ số `ry` hoặc đổi dấu một nhánh. Ca xung/anisotropic oracle phải thất bại và CTest trả khác 0 ở cả Debug/Release. Khôi phục source trước khi benchmark; đo một kernel sai nhanh hơn không phải cải tiến.
+
+Giảm epsilon thật nhỏ hơn roundoff rồi xem test fail; điều đó không làm mô hình chính xác hơn. Ngược lại, tăng epsilon để một công thức sai cũng pass sẽ làm phép kiểm mất ý nghĩa. Giữ tên đại lượng, chuẩn sai số và lý do chọn ngưỡng cạnh fixture.
+
+## Tự kiểm tra kết quả
+
+- Build starter, cả chín checkpoint và final, không chỉ target test thuần; CTest Debug/Release có thể fail thật.
+- Mở final: tô/chuột phải, phím, slider D/dt, heater/unpin, B/P/G, pause/step/reset/clear, probe, F1/F2, resize và mất focus.
+- N=192 thật sự update/render 36.864 ô, texture capacity 65.536 không bị ghi nhầm thành số ô đã xử lý; không dùng Canvas để thay nghiệm thu C++.
+- Các phép kiểm phân biệt kín/không nguồn với heater/vành lạnh; cosine scheme với PDE; update với ảnh/present và benchmark Release với Debug.
+- Chạy bất ổn và benchmark đều kết thúc hữu hạn; source/ZIP không chứa thư viện build hoặc output kiểm thử.
+
+## Bài tập mở rộng
+
+Thêm một thí nghiệm riêng so sai số thời gian ở cùng lưới thật mịn, rồi một thí nghiệm so không gian với dt đủ nhỏ. Ghi rõ bạn giữ gì cố định; đừng thay epsilon để hợp thức hóa kết quả. Để đi tiếp từ scalar field sang trường vector, xem [Project 48 — Bản đồ gió](/projects/wind-map).

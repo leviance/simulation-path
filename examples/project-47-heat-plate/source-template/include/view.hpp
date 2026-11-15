@@ -30,6 +30,7 @@ inline bool mouseCell(SDL_Renderer* renderer, const Field& field, float windowX,
 }
 
 #if LAB_CHECKPOINT >= 1
+// [snippet draw-grid]
 inline void drawGrid(SDL_Renderer* renderer, const Field& field) {
     const Rect view = sceneRect(field, false);
     const float cellWidth = view.width / field.width;
@@ -42,9 +43,12 @@ inline void drawGrid(SDL_Renderer* renderer, const Field& field) {
         }
     }
 }
+
+// [/snippet draw-grid]
 #endif
 
 #if LAB_CHECKPOINT >= 7
+// [snippet create-texture]
 inline void createTexture(SdlResources& sdl) {
     // Reserve capacity cho cả ba preset: đổi độ phân giải không cấp lại GPU resource.
     SDL_Texture* candidate = SDL_CreateTexture(sdl.renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, 256, 256);
@@ -59,6 +63,9 @@ inline void createTexture(SdlResources& sdl) {
     sdl.texture = candidate;
 }
 
+// [/snippet create-texture]
+
+// [snippet upload-grid]
 inline void uploadGrid(SDL_Texture* texture, const Field& field, bool experiment, bool showPins) {
     if (field.width > 256 || field.height > 256) {
         throw std::invalid_argument("Viewer texture capacity is 256x256; CPU field limit is separate");
@@ -79,12 +86,17 @@ inline void uploadGrid(SDL_Texture* texture, const Field& field, bool experiment
     SDL_UnlockTexture(texture);
 }
 
+// [/snippet upload-grid]
+
+// [snippet draw-texture]
 inline void drawTexture(SDL_Renderer* renderer, SDL_Texture* texture, const Field& field, bool showcase) {
     const Rect view = sceneRect(field, showcase);
     const SDL_FRect source{0, 0, static_cast<float>(field.width), static_cast<float>(field.height)};
     const SDL_FRect rectangle{view.x, view.y, view.width, view.height};
     requireSdl(SDL_RenderTexture(renderer, texture, &source, &rectangle), "draw temperature texture");
 }
+
+// [/snippet draw-texture]
 #endif
 
 } // namespace heat

@@ -1,9 +1,14 @@
 #include "brush.hpp"
+#include "commands.hpp"
 #include "diffusion.hpp"
+#include "layout.hpp"
 #include "metrics.hpp"
+#include "options.hpp"
+#include "pixels.hpp"
 #include "presets.hpp"
 #include "reference.hpp"
 #include "timing.hpp"
+#include "validation.hpp"
 #include <array>
 #include <cstdlib>
 #include <iostream>
@@ -290,6 +295,89 @@ void testClock() {
     check(tiny.steps == 8 && std::isfinite(tiny.dropped), "extreme positive timestep cannot overflow the step-count conversion");
 }
 
+void testWorkshopAndBytes() {
+    heat::Workshop state;
+    heat::Field field = heat::makeField(heat::Preset::Hotspot, 192);
+    check(state.paused && state.size == 192, "final workshop starts paused at the real 192-square acceptance preset");
+    heat::applyAction(heat::Action::Run, field, state);
+    check(!state.paused, "Run resumes");
+    heat::applyAction(heat::Action::Run, field, state);
+    check(state.paused, "Run toggles back to pause");
+    heat::applyAction(heat::Action::Heater, field, state);
+    check(state.brushMode == heat::BrushMode::Heater, "Heater is an explicit brush mode");
+    heat::applyAction(heat::Action::Heater, field, state);
+    check(state.brushMode == heat::BrushMode::Temperature, "Heater toggles back to a one-time input");
+    state.dragging = heat::Slider::Timestep;
+    heat::setSlider(state, heat::Slider::Timestep, (0.05 - 0.002) / 0.098);
+    check(near(state.settings.dt, 0.05, 1e-14) && state.dragging == heat::Slider::Timestep && state.paused, "slider pauses without losing the active drag");
+    heat::applyAction(heat::Action::Experiment, field, state);
+    check(state.settings.experiment && state.dirty && state.paused, "unsafe experiment is explicit, paused and recolors immediately");
+    field.experimentSteps = 400;
+    heat::applyAction(heat::Action::Experiment, field, state);
+    heat::applyAction(heat::Action::Experiment, field, state);
+    check(field.experimentSteps == 400, "toggling experiment cannot bypass the per-field step budget");
+    heat::applyAction(heat::Action::Resolution, field, state);
+    check(state.size == 256 && field.current.size() == 65536 && state.settings.dx == 0.375 && state.settings.dt == 0.05, "resolution changes h over fixed L, never repairs dt silently");
+    check(!heat::stability(state.settings).stable, "resolution change can make the unchanged timestep unstable");
+    heat::applyAction(heat::Action::Clear, field, state);
+    check(state.preset == heat::Preset::Hotspot && heat::measure(field, state.settings).maximum == 0, "Clear does not replace the reset preset");
+    heat::applyAction(heat::Action::Reset, field, state);
+    check(heat::measure(field, state.settings).maximum > 0.99, "Reset restores the chosen input rather than the cleared field");
+    int x = -1;
+    int y = -1;
+    check(heat::logicalCell(field, 24, 132, x, y) && x == 0 && y == 0, "logical viewport maps top-left to first cell");
+    check(!heat::logicalCell(field, 744, 852, x, y), "half-open viewport excludes right/bottom outside edges");
+    check(!heat::logicalCell(field, std::numeric_limits<float>::quiet_NaN(), 140, x, y), "non-finite coordinates rejected before integer conversion");
+    check(heat::logicalCell(field, 255.5F, 0.5F, x, y, true) && x == 255 && y == 0, "clean view uses field logical coordinates, not debug layout");
+    heat::Field row(3, 1);
+    row.current = {0, 0.5, 1};
+    std::array<std::uint8_t, 20> bytes;
+    bytes.fill(77);
+    heat::encodeRow(row, 0, bytes.data(), false, false);
+    for (int column = 0; column < row.width; ++column) {
+        const auto color = heat::heatColor(row.current[static_cast<std::size_t>(column)]);
+        const auto offset = static_cast<std::size_t>(column) * 4;
+        check(bytes[offset] == color.r && bytes[offset + 1] == color.g && bytes[offset + 2] == color.b && bytes[offset + 3] == 255, "RGBA byte order is independent of host packed-integer endian");
+    }
+    check(bytes[12] == 77 && bytes.back() == 77, "row encoder never writes into pitch padding");
+    check(row.current[2] == 1, "color encoding does not mutate raw solver values");
+}
+
+void testArguments() {
+    auto parses = [](const std::vector<const char*>& arguments) {
+        std::vector<std::string> argumentStrings;
+        for (const char* argument : arguments) {
+            argumentStrings.emplace_back(argument);
+        }
+        // Tạo xong strings trước khi mượn data(), không cần ép bỏ const của literal.
+        std::vector<char*> argumentPointers;
+        for (std::string& argument : argumentStrings) {
+            argumentPointers.push_back(argument.data());
+        }
+        return heat::parseOptions(static_cast<int>(argumentPointers.size()), argumentPointers.data());
+    };
+    check(parses({"p47", "--hidden", "--seconds", "0.1"}).size == 192, "finite hidden viewer defaults to acceptance resolution");
+    const std::vector<std::vector<const char*>> invalidCases{
+        {"p47", "--hidden"},
+        {"p47", "--dt", "nan"},
+        {"p47", "--size", "128x"},
+        {"p47", "--verify", "--size", "192"},
+        {"p47", "--verify", "--run"},
+        {"p47", "--benchmark", "--experiment"},
+        {"p47", "--benchmark", "--hidden"},
+        {"p47", "--steps", "30"},
+        {"p47", "--benchmark", "--size", "256", "--steps", "1000", "--repeats", "9"}};
+    for (const auto& arguments : invalidCases) {
+        bool rejected = false;
+        try {
+            static_cast<void>(parses(arguments));
+        } catch (const std::exception&) {
+            rejected = true;
+        }
+        check(rejected, "CLI rejects invalid, ignored, conflicting or unbounded arguments");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -299,6 +387,9 @@ int main() {
     testSafetyAndInstability();
     testReferenceAndRefinement();
     testClock();
+    testWorkshopAndBytes();
+    testArguments();
+    check(heat::validatePlate(std::cout), "CLI fixture runner agrees with independent CPU test coverage");
     if (failures != 0) {
         return EXIT_FAILURE;
     }

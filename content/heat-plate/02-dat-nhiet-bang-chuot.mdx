@@ -1,95 +1,161 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Đặt vùng nóng và lạnh bằng chuột
+# Dùng chuột đặt vùng nóng và lạnh
 
 ## Vấn đề cần giải quyết
 
-Tấm ở bài trước chỉ có một khối nóng cố định. Ta cần click ở đâu thì đặt vùng nóng ở đó, hoặc chọn bút lạnh để làm nguội một vùng. Hãy hoàn thành input khi solver còn chưa chạy: nét vẽ đứng yên giúp phát hiện click lệch và các khoảng hở dễ hơn.
+Tấm đã hiện đúng nhưng vùng nóng còn cố định trong source. Ta muốn chạm vào đâu thì làm nóng ở đó, kéo nhanh vẫn có nét liền, và thu nhỏ cửa sổ không khiến bút lệch khỏi con trỏ. Bài này chỉ sửa dữ liệu bằng input; **chưa cho nhiệt tự lan**.
 
-Tiếp tục từ checkpoint 01. Bài này thay đổi `field.hpp`, `view.hpp` và main; chưa đụng đến phương trình nhiệt.
+Bắt đầu từ checkpoint 1. Dự kiến đọc 20 phút, viết 40 phút, thử 25 phút; setup không tính vào thời lượng. Sau bài, chuột trái đặt mức đang chọn, chuột phải đặt lạnh; mũi tên/Enter làm được thao tác tương đương.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Mouse event dùng tọa độ window, còn renderer dùng 64 × 48 đơn vị logical. Không chia mouseX cho một kích thước ô cố định: sau resize hoặc khi có letterbox, phép chia đó sẽ sai.
+Chuột trả tọa độ cửa sổ, nhưng tấm chỉ chiếm một vùng trong hệ logical. Cần đi qua hai lần đổi tọa độ: window → logical bằng SDL, rồi logical → cell bằng hình chữ nhật của tấm.
 
-Sau khi đổi sang logical coordinates, ô được chọn là:
+Sau khi có ô `(x,y)`, brush tròn giữ các điểm thỏa `offsetX² + offsetY² ≤ radius²`. Bán kính tính bằng **ô**, không bằng pixel màn hình, nên cùng radius cho cùng dấu bút sau resize.
 
-$$x_{\mathrm{cell}}=\lfloor x_{\mathrm{logical}}\rfloor,\qquad y_{\mathrm{cell}}=\lfloor y_{\mathrm{logical}}\rfloor.$$
-
-Brush bán kính r tô những offset thỏa $dx^2+dy^2\le r^2$. Bán kính 0 vẫn đặt được một ô. Ta **đặt** nhiệt độ bằng 1 hoặc 0, không cộng thêm nhiệt theo số event. Đây chưa phải nguồn phát nhiệt có công suất xác định.
+Đây là bút đặt nhiệt độ: ghi theta bằng 0 hoặc 1 tại những mẫu input. Giữ chuột đứng yên không liên tục cấp năng lượng. Một nguồn giữ nóng sẽ được xây riêng ở bài 5.
 
 <InteractiveLab demo="heat-plate" mode="heat-2" />
 
-Chọn “Tấm lạnh”, bán kính 0 và kéo nhanh một nét. Canvas cho phép dùng mũi tên rồi Enter để đặt bút mà không cần chuột. Cả tấm vẫn đứng yên vì ta chưa cập nhật nhiệt.
+Trước khi kéo, đoán xem radius 0 tô mấy ô. Sau đó thử kéo thật nhanh và đi ra ngoài rồi quay lại: đoạn nằm ngoài tấm không được biến thành một đường nối xuyên qua dữ liệu.
 
 ## Viết code từng bước
 
-### Bước 1 — Đổi tọa độ bằng renderer đang dùng
+### 1. Chỉ nhận tọa độ thật sự nằm trong tấm
 
-Trong `mouseCell`, gọi SDL trước khi lấy phần nguyên:
+`input.hpp` gọi `SDL_RenderCoordinatesFromWindow` một lần cho mỗi mouse event, lấy `x,y` logical. Sau đó dùng hàm thuần trong `layout.hpp`:
 
-```cpp title="include/view.hpp — chuyển từ window sang logical"
-float logicalX = 0;
-float logicalY = 0;
-if (!SDL_RenderCoordinatesFromWindow(renderer, mouseX, mouseY, &logicalX, &logicalY)) {
-    return false;
+{/* snippet include/layout.hpp#logical-cell */}
+```cpp title="include/layout.hpp — đổi logical coordinates thành ô"
+inline bool logicalCell(const Field& field, float logicalX, float logicalY, int& x, int& y, bool showcase = false) {
+    if (!std::isfinite(logicalX) || !std::isfinite(logicalY)) {
+        return false;
+    }
+    const Rect rectangle = sceneRect(field, showcase);
+    if (!inside(rectangle, logicalX, logicalY)) {
+        return false;
+    }
+    x = static_cast<int>(std::floor((logicalX - rectangle.x) * field.width / rectangle.width));
+    y = static_cast<int>(std::floor((logicalY - rectangle.y) * field.height / rectangle.height));
+    return field.contains(x, y);
 }
 ```
 
-Hàm kiểm tra số hữu hạn và bounds, rồi mới floor. Nếu click trong letterbox, trả false. Không clamp điểm đó vào ô gần nhất: người dùng chưa chạm tấm mà mép tấm lại bị tô là một lỗi input.
+Mép phải/dưới bị loại bằng khoảng nửa mở. Nếu nhận luôn điểm đúng `view.x + view.width`, phép chia có thể cho `x == field.width`, vượt mảng. Kiểm finite cũng phải trước khi đổi float sang int.
 
-### Bước 2 — Tô một dấu tròn
+### 2. Đóng một dấu bút lên dữ liệu
 
-`paintDisk` nhận Field và tọa độ ô; nó không biết SDL. Vòng lặp duyệt một hình vuông nhỏ quanh tâm rồi loại các điểm nằm ngoài hình tròn:
+Thêm `include/brush.hpp`; hàm dưới chỉ đi qua một hình vuông nhỏ quanh tâm, rồi bỏ các điểm ngoài đĩa hoặc ngoài field:
 
-```cpp title="include/field.hpp — chỉ ghi những ô thuộc brush"
-const int x = centerX + dx;
-const int y = centerY + dy;
-if (dx * dx + dy * dy <= radius * radius && field.contains(x, y)) {
-    field.current[field.index(x, y)] = value;
+{/* snippet include/brush.hpp#paint-disk */}
+```cpp title="include/brush.hpp — đặt nhiệt độ trong một đĩa"
+inline void paintDisk(Field& field, const Settings& settings, int centerX, int centerY, int radius, double value, BrushMode mode = BrushMode::Temperature) {
+    if (!field.contains(centerX, centerY) || !std::isfinite(value)) {
+        return;
+    }
+    radius = std::clamp(radius, 0, 24);
+    value = std::clamp(value, 0.0, 1.0);
+    for (int offsetY = -radius; offsetY <= radius; ++offsetY) {
+        for (int offsetX = -radius; offsetX <= radius; ++offsetX) {
+            if (offsetX * offsetX + offsetY * offsetY > radius * radius) {
+                continue;
+            }
+            const int x = centerX + offsetX;
+            const int y = centerY + offsetY;
+            if (!field.contains(x, y)) {
+                continue;
+            }
+            const std::size_t index = field.index(x, y);
+            field.current[index] = value;
+        }
+    }
+    static_cast<void>(settings);
+    static_cast<void>(mode);
 }
 ```
 
-`contains` bảo vệ mảng khi brush chạm mép. Bán kính được giới hạn 0–8; giá trị bút giới hạn 0–1. Giới hạn **input của bút** là một quyết định giao diện, khác hẳn việc clamp kết quả solver để giấu nghiệm sai.
+Clamp `value` ở đây giới hạn **đầu vào của bút**, không sửa kết quả solver. Ta sẽ không dùng cách này để che một nghiệm nhiệt bị âm ở bài 6. Radius 0 vẫn tô đúng tâm vì `0 ≤ 0`.
 
-### Bước 3 — Nối các sample, nhưng không nối qua ngoài lưới
+### 3. Nối các mẫu chuột bằng nhiều dấu bút
 
-Mouse không gửi một event cho mỗi ô. Nếu chỉ đóng dấu ở điểm mới nhất, nét bán kính 0 sẽ đứt khi rê nhanh. `paintStroke` chia đoạn theo thành phần dịch chuyển lớn hơn:
+Event không xuất hiện ở mọi pixel bạn đi qua. Lấy `steps=max(|dx|,|dy|)`, nội suy tâm brush từ mẫu trước đến mẫu hiện tại, rồi gọi cùng `paintDisk`:
 
-```cpp title="include/field.hpp — số bước nội suy"
-const int dx = x1 - x0;
-const int dy = y1 - y0;
-const int steps = std::max(std::abs(dx), std::abs(dy));
-```
-
-Nếu steps bằng 0, đóng một dấu và return. Với trường hợp còn lại:
-
-```cpp title="include/field.hpp — đóng dấu trên đoạn"
-for (int i = 0; i <= steps; ++i) {
-    const double t = static_cast<double>(i) / steps;
-    const int x = static_cast<int>(std::lround(x0 + t * dx));
-    const int y = static_cast<int>(std::lround(y0 + t * dy));
-    paintDisk(field, x, y, radius, value);
+{/* snippet include/brush.hpp#paint-stroke */}
+```cpp title="include/brush.hpp — nối hai mẫu input"
+inline void paintStroke(Field& field, const Settings& settings, int x0, int y0, int x1, int y1, int radius, double value, BrushMode mode = BrushMode::Temperature) {
+    if (!field.contains(x0, y0) || !field.contains(x1, y1)) {
+        return;
+    }
+    const int dx = x1 - x0;
+    const int dy = y1 - y0;
+    const int steps = std::max(std::abs(dx), std::abs(dy));
+    if (steps == 0) {
+        paintDisk(field, settings, x0, y0, radius, value, mode);
+        return;
+    }
+    for (int step = 0; step <= steps; ++step) {
+        const double fraction = static_cast<double>(step) / steps;
+        const int x = static_cast<int>(std::lround(x0 + fraction * dx));
+        const int y = static_cast<int>(std::lround(y0 + fraction * dy));
+        paintDisk(field, settings, x, y, radius, value, mode);
+    }
 }
 ```
+
+Không chia cho 0 khi hai điểm trùng nhau. Cả hai đầu phải nằm trong field; khi ra ngoài, input đặt `previousValid=false`. Lần trở lại bắt đầu một đoạn mới thay vì nối qua vùng ngoài.
+
+### 4. Dùng chung thao tác cho chuột và phím
+
+`Workshop` giữ cursor, brush, điểm trước và cờ `dirty`; nó không chứa một solver bí mật. `stamp` là chỗ gọi brush và báo ảnh cần vẽ lại:
+
+{/* snippet include/workshop.hpp#stamp */}
+```cpp title="include/workshop.hpp — một thao tác tô dùng chung"
+inline void stamp(Field& field, Workshop& state, int x, int y, bool join) {
+    double value = state.brushValue;
+    if (state.erasing) {
+        value = 0;
+    }
+    if (join && state.previousValid) {
+        paintStroke(field, state.settings, state.previousX, state.previousY, x, y, state.radius, value, state.brushMode);
+    } else {
+        paintDisk(field, state.settings, x, y, state.radius, value, state.brushMode);
+    }
+    state.cursorX = x;
+    state.cursorY = y;
+    state.previousX = x;
+    state.previousY = y;
+    state.previousValid = true;
+    state.dirty = true;
+}
+```
+
+`erasing` ở đây nghĩa là chuột phải đặt theta=0, không xóa ô khỏi lưới. Bút nóng/lạnh đều giữ nguyên số ô.
 
 ## Ghép các phần lại
 
-Main lưu `drawing`, `previousValid` và điểm trước. Nhấn chuột trái: bắt đầu nét và tô ngay. Rê chuột: nối từ điểm trước đến điểm mới. Nhả nút hoặc mất focus: kết thúc nét. Khi ra ngoài lưới, bỏ previousValid để lần vào lại không tạo đường nối qua vùng chưa được vẽ.
+`pollInput(renderer,field,state,running)` đã nằm trong vòng `while` của `main`. Nối các nhánh mouse button down/motion/up tới `stamp`: down bắt đầu nét và tô ngay, motion nối khi `drawing`, up kết thúc nét. Source checkpoint có đầy đủ hàm này để bạn theo từ event tới dữ liệu và vòng vẽ.
 
-Phím 1 chọn nóng, 2 chọn lạnh; [ và ] đổi bán kính; C đưa cả tấm về 0; R khôi phục cảnh. Build `project_47_checkpoint_2`. Trong bản SDL, thao tác đặt ô bằng mũi tên/Enter sẽ được thêm ở bài 7.
+Native dùng `SDL_CaptureMouse` khi kéo; mất focus, resize hoặc kết thúc input hủy nét. Canvas dùng pointer capture; nếu pointer ra ngoài hình tấm, chỉ xóa điểm nối chứ không ép nó vào mép.
 
-Giữ chuột đứng yên sau khi click không tiếp tục giữ nhiệt độ tại 1. Khi đã có solver, vùng đó sẽ nguội dần. Muốn một nguồn giữ nóng liên tục cần một mô hình riêng, không nên âm thầm biến brush thành nguồn đó.
+Phím 1/2 chọn nóng/lạnh, `[`/`]` đổi radius; mũi tên chọn ô và Enter đóng dấu. `C` xóa nhiệt, `R` tạo lại Gaussian. `Field` được giữ qua các frame như bài trước; chỉ reset mới thay nó.
+
+Build/run `project_47_checkpoint_2`. Đóng cửa sổ trước khi build lại trên Windows để tránh executable đang bị khóa.
 
 ## Thử làm sai để hiểu đúng
 
-1. Thay paintStroke bằng paintDisk tại mỗi mouse motion. Rê thật nhanh với bán kính 0 để thấy khoảng hở, rồi khôi phục nội suy.
-2. Tạm không hủy previousValid khi mouse ra ngoài. Kéo ra khỏi mép và vào ở vị trí khác: đường nối dài ngoài ý muốn xuất hiện. Sửa lại trước khi thêm solver.
+Tạm bỏ `paintStroke`, chỉ gọi `paintDisk` ở mỗi motion. Giảm radius về 0 rồi kéo nhanh: dấu bút có thể đứt vì thiếu mẫu. Khôi phục nội suy, không chữa bằng cách phóng brush thật to.
+
+Tiếp theo, bỏ kiểm ngoài viewport trong một bản thử riêng. Tô lên panel hoặc letterbox có thể chạm vào mép tấm nếu bạn clamp tọa độ. Đây là lỗi input, không phải lỗi hiển thị. Khôi phục kiểm bounds trước khi sang bài sau.
 
 ## Tự kiểm tra kết quả
 
-Click sau resize vẫn trúng ô. Bán kính 0 đặt đúng một ô, nét nhanh không đứt giữa các sample hợp lệ. Brush ở góc không ghi ra ngoài vector. Tô lạnh trả giá trị về 0; nhả chuột bên ngoài hoặc mất focus không để bút mắc kẹt.
+- Radius 0 tô một ô; radius 1 ở góc chỉ tô ba ô hợp lệ.
+- Chuột phải làm lạnh đúng chỗ; 1/2 và Enter cho cùng kết quả như chuột.
+- Kéo nhanh không để khoảng hở lớn; ra ngoài và quay lại không tạo đường nối lạ.
+- `C` xóa, `R` khôi phục Gaussian; resize không đổi mảng và không làm lệch dấu bút.
+- Để yên vẫn không có nhiệt lan. Không thêm một phép blur trong vòng vẽ để tạo chuyển động sớm.
 
 ## Bài tập mở rộng
 
-Thêm mức bút 0.5 và kiểm tra bằng inspector trên Canvas. Giải thích vì sao vẽ lại cùng một ô bằng bút 1 không làm nó thành 2. Sang [bài 3 — nhiệt lan trên một hàng](/projects/heat-plate/03-nhiet-lan-tren-mot-hang) khi input đã ổn.
+Thêm phím đặt theta=0,5 và đoán màu trước khi chạy. Giữ mọi thao tác đi qua cùng hàm brush; đừng tạo một đường ghi mảng riêng cho phím mới. Tiếp theo ta sẽ [cho nhiệt lan trên một hàng](/projects/heat-plate/03-nhiet-lan-tren-mot-hang).

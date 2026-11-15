@@ -6,7 +6,7 @@ Ngày 15/11/2026 (Asia/Bangkok). Nguồn chuẩn: Project 47 và hợp đồng 0
 
 Bản hiện tại có nền sai phân hữu ích: double buffer, stencil, kiểm biên và cosine mode. Nhưng final chỉ 64×48, thấp hơn mức tối thiểu 128×128. Native chỉ đổi D/dt bằng phím, không có slider. Mọi cấu hình bất ổn đều bị chặn nên người học chưa quan sát được phân kỳ. Vẽ từng ô và thông tin chủ yếu ở title/terminal chưa đủ cho công cụ thí nghiệm lớn. Canvas clone cả field vào React mỗi lần publish.
 
-Không đổi đặc tả để hợp thức hóa các thiếu sót này. Nguồn hiện có được giữ trong `.validation/retired-project-47-v1`; chưa gọi bản xây lại là đã nghiệm thu.
+Không đổi đặc tả để hợp thức hóa các thiếu sót này. Nguồn lúc bắt đầu được giữ trong `.validation/retired-project-47-v1`. Đây là kế hoạch trước triển khai; kết quả và phạm vi nghiệm thu được ghi riêng trong [hồ sơ kiểm chứng Project 47](project-47-rebuild-verification.md).
 
 ## Đích đến
 
@@ -14,7 +14,7 @@ Một ứng dụng C++20/SDL 3.4.8 có heatmap 192×192, tô nóng/lạnh, heate
 
 Theta chuẩn hóa, không tự gán Celsius/Joule. Heater áp đặt theta, không phải nguồn công suất cố định. Bảo toàn tích phân rời rạc chỉ được kiểm khi biên cách nhiệt và không có heater/input. Vành lạnh giữ tâm các ô ngoài ở 0, khác hình học ghost-cell cách nhiệt; không đánh đồng hai miền khi bàn về convergence.
 
-Chế độ thường chặn bước sai CFL trước khi publish. Chế độ thí nghiệm cho phép bước không ổn định để thấy đổi dấu/growth thật, không clamp nghiệm. Giới hạn 400 bước, dừng khi |theta| đạt 16, từ chối candidate NaN/Inf và giữ field finite cuối. Nhãn/thang màu phải phân biệt dữ liệu vượt 0–1 với clipping chỉ để vẽ.
+Chế độ thường chặn bước sai CFL trước khi publish. Chế độ thí nghiệm cho phép bước không ổn định để thấy đổi dấu/growth thật, không clamp nghiệm. Giới hạn 400 bước, dừng trước khi ghi nhận candidate có |theta| > 16, từ chối NaN/Inf và giữ field finite cuối. Nhãn/thang màu phải phân biệt dữ liệu vượt 0–1 với clipping chỉ để vẽ.
 
 ## Trình tự dạy dự kiến
 

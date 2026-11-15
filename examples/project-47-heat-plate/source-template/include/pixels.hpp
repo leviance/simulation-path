@@ -18,8 +18,7 @@ inline Rgba mixColor(Rgba first, Rgba second, double fraction) {
         static_cast<std::uint8_t>(std::lround(first.r + (second.r - first.r) * fraction)),
         static_cast<std::uint8_t>(std::lround(first.g + (second.g - first.g) * fraction)),
         static_cast<std::uint8_t>(std::lround(first.b + (second.b - first.b) * fraction)),
-        255
-    };
+        255};
 }
 
 inline Rgba heatColor(double theta, bool experiment = false) {

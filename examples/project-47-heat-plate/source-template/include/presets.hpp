@@ -34,6 +34,7 @@ inline const char* presetName(Preset preset) {
     return "GAUSSIAN HOTSPOT";
 }
 
+// [snippet make-field]
 inline Field makeField(Preset preset = Preset::Hotspot, int size = 32) {
     Field field(size, size);
 #if LAB_CHECKPOINT >= 1
@@ -51,18 +52,30 @@ inline Field makeField(Preset preset = Preset::Hotspot, int size = 32) {
                     value = 0;
                 }
 #endif
-            } else if (preset == Preset::Uniform) {
+            }
+#if LAB_CHECKPOINT >= 8
+            if (preset == Preset::Uniform) {
                 value = 0.4;
-            } else if (preset == Preset::Checker) {
+            }
+#endif
+#if LAB_CHECKPOINT >= 6
+            if (preset == Preset::Checker) {
                 value = 0.25;
                 if ((x + y) % 2 != 0) {
                     value = 0.75;
                 }
-            } else if (preset == Preset::Cosine) {
+            }
+#endif
+#if LAB_CHECKPOINT >= 8
+            if (preset == Preset::Cosine) {
                 value = 0.5 + 0.25 * std::cos(4 * std::numbers::pi * normalizedX) * std::cos(4 * std::numbers::pi * normalizedY);
-            } else if (preset == Preset::Heaters) {
+            }
+#endif
+#if LAB_CHECKPOINT >= 5
+            if (preset == Preset::Heaters) {
                 value = 0.15;
             }
+#endif
             field.current[field.index(x, y)] = value;
         }
     }
@@ -78,6 +91,8 @@ inline Field makeField(Preset preset = Preset::Hotspot, int size = 32) {
     static_cast<void>(preset);
     return field;
 }
+
+// [/snippet make-field]
 
 // Các preset lớn cùng phủ miền cách nhiệt 96×96 đơn vị độ dài.
 inline Settings settingsForSize(int size) {

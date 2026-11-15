@@ -22,6 +22,8 @@ inline Rect sceneRect(const Field& field, bool showcase) {
     return {24, 132, 720, 720};
 }
 
+// Điểm ngoài viewport bị từ chối, không bị kéo vào ô mép bằng clamp.
+// [snippet logical-cell]
 inline bool logicalCell(const Field& field, float logicalX, float logicalY, int& x, int& y, bool showcase = false) {
     if (!std::isfinite(logicalX) || !std::isfinite(logicalY)) {
         return false;
@@ -34,5 +36,7 @@ inline bool logicalCell(const Field& field, float logicalX, float logicalY, int&
     y = static_cast<int>(std::floor((logicalY - rectangle.y) * field.height / rectangle.height));
     return field.contains(x, y);
 }
+
+// [/snippet logical-cell]
 
 } // namespace heat

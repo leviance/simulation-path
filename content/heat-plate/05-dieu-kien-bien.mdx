@@ -1,81 +1,144 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Nhiệt đi đâu khi chạm mép tấm?
+# Chọn cách nhiệt, vành lạnh và heater
 
 ## Vấn đề cần giải quyết
 
-Công thức năm điểm cần đọc hàng xóm. Nhưng ô ở mép không có đủ bốn hàng xóm trong mảng. Trả 0, lặp lại ô sát mép hay vòng sang phía đối diện đều có ý nghĩa vật lý khác nhau; không thể chọn chỉ để tránh crash.
+Một chấm nóng giữa tấm chưa nói hết mô hình. Khi nhiệt tới mép, nó bị giữ lại hay truyền ra môi trường? Nếu muốn giữ một vùng luôn nóng, bút đặt nhiệt một lần có đủ không?
 
-Bài này giữ hai lựa chọn rõ ràng: tấm được cách nhiệt ở mép, hoặc vành ngoài bị giữ ở nhiệt độ môi trường.
+Từ checkpoint 4, bài này thêm hai điều khiển nhìn thấy được: B đổi biên, H/E tạo hoặc bỏ vùng giữ nhiệt. Dự kiến đọc 25 phút, viết 45 phút, thử 35 phút. Ta cũng bắt đầu ghi rõ **khi nào được đòi hỏi bảo toàn**, thay vì dùng “tổng phải không đổi” cho mọi cảnh.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với biên cách nhiệt, không cho nhiệt đi qua mặt ngoài. Ở mép trái, dùng một ghost cell có giá trị bằng ô đầu tiên:
+Biên cách nhiệt đóng các mặt ngoài của miền. Ghost cell bằng chính ô sát mặt khiến thông lượng qua mặt ấy bằng 0. Nhiệt vẫn truyền giữa những ô bên trong; tấm không vì “cách nhiệt” mà đứng yên.
 
-$$\theta_{-1,j}=\theta_{0,j}.$$
+Chế độ vành lạnh khác hẳn: giữ **tâm các ô ngoài** ở theta=0. Nó có thể lấy nhiệt khỏi tấm. Việc chuyển sang vành lạnh còn xóa tức thì nhiệt đã nằm trên vành. Hai cách đặt biên không cùng hình học: miền cách nhiệt có mặt ngoài cách tâm ô nửa bước, còn vành lạnh giữ nhiệt độ ngay ở tâm ô ngoài. Không dùng chúng như hai lời giải trên cùng miền để so convergence.
 
-Chênh lệch giữa ghost và ô đầu tiên bằng 0. Ô biên vẫn có thể đổi nhiệt với ô phía trong. Đây là mô hình cell-centered: mặt ngoài nằm giữa tâm ô thật và tâm ghost, không nằm tại tâm ô thật.
-
-Chế độ lạnh trong project dùng cách đơn giản khác: **giữ cả vành ô ngoài bằng 0**, và chỉ cập nhật các ô bên trong. Vành này trao đổi với một môi trường đủ lớn để luôn giữ mức 0. Tổng nhiệt trong field vì thế có thể giảm. Đây không phải cùng cách đặt biên hình học với mô hình ghost phía trên; ta dùng nó để học cách áp đặt một nhiệt độ cố định, không so hai trường hợp như cùng một bài toán vật lý.
+Heater trong bài là một thermostat: sau bước khuếch tán, ép các ô được chọn về theta=0 hoặc 1. Nó tự thêm/lấy lượng cần thiết để giữ nhiệt độ, không cấp một công suất cố định.
 
 <InteractiveLab demo="heat-plate" mode="heat-5" />
 
-Tô một vùng sát mép rồi thử hai chế độ. Với biên lạnh, bút nóng không thể giữ ô trên vành ở 1. Phần nằm sâu hơn vẫn nóng và tiếp tục trao đổi với vành lạnh.
+Đoán trước: tô một chấm 1 bằng bút thường rồi tiến bước; sau đó thử cùng chấm bằng bút heater. Lần nào tâm phải giữ đúng 1? Nếu bút đứng yên mà nguồn vẫn hoạt động, hoạt động đó phải đến từ mask heater chứ không từ số event chuột.
 
 ## Viết code từng bước
 
-### Bước 1 — Đọc ghost mà không truy cập ngoài vector
+### 1. Áp vành lạnh khi người dùng đổi biên
 
-`sample` kẹp **tọa độ đọc**, không kẹp nhiệt độ:
+`Boundary::ColdRim` được bật bằng B. `applyBoundary` đặt các ô mép về 0 và bỏ pin trên chúng:
 
-```cpp title="include/diffusion.hpp — ghost của biên cách nhiệt"
-x = std::clamp(x, 0, field.width - 1);
-y = std::clamp(y, 0, field.height - 1);
-return field.current[field.index(x, y)];
-```
-
-Khi x=-1, ta đọc x=0. Ở góc, cả hai hướng ngoài miền đều dùng chính ô góc. Tổng các trao đổi qua những mặt giữa hai ô vẫn triệt tiêu từng cặp, còn mặt ngoài đóng góp 0.
-
-### Bước 2 — Áp nhiệt độ cố định lên vành
-
-Field có `edge` để nhận biết vành ngoài. `applyBoundary` duyệt và gán 0 khi Settings đang ở chế độ Cold:
-
-```cpp title="include/diffusion.hpp — giữ vành ở nhiệt độ môi trường"
-if (field.edge(x, y)) {
-    field.current[field.index(x, y)] = 0;
+{/* snippet include/field.hpp#boundary */}
+```cpp title="include/field.hpp — giữ vành ngoài ở 0"
+inline void applyBoundary(Field& field, const Settings& settings) {
+    if (settings.boundary != Boundary::ColdRim) {
+        return;
+    }
+    for (int y = 0; y < field.height; ++y) {
+        for (int x = 0; x < field.width; ++x) {
+            if (field.edge(x, y)) {
+                field.current[field.index(x, y)] = 0;
+                field.pins[field.index(x, y)] = Pin::None;
+            }
+        }
+    }
 }
 ```
 
-Gọi hàm sau input, sau reset và sau đổi chế độ. Nếu chỉ gọi khi solver chạy, người dùng có thể tô nóng vành trong lúc pause, trái với điều kiện biên đã chọn.
+Hàm được gọi lúc tạo/reset scene và khi đổi biên. Trong solver, `fixedRim` cho ứng viên tại vành bằng 0. Brush cũng kiểm vành trước khi ghi: không chờ tới bước N mới sửa lại nét vẽ làm nóng sai trên mép.
 
-### Bước 3 — Giữ cả next đúng ở vành
+### 2. Lưu vị trí nguồn bằng mask riêng
 
-Trong diffuse, vành Cold không dùng stencil:
+`Field` thêm `pins`, một phần tử `Pin` cho mỗi ô, khởi tạo `None=-1`. Hot=1, Cold=0; không dùng theta hiện tại để suy ra ô có phải heater hay không. Một ô thường có theta=1 vẫn không phải nguồn giữ nhiệt.
 
-```cpp title="include/diffusion.hpp — không cho vành lạnh tự thay đổi"
-if (settings.boundary == Boundary::Cold && field.edge(x, y)) {
-    field.next[index] = 0;
-    continue;
+Brush giờ có ba chế độ. Đây là phiên bản đầy đủ sau bài:
+
+{/* snippet include/brush.hpp#paint-disk */}
+```cpp title="include/brush.hpp — tô nhiệt, ghim nhiệt và bỏ ghim"
+inline void paintDisk(Field& field, const Settings& settings, int centerX, int centerY, int radius, double value, BrushMode mode = BrushMode::Temperature) {
+    if (!field.contains(centerX, centerY) || !std::isfinite(value)) {
+        return;
+    }
+    radius = std::clamp(radius, 0, 24);
+    value = std::clamp(value, 0.0, 1.0);
+    for (int offsetY = -radius; offsetY <= radius; ++offsetY) {
+        for (int offsetX = -radius; offsetX <= radius; ++offsetX) {
+            if (offsetX * offsetX + offsetY * offsetY > radius * radius) {
+                continue;
+            }
+            const int x = centerX + offsetX;
+            const int y = centerY + offsetY;
+            if (!field.contains(x, y)) {
+                continue;
+            }
+            const std::size_t index = field.index(x, y);
+            if (settings.boundary == Boundary::ColdRim && field.edge(x, y)) {
+                field.current[index] = 0;
+                field.pins[index] = Pin::None;
+                continue;
+            }
+            if (mode == BrushMode::EraseHeater) {
+                field.pins[index] = Pin::None;
+                continue;
+            }
+            field.pins[index] = Pin::None;
+            if (mode == BrushMode::Heater) {
+                field.pins[index] = Pin::Cold;
+                if (value >= 0.5) {
+                    field.pins[index] = Pin::Hot;
+                }
+            }
+            field.current[index] = value;
+        }
+    }
+    static_cast<void>(settings);
+    static_cast<void>(mode);
 }
 ```
 
-Điểm này dễ bỏ sót. Current đúng nhưng next còn dữ liệu từ lần trước thì sau swap, vành lại nóng. Mọi phần tử next phải được gán trong mỗi bước, kể cả những ô không giải phương trình.
+`EraseHeater` chỉ bỏ mask và `continue`, nên nhiệt đã có không bị xóa. Bút thường bỏ pin ở ô nó đi qua rồi đặt theta, cho phép sửa một nguồn thành vùng nhiệt tự do. Trong mode heater, chọn 1/2 để tạo nguồn nóng/lạnh. Chuột phải đặt mức 0 của mode đang dùng.
+
+### 3. Ghi nguồn sau phần trao đổi, trước khi publish
+
+Sau khi đã tính `value` không nguồn, solver áp pin rồi cộng phần thay đổi vào ledger:
+
+{/* snippet include/diffusion.hpp#source-ledger */}
+```cpp title="include/diffusion.hpp — nguồn thay đổi tích phân bao nhiêu"
+if (!fixedRim && field.pins[index] != Pin::None) {
+    const double target = static_cast<double>(field.pins[index]);
+    result.sourceChange += (target - value) * settings.dx * settings.dy;
+    value = target;
+}
+```
+
+`sourceChange` có đơn vị theta×diện tích. Nó cộng `(target - value)*dx*dy`, không chỉ đếm số heater. Hai nguồn giữ cùng nhiệt độ có thể thêm lượng khác nhau khi vùng xung quanh khác nhau.
+
+Ở biên cách nhiệt và không có input/nguồn, đại lượng rời rạc cần kiểm là:
+
+$$
+I^*=dx\,dy\sum_{x,y}\theta_{x,y}.
+$$
+
+Chưa biết bề dày, mật độ hay nhiệt dung nên không gọi nó là Joule. Khi có heater, so chênh lệch I* với ledger ở fixture thích hợp; khi có vành lạnh, còn có lượng nhiệt bị lấy ra ở biên.
 
 ## Ghép các phần lại
 
-Phím B đổi giữa Insulated và Cold trong `project_47_checkpoint_5`. Main áp biên trước khi bước mô phỏng và vẽ. Khi đổi từ cách nhiệt sang lạnh, nhiệt độ vành có thể giảm ngay cả khi chưa bấm N; đó là thao tác đổi bài toán, không phải một bước diffusion bí mật.
+Action B dừng đồng hồ, đổi `settings.boundary`, áp vành nếu cần và đánh dấu ảnh cần cập nhật. Action H đổi bút thường/heater; E chọn bỏ pin. Mọi thao tác đi qua cùng `applyAction`/`stamp`, dù đến từ nút hay phím.
 
-Chuyển ngược về cách nhiệt không phục hồi lượng nhiệt đã mất. Muốn so hai trường hợp từ cùng một trạng thái, reset hoặc dựng lại cùng field rồi mới chạy.
+Build/run `project_47_checkpoint_5`. Trong native, bạn tự tô heater bằng H, 1/2 và chuột/Enter; `--preset 4` cũng tạo fixture hai thermostat. Gallery P đầy đủ sẽ thêm ở bài 8. Canvas cung cấp sẵn fixture này để tiện đối chiếu, không có nghĩa bạn phải giấu thuật toán tương lai trong checkpoint.
 
 ## Thử làm sai để hiểu đúng
 
-1. Tạm cho sample ngoài miền trả 0 trong chế độ cách nhiệt. Đặt một trường đồng đều 0.4: mép sẽ nguội trước. Bạn đã vô tình cho nhiệt thoát ra ngoài.
-2. Tạm bỏ nhánh ghi next bằng 0 trên vành Cold. Tô lên mép hoặc đổi chế độ rồi tiến vài bước. Khôi phục nhánh và kiểm cả current lẫn next sau swap.
+Bỏ nhánh giữ lạnh trong brush rồi tô lên vành lúc pause. Nếu mép nóng lên và chỉ lạnh lại sau N, input đang phá điều kiện biên. Sửa ngay ở nơi đặt dữ liệu.
+
+Thử “xóa heater” bằng cách đặt cả pin lẫn theta về 0. Bạn sẽ thấy một vùng lạnh mới xuất hiện dù chỉ định bỏ nguồn. Khôi phục hành vi unpin: bỏ ràng buộc nhưng giữ nhiệt đã có.
 
 ## Tự kiểm tra kết quả
 
-Với cách nhiệt, trường đồng đều không đổi, kể cả ô góc. Với Cold, vành luôn bằng 0 sau vẽ/tẩy/reset; các ô bên trong mới dùng stencil. Không đòi hỏi bảo toàn tổng khi có biên lạnh hoặc vừa đổi biên. Không có đọc/ghi ngoài mảng.
+- Trường hằng 0,4 đứng yên ở biên cách nhiệt; trường ấy không đứng yên khi có vành lạnh.
+- Vành luôn bằng 0 kể cả sau input; đổi về cách nhiệt không tự trả lại nhiệt đã xóa.
+- Heater nóng/lạnh giữ đúng 1/0 sau mỗi bước, mask đếm đúng số ô; unpin không lập tức xóa theta.
+- Chỉ kiểm bảo toàn I* khi không input, không reset, không heater và biên cách nhiệt.
+- Fixture một ô heater ở lưới 5×5, D=1, dt=0,2, dx=dy=1 cho `sourceChange=0,8` ở bước đầu. Đây là thay đổi do nguồn, không phải lỗi bảo toàn.
 
 ## Bài tập mở rộng
 
-Thử giữ vành ở 0.2 thay vì 0. Khi nội thất đang lạnh hơn, tổng nhiệt có thể tăng hay không? Giải thích trước khi sửa code. Tiếp theo, [chọn bước thời gian đủ nhỏ](/projects/heat-plate/06-buoc-thoi-gian-on-dinh).
+Đặt hai nguồn 1 và 0 ở hai phía, dự đoán một trạng thái gần dừng: hình có còn thay đổi nhanh mãi không? Sau đó bỏ cả hai pin để tấm tự cân bằng. Bài tiếp theo sẽ [tăng dt để thấy vì sao một công thức đúng vẫn có thể cho kết quả sai](/projects/heat-plate/06-buoc-thoi-gian-on-dinh).

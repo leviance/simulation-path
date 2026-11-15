@@ -1,0 +1,118 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đặt probe và đọc trường nhiệt theo thời gian
+
+## Vấn đề cần giải quyết
+
+Vùng nóng đã lan mượt trên lưới lớn. Nhưng một màu cam nhạt đi chưa cho biết tấm mất nhiệt, nguồn tắt hay palette đổi. Ta cần các cảnh có dự đoán rõ ràng, số liệu không phụ thuộc màu và một “nhiệt kế” đứng yên tại một vị trí.
+
+Bắt đầu từ checkpoint 7. Thêm gallery sáu cảnh và probe có đồ thị; không thay phương trình. Dự kiến đọc 20 phút, viết 35 phút, thử 30 phút. Kết quả tốt không phải là bảng số dài nhất, mà là dùng một số đo để trả lời một câu hỏi.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi cảnh có một việc nên thử:
+
+- **Gaussian:** đỉnh giảm và vùng ấm rộng ra; ở tấm cách nhiệt không nguồn, I* gần như giữ nguyên.
+- **Trường hằng 0,4:** không có chênh lệch, nên không đổi ở biên cách nhiệt.
+- **Bàn cờ 0,25/0,75:** nhiều chênh lệch ở mức ô, dễ thấy dao động số khi dt quá lớn.
+- **Cosine (4,4):** hình dạng có hệ số suy giảm tham chiếu, dùng để kiểm scheme.
+- **Hai heater:** điểm nóng/lạnh giữ nhiệt độ, tổng không có lý do bảo toàn.
+- **Tấm trống:** tự dựng một fixture ngắn, không bị dữ liệu cũ che đáp án.
+
+Probe là một tọa độ grid cố định, không phải con trỏ chạy theo chuột. Đồ thị ghi theta tại đó theo **thời gian mô hình đã được chấp nhận**. Di chuyển cursor không chuyển probe, pause không tự sinh thêm sample theo wall time.
+
+<InteractiveLab demo="heat-plate" mode="heat-8" />
+
+Đặt probe ngoài vùng nóng rồi dự đoán đường cong: nó có thể tăng trước khi giảm, dù max của toàn tấm chỉ giảm. Một số đo tại chỗ và cực đại toàn miền là hai đại lượng khác nhau.
+
+## Viết code từng bước
+
+### 1. Đặt cảnh mẫu vào đúng vòng đời scene
+
+`makeField` đã tạo Gaussian từ bài 1; tới đây bổ sung các nhánh gallery. P trong native chuyển lần lượt sáu cảnh và gọi `selectScene`: pause, tạo field mới, đặt time/tick về 0 và xóa lịch sử. Canvas dùng cùng số preset và công thức; không cần gọi RNG nên reset có thể tái tạo chính xác dữ liệu.
+
+Cảnh mới giữ D/dt và boundary đang chọn. Vì thế chọn trường hằng nhưng còn vành lạnh **không phải** phép kiểm hằng của tấm cách nhiệt. Kiểm điều kiện trước khi kết luận solver sai.
+
+### 2. Đo dữ liệu, không đo ảnh
+
+`metrics.hpp` quét các số trong current. Đây là phép đo tách khỏi update và được gọi khi cần, không cộng vào timing kernel:
+
+{/* snippet include/metrics.hpp#measure */}
+```cpp title="include/metrics.hpp — min/max và tích phân từ theta thật"
+inline Stats measure(const Field& field, const Settings& settings) {
+    Stats result;
+    result.minimum = field.current.front();
+    result.maximum = field.current.front();
+    double correction = 0;
+    for (std::size_t index = 0; index < field.current.size(); ++index) {
+        const double value = field.current[index];
+        if (!std::isfinite(value)) {
+            result.finite = false;
+            continue;
+        }
+        result.minimum = std::min(result.minimum, value);
+        result.maximum = std::max(result.maximum, value);
+        // Kahan summation giảm lỗi cộng, không sửa trạng thái của solver.
+        const double adjusted = value - correction;
+        const double total = result.sum + adjusted;
+        correction = (total - result.sum) - adjusted;
+        result.sum = total;
+        if (field.pins[index] != Pin::None) {
+            ++result.activePins;
+        }
+    }
+    result.mean = result.sum / static_cast<double>(field.current.size());
+    result.integral = result.sum * settings.dx * settings.dy;
+    return result;
+}
+```
+
+Kahan summation giảm lỗi cộng dồn khi tính tổng; nó không sửa dữ liệu và không biến một solver sai thành bảo toàn. `integral=sum*dx*dy` cho I*. Mean giữ được khi cách nhiệt/không nguồn, nhưng đổi biên, heater, paint hoặc reset làm điều kiện ấy không còn đúng.
+
+Không dùng một epsilon chung cho tất cả số. Trong ca Gaussian 192², tests so tích phân bằng ngưỡng `1e-9+|I*ban đầu|*1e-12`; symmetry dùng 1e-12 theta. Tích phân có đơn vị khác sai số từng ô, nên phải ghi rõ phép đo nào đang được xét.
+
+### 3. Ghi probe sau một bước hợp lệ
+
+L hoặc Shift+click gọi `selectProbe` với cursor/ô vừa click, xóa history cũ. Sau mỗi bước được chấp nhận, `recordProbe` thêm cặp time/theta, giữ tối đa 120 sample:
+
+{/* snippet include/workshop.hpp#record-probe */}
+```cpp title="include/workshop.hpp — lịch sử theo thời gian mô hình"
+inline void recordProbe(const Field& field, Workshop& state) {
+    if (state.historyCount == state.history.size()) {
+        std::move(state.history.begin() + 1, state.history.end(), state.history.begin());
+        --state.historyCount;
+    }
+    state.history[state.historyCount] = {field.time, sample(field, state.probeX, state.probeY)};
+    ++state.historyCount;
+    static_cast<void>(field);
+    static_cast<void>(state);
+}
+```
+
+Với dt=1/30, 120 sample tương ứng khoảng bốn giây mô hình, không mặc định bốn giây wall time nếu speed khác 1 hoặc có dropped time. Nguồn có thể được sửa trong lúc pause; history không thêm một hàng cho mỗi lần present.
+
+`drawHistory` đổi cặp time/theta sang vị trí trên một ô đồ thị; trục y tự co theo các sample và có nhãn min/max. **Chỉ graph đổi thang**, heatmap vẫn dùng thang màu cố định. Đồ thị dốc hơn trên màn hình chưa chắc nghĩa nhiệt độ đổi nhanh hơn nếu phạm vi trục vừa thay.
+
+## Ghép các phần lại
+
+Build/run `project_47_checkpoint_8`. P chọn cảnh, mũi tên chọn ô, L đặt probe; crosshair xanh chỉ probe còn outline sáng là cursor/brush. Vùng đọc trên panel hiển thị cả hai tọa độ và theta. N tiến một bước; Space cho chạy; F1 chỉ ẩn phần soi hình, không đổi field.
+
+Thử Gaussian với biên cách nhiệt, không heater và không tô thêm. Đặt probe ở tâm: theta giảm. Đặt lại cùng scene, đặt probe xa tâm: theta ban đầu có thể tăng. Cả hai lần I* vẫn gần như giữ nguyên — nhiệt phân bố lại, không tự biến mất chỉ vì vùng sáng giảm.
+
+## Thử làm sai để hiểu đúng
+
+Trong bản thử, ghi history mỗi frame thay vì sau update. Khi pause, graph vẫn dài thêm dù mô hình không tiến. Khi FPS đổi, mật độ sample đổi theo renderer. Khôi phục cách ghi theo bước solver.
+
+Đổi N rồi so trực tiếp `sum(theta)` của hai cảnh cùng miền: sum lớn hơn chỉ vì có nhiều ô. Nhân dxdy để được I* trước khi so; vẫn phải kiểm rằng hai field biểu diễn cùng dữ liệu/miền và cùng thời điểm.
+
+## Tự kiểm tra kết quả
+
+- Sáu cảnh reset đúng công thức, time/tick về 0; C xóa nhưng R vẫn khôi phục preset đang chọn.
+- L/Shift+click không tô một dấu nhiệt ngoài ý muốn. Di chuyển cursor không kéo probe đi theo.
+- History có tối đa 120 sample; pause không tự thêm sample, tham số/biên mới không bị ghép thành một phép so không ghi chú.
+- Uniform + cách nhiệt đứng yên; Gaussian kín không nguồn giữ I*, heater/vành lạnh không bị ép vào cùng phép kiểm bảo toàn.
+- Mọi số đo đọc từ current, không lấy lại từ RGB đã lượng tử hóa.
+
+## Bài tập mở rộng
+
+Đặt hai probe đối xứng trong một bản mở rộng, giữ nguyên dữ liệu đầu và so hai đường cong. Ghi sai số tối đa theo theta thay vì chỉ nói “trông giống nhau”. Bài cuối sẽ [kiểm chứng bằng oracle, nghiệm tham chiếu và gói source hoàn chỉnh](/projects/heat-plate/09-kiem-chung-va-ban-hoan-chinh).

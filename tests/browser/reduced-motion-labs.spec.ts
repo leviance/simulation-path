@@ -9,9 +9,9 @@ const cases = [
   },
   {
     project: 47,
-    route: "heat-plate/08-kiem-chung-va-ban-hoan-chinh",
-    step: "Tiến một bước",
-    label: "Tick",
+    route: "heat-plate/09-kiem-chung-va-ban-hoan-chinh",
+    step: "Tiến một bước (N)",
+    label: "Thời gian / tick",
   },
   {
     project: 48,

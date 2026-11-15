@@ -19,6 +19,11 @@ struct SdlResources {
     SDL_Renderer* renderer = nullptr;
     SDL_Texture* texture = nullptr;
 
+    // Một owner duy nhất; bản sao nông của các con trỏ sẽ giải phóng hai lần.
+    SdlResources() = default;
+    SdlResources(const SdlResources&) = delete;
+    SdlResources& operator=(const SdlResources&) = delete;
+
     ~SdlResources() {
         if (texture) {
             SDL_DestroyTexture(texture);

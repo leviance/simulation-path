@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
+import { isContiguousCodeExcerpt, markedCodeExcerpt } from "../scripts/code-snippets.mjs";
 
 test("strict code excerpts preserve return values, operators and token boundaries", () => {
   assert.equal(isContiguousCodeExcerpt("return;", "return trace;"), false);
@@ -23,4 +23,18 @@ test("strict excerpts ignore formatting/comments but retain string and character
     isContiguousCodeExcerpt('log("/* not a comment */");', 'log("/* not a comment */");'),
     true,
   );
+});
+
+test("marked excerpts bind an unambiguous checkpoint range and remove nested marker comments", () => {
+  const source =
+    "// [snippet outer]\n    left();\n    // [snippet inner]\n    right();\n    // [/snippet inner]\n// [/snippet outer]\n";
+  assert.equal(markedCodeExcerpt(source, "outer"), "left();\nright();");
+  assert.equal(markedCodeExcerpt(source, "inner"), "right();");
+  assert.throws(() => markedCodeExcerpt(source, "missing"));
+  assert.throws(() => markedCodeExcerpt(source + source, "outer"));
+  assert.throws(() =>
+    markedCodeExcerpt("// [/snippet reversed]\n// [snippet reversed]\n", "reversed"),
+  );
+  assert.throws(() => markedCodeExcerpt(source, "../outer"));
+  assert.throws(() => markedCodeExcerpt("// [snippet blank]\n\n// [/snippet blank]", "blank"));
 });

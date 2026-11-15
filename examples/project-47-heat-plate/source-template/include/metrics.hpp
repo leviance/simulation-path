@@ -16,6 +16,7 @@ struct Stats {
     bool finite = true;
 };
 
+// [snippet measure]
 inline Stats measure(const Field& field, const Settings& settings) {
     Stats result;
     result.minimum = field.current.front();
@@ -44,5 +45,7 @@ inline Stats measure(const Field& field, const Settings& settings) {
     result.integral = result.sum * settings.dx * settings.dy;
     return result;
 }
+
+// [/snippet measure]
 
 } // namespace heat

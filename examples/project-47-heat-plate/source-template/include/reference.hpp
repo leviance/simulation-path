@@ -25,6 +25,7 @@ inline Field cosineField(int width, int height, int modeX, int modeY) {
 }
 
 // Nghiệm chính xác của scheme, không phải nghiệm PDE liên tục.
+// [snippet discrete-amplification]
 inline double discreteAmplification(const Settings& settings, int width, int height, int modeX, int modeY) {
     const double rx = settings.diffusivity * settings.dt / (settings.dx * settings.dx);
     const double ry = settings.diffusivity * settings.dt / (settings.dy * settings.dy);
@@ -33,11 +34,16 @@ inline double discreteAmplification(const Settings& settings, int width, int hei
     return 1 - 4 * rx * sineX * sineX - 4 * ry * sineY * sineY;
 }
 
+// [/snippet discrete-amplification]
+
+// [snippet continuous-amplitude]
 inline double continuousAmplitude(const Settings& settings, int width, int height, int modeX, int modeY, double time) {
     const double waveX = std::numbers::pi * modeX / (width * settings.dx);
     const double waveY = std::numbers::pi * modeY / (height * settings.dy);
     return 0.25 * std::exp(-settings.diffusivity * (waveX * waveX + waveY * waveY) * time);
 }
+
+// [/snippet continuous-amplitude]
 
 inline double maximumCosineError(const Field& field, double amplitude, int modeX, int modeY) {
     double maximumError = 0;

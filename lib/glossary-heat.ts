@@ -27,6 +27,6 @@ export const heatGlossaryTerms = [
     id: "heat-stability",
     term: "Điều kiện ổn định khuếch tán",
     definition:
-      "Với explicit Euler và stencil năm điểm, rx=alpha*dt/dx², ry=alpha*dt/dy² phải không âm và rx+ry không vượt 1/2. Khi dx=dy, mỗi hệ số không vượt 1/4. Điều kiện này không đảm bảo mọi sai số rời rạc đều nhỏ.",
+      "Với explicit Euler và stencil năm điểm, rx=D*dt/dx², ry=D*dt/dy² phải không âm và rx+ry không vượt 1/2. Khi dx=dy, mỗi hệ số không vượt 1/4. D có đơn vị độ dài²/giây mô hình. Điều kiện ổn định không đảm bảo mọi sai số rời rạc đều nhỏ.",
   },
 ] as const;

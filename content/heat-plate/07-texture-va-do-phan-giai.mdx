@@ -1,0 +1,123 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa 36.864 ô lên một streaming texture
+
+## Vấn đề cần giải quyết
+
+Lưới 32×32 đủ để học stencil nhưng chưa phải sản phẩm cuối. Ta nâng lên **192×192 = 36.864 ô thật**, vẫn tính mọi ô và không bỏ bớt khi vẽ. Gọi một lệnh rectangle cho từng ô không còn là cách trình bày hợp lý; ta sẽ mã hóa field thành ảnh RGBA rồi gửi ảnh bằng một texture.
+
+Từ checkpoint 6, giữ nguyên phương trình, brush và điều kiện biên. Chỉ thay đường đưa dữ liệu ra màn hình, kích thước lưới và cách công bố h. Dự kiến đọc 25 phút, viết 45 phút, kiểm 30 phút; không tính setup.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một pixel của ảnh CPU tương ứng một ô nhiệt. Ảnh được phóng lên viewport bằng nearest sampling để vẫn nhận ra ô; window lớn hơn không đòi hỏi tạo nhiều ô mô phỏng hơn.
+
+Ta cấp một texture capacity 256×256 để chứa được cả ba độ phân giải. Với N=192, chỉ khóa và vẽ hình chữ nhật nguồn 192×192, không đưa phần capacity chưa khởi tạo ra màn hình. `capacity=65536 texels` khác với `actual_drawn=36864 cells`.
+
+Từ mốc này, 128/192/256 cùng phủ miền cách nhiệt 96×96, nên `h=96/N`. D=1,5 và dt=1/30 giữ nguyên khi chọn N mới:
+
+| N | h=dx=dy | dt tối đa của scheme | dt=1/30 |
+| --- | --- | --- | --- |
+| 128 | 0,75 | 0,09375 | ổn định |
+| 192 | 0,5 | khoảng 0,041667 | ổn định |
+| 256 | 0,375 | 0,0234375 | không ổn định |
+
+Lưới 32² của các bài đầu dùng h=0,5, tức miền 16×16. Bước 32→192 là nâng sản phẩm, **không phải một phép refinement trên cùng miền**. Trong bảng trên, chỉ các lưới lớn mới cùng miền; bài cuối sẽ có fixture refinement riêng giữ đúng miền/thời điểm.
+
+<InteractiveLab demo="heat-plate" mode="heat-7" />
+
+Trước khi chọn 256, dự đoán vì sao dt cũ sẽ bị chặn. Sau đó tự giảm dt; đừng để chương trình “sửa hộ” vì bạn sẽ mất cơ hội quan sát quan hệ h²/dt.
+
+## Viết code từng bước
+
+### 1. Cấp texture một lần và giữ ownership rõ ràng
+
+Trong `view.hpp`, sau khi đã có renderer:
+
+{/* snippet include/view.hpp#create-texture */}
+```cpp title="include/view.hpp — texture capacity cho cả ba lưới"
+inline void createTexture(SdlResources& sdl) {
+    // Reserve capacity cho cả ba preset: đổi độ phân giải không cấp lại GPU resource.
+    SDL_Texture* candidate = SDL_CreateTexture(sdl.renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, 256, 256);
+    requireSdl(candidate != nullptr, "create temperature texture");
+    if (!SDL_SetTextureScaleMode(candidate, SDL_SCALEMODE_NEAREST)) {
+        SDL_DestroyTexture(candidate);
+        throw std::runtime_error(std::string("nearest sampling: ") + SDL_GetError());
+    }
+    if (sdl.texture) {
+        SDL_DestroyTexture(sdl.texture);
+    }
+    sdl.texture = candidate;
+}
+```
+
+`SDL_PIXELFORMAT_RGBA32` mô tả thứ tự byte RGBA, tránh phải suy bit layout của một packed integer theo endian. Streaming texture cho phép CPU ghi ảnh. Nếu thiết lập scale mode lỗi, hủy candidate trước khi ném exception; texture cũ chỉ bị thay khi candidate đã sẵn sàng.
+
+### 2. Khóa đúng vùng, đi từng hàng bằng pitch
+
+`SDL_LockTexture` trả một con trỏ và `pitch` tính bằng **byte mỗi hàng**. Không mặc định pitch bằng `width*4` và không đọc lại nội dung cũ: vùng lock là write-only.
+
+{/* snippet include/view.hpp#upload-grid */}
+```cpp title="include/view.hpp — ghi mọi pixel của vùng được khóa"
+inline void uploadGrid(SDL_Texture* texture, const Field& field, bool experiment, bool showPins) {
+    if (field.width > 256 || field.height > 256) {
+        throw std::invalid_argument("Viewer texture capacity is 256x256; CPU field limit is separate");
+    }
+    void* pixels = nullptr;
+    int pitch = 0;
+    const SDL_Rect region{0, 0, field.width, field.height};
+    requireSdl(SDL_LockTexture(texture, &region, &pixels, &pitch), "lock temperature texture region");
+    const std::size_t rowBytes = static_cast<std::size_t>(field.width) * 4;
+    if (pitch < 0 || static_cast<std::size_t>(pitch) < rowBytes) {
+        SDL_UnlockTexture(texture);
+        throw std::runtime_error("Texture pitch is shorter than a complete RGBA row");
+    }
+    auto* bytes = static_cast<std::uint8_t*>(pixels);
+    for (int y = 0; y < field.height; ++y) {
+        encodeRow(field, y, bytes + static_cast<std::size_t>(y) * static_cast<std::size_t>(pitch), experiment, showPins);
+    }
+    SDL_UnlockTexture(texture);
+}
+```
+
+`encodeRow` đổi từng theta sang bốn byte R/G/B/A và có thể chồng dấu pin trắng. Hàm không sửa `field.current`. Mỗi hàng bắt đầu ở `bytes+y*pitch`; phần padding ngoài pixel không được coi là một ô cần vẽ. Sau unlock, ảnh mới dùng được để render.
+
+### 3. Vẽ chỉ phần field đang có
+
+{/* snippet include/view.hpp#draw-texture */}
+```cpp title="include/view.hpp — source rect khác texture capacity"
+inline void drawTexture(SDL_Renderer* renderer, SDL_Texture* texture, const Field& field, bool showcase) {
+    const Rect view = sceneRect(field, showcase);
+    const SDL_FRect source{0, 0, static_cast<float>(field.width), static_cast<float>(field.height)};
+    const SDL_FRect rectangle{view.x, view.y, view.width, view.height};
+    requireSdl(SDL_RenderTexture(renderer, texture, &source, &rectangle), "draw temperature texture");
+}
+```
+
+Source rectangle dùng width/height của field, destination dùng `sceneRect`. Ở view sạch, logical presentation đổi theo field để tấm lấp vùng vuông letterbox; vẫn đổi input qua SDL trước khi xác định ô. Không dùng tọa độ panel cũ để tô trong view sạch.
+
+## Ghép các phần lại
+
+`main` tạo texture một lần sau khi tạo scene. Khi field/overlay thay đổi, `state.dirty` làm nó đo số liệu và upload; không upload lại chỉ vì cursor di chuyển. Vòng vẽ thay `drawGrid` bằng `drawTexture`, rồi mới vẽ panel và present.
+
+`Workshop` chọn N=192, radius 8. G đổi 128→192→256→128 và tạo lại đúng preset; D/dt giữ nguyên, h đổi theo N. Bản reset dùng candidate field trước khi thay dữ liệu, nên lỗi cấp phát không xóa scene cũ. C++ chỉ cho viewer chọn ba kích thước này, dù lớp Field thuần hỗ trợ tối đa 512 mỗi chiều.
+
+Build/run `project_47_checkpoint_7`. F1 chuyển view sạch/panel, F2 bật/tắt dấu heater; các controls bàn phím vẫn còn dùng được khi ẩn panel. Đổi window size không đổi N, còn G có đổi N và reset thời gian; hai thao tác không được lẫn nhau.
+
+## Thử làm sai để hiểu đúng
+
+Trong một bản thử, lấy địa chỉ hàng bằng `y*field.width*4` thay vì `y*pitch`. Nó có thể tình cờ chạy ở một driver nhưng không đúng hợp đồng API. Fixture encoder có hàng padding để bắt giả định này, còn đường lock thực tế phải dùng pitch SDL trả về.
+
+Đổi source rect thành nullptr trong khi chỉ upload vùng 192² của texture 256². Phần ngoài field có thể xuất hiện hoặc làm ảnh bị co sai. Khôi phục source rect; không chữa bằng cách vẽ một hình đen che lên phần sai.
+
+## Tự kiểm tra kết quả
+
+- Preset mặc định lưu/cập nhật/vẽ đủ 36.864 ô; texture có capacity 65.536 texels, không dùng con số này thay visits thực tế.
+- C++ current và next mỗi mảng có 36.864 doubles, mask có 36.864 phần tử. Số byte ảnh logic không được diễn giải là VRAM thực đo.
+- G=256 làm dt=1/30 bị chặn ở chế độ thường; slider giảm dt xuống 1/60 khôi phục điều kiện ổn định.
+- Màu và pin overlay không sửa nghiệm; F1/resize không làm lệch input hoặc tạo thêm tick.
+- `uploadMs` là chi phí CPU mã hóa/ghi ảnh; `submitMs` không phải thời gian GPU hoàn thành frame.
+
+## Bài tập mở rộng
+
+Đo riêng update, encode/upload và phần CPU gửi lệnh vẽ ở 128/192/256 với dt hợp lệ. Giữ input/số bước giống nhau trước khi so. Đọc [hợp đồng SDL_LockTexture](https://wiki.libsdl.org/SDL3/SDL_LockTexture), rồi sang bài [đặt probe và chọn cảnh thí nghiệm](/projects/heat-plate/08-doc-truong-nhiet-va-canh-mau).

@@ -1,83 +1,140 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Cho nhiệt lan trên cả tấm bằng stencil năm điểm
+# Thêm chiều còn thiếu cho tấm kim loại
 
 ## Vấn đề cần giải quyết
 
-Một hàng đã truyền nhiệt đúng, nhưng đốm nóng chưa lan lên trên hay xuống dưới. Ta sẽ thêm hướng còn thiếu mà không thay bộ khung input, render hay double buffer.
+Ở bài trước, vùng nóng chỉ dàn sang trái/phải. Các hàng không trao đổi nên tấm kim loại cư xử như nhiều thanh độc lập. Bây giờ ta thêm nhiệt truyền qua hai mặt trên/dưới, giữ nguyên cách lưu dữ liệu, bút vẽ và double buffer.
 
-Khác hộp cát, không có ô nào “chuyển chỗ” sang hàng xóm. Mỗi ô vẫn ở nguyên vị trí; **giá trị nhiệt độ tại ô** thay đổi theo trao đổi với các ô quanh nó.
+Bắt đầu từ checkpoint 3; đọc 20 phút, viết 35 phút, kiểm 30 phút. Kết quả cần thấy là một vùng nóng lan theo cả hai chiều, nhưng phép kiểm đầu tiên vẫn chỉ dùng **một ô** để tính tay được.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Thêm nhiệt độ phía trên U và phía dưới D. Hai hướng có thể có khoảng cách ô khác nhau:
+Với tấm đồng nhất, phương trình nhiệt hai chiều là:
 
-$$r_x=\frac{\alpha\Delta t}{\Delta x^2},\qquad r_y=\frac{\alpha\Delta t}{\Delta y^2}.$$
+$$
+\frac{\partial\theta}{\partial t}
+=D\left(\frac{\partial^2\theta}{\partial x^2}
++\frac{\partial^2\theta}{\partial y^2}\right).
+$$
 
-$$C_{\mathrm{new}}=C+r_x(L-2C+R)+r_y(U-2C+D).$$
+Đạo hàm ở đây mô tả xu hướng thay đổi liên tục. Solver chỉ biết các mẫu ở tâm ô, nên thay mỗi đạo hàm bậc hai bằng sai phân như bài 3. Kết quả là stencil năm điểm: tâm cùng bốn ô chung cạnh, không có ô chéo.
 
-Năm vị trí được đọc là tâm và bốn hàng xóm trực tiếp. Đây là **stencil năm điểm**, không phải trung bình tùy ý của tám ô bao quanh. Nó xấp xỉ phương trình nhiệt:
+$$
+\theta_{x,y}^{n+1}=\theta_{x,y}^n
++r_x(\theta_{x-1,y}^n-2\theta_{x,y}^n+\theta_{x+1,y}^n)
++r_y(\theta_{x,y-1}^n-2\theta_{x,y}^n+\theta_{x,y+1}^n),\quad
+r_y=\frac{D\,dt}{dy^2}.
+$$
 
-$$\frac{\partial\theta}{\partial t}=\alpha\left(\frac{\partial^2\theta}{\partial x^2}+\frac{\partial^2\theta}{\partial y^2}\right).$$
-
-Mỗi đạo hàm bậc hai ở vế phải chính là ý tưởng ba ô đã học. Ký hiệu dài hơn nhưng chương trình chỉ thêm một phép sai phân theo y.
+Nhiệt độ thay đổi tại các tọa độ cố định; ô không di chuyển và không đổi chỗ với hàng xóm như hạt cát. Với dx=dy=0,5, `rx=ry=0,2`: xung 1 thành tâm 0,2 và bốn ô cạnh 0,2. Ô chéo vẫn 0 vì chưa có đường truyền trực tiếp trong một bước.
 
 <InteractiveLab demo="heat-plate" mode="heat-4" />
 
-Đặt một ô 1 ở giữa nền 0, tiến một bước. Với rx=ry=0.2, tâm còn 0.2 và bốn ô cạnh đều bằng 0.2. Ô chéo vẫn bằng 0: nhiệt chưa đi được hai liên kết lưới trong một bước.
+Trước khi bấm N lần đầu, xóa tấm, đặt radius 0 và tô một ô. Dự đoán cả hình dấu cộng lẫn từng giá trị; đừng chỉ dự đoán “nó sẽ mờ đi”.
 
 ## Viết code từng bước
 
-### Bước 1 — Tính hệ số của hướng y
+### 1. Thêm sai phân theo y, không thay vòng đời dữ liệu
 
-Thêm ry vào diffuse. Trong trường hợp tổng quát, không giả định nó luôn bằng rx:
+Trong `diffusion.hpp`, bật hai chiều và thêm `vertical` cùng hệ số `ry`. Toàn bộ hàm ở checkpoint 4 là:
 
-```cpp title="include/diffusion.hpp — hệ số theo trục y"
-inline double ratioY(const Settings& settings) {
-    return settings.diffusivity * settings.dt / (settings.dy * settings.dy);
+{/* snippet include/diffusion.hpp#diffuse */}
+```cpp title="include/diffusion.hpp — stencil hai chiều"
+inline StepResult diffuse(Field& field, const Settings& settings) {
+    bool twoDimensions = false;
+    twoDimensions = true;
+    const Stability coefficients = stability(settings, twoDimensions);
+    StepResult result;
+    if (!coefficients.valid) {
+        return result;
+    }
+    bool allowUnstable = false;
+    if (!coefficients.stable && !allowUnstable) {
+        result.status = StepStatus::UnstableSettings;
+        return result;
+    }
+
+    for (int y = 0; y < field.height; ++y) {
+        for (int x = 0; x < field.width; ++x) {
+            const std::size_t index = field.index(x, y);
+            ++result.visited;
+            double value = 0;
+            bool fixedRim = false;
+            if (!fixedRim) {
+                const double center = sample(field, x, y);
+                const double horizontal = sample(field, x - 1, y) - 2 * center + sample(field, x + 1, y);
+                value = center + coefficients.rx * horizontal;
+                const double vertical = sample(field, x, y - 1) - 2 * center + sample(field, x, y + 1);
+                value += coefficients.ry * vertical;
+            }
+            if (!std::isfinite(value)) {
+                result.status = StepStatus::NonFiniteCandidate;
+                return result;
+            }
+            result.maximumAbs = std::max(result.maximumAbs, std::abs(value));
+            field.next[index] = value;
+        }
+    }
+    if (allowUnstable && result.maximumAbs > 16) {
+        result.status = StepStatus::ExperimentAmplitude;
+        return result;
+    }
+    // Mọi ô đã được tính xong: publish một mức thời gian, không clamp nghiệm.
+    field.current.swap(field.next);
+    ++field.tick;
+    field.time += settings.dt;
+    result.advanced = true;
+    result.status = StepStatus::Advanced;
+    return result;
 }
 ```
 
-Source mặc định dx=dy=1 nên hai hệ số đều 0.2. Tests vẫn có trường hợp dx khác dy để không vô tình viết sai công thức cho lưới chữ nhật.
+Phần mới quan trọng là `sample(field,x,y-1)` và `sample(field,x,y+1)`. Không dùng cùng `dx` cho mọi hướng khi lưới có hai khoảng cách khác nhau. Mặc định chúng bằng nhau, nhưng test sẽ dùng dx≠dy để bắt nhầm lẫn này.
 
-### Bước 2 — Bổ sung sai phân dọc
+`fixedRim` vẫn false ở bài này; nhánh biên lạnh chỉ được thêm ở bài 5. Các guard bảo vệ tham số đã có từ bước 1D, không phải một thuật toán khuếch tán khác. Khi bước hợp lệ, mỗi ô được ghi đúng một lần vào `next`.
 
-Ngay sau khi tính phần ngang, thêm:
+### 2. Đọc ngoài lưới theo đúng mô hình đang dùng
 
-```cpp title="include/diffusion.hpp — phần truyền nhiệt theo chiều dọc"
-const double vertical = sample(field, x, y - 1) - 2 * center + sample(field, x, y + 1);
-value += ry * vertical;
+Ta không truy cập index âm hoặc `width`. `sample` ánh xạ giá trị ngoài tấm về chính ô sát mặt ngoài:
+
+{/* snippet include/field.hpp#sample */}
+```cpp title="include/field.hpp — mẫu ngoài tấm cho biên cách nhiệt"
+inline double sample(const Field& field, int x, int y) {
+    // Cell-centered zero-flux ghost: phản chiếu vào chính ô sát mặt ngoài.
+    x = std::clamp(x, 0, field.width - 1);
+    y = std::clamp(y, 0, field.height - 1);
+    return field.current[field.index(x, y)];
+}
 ```
 
-Sau đó mới gán value vào next[index]. Không lấy average của hai kết quả ngang/dọc: điều đó tự ý chia đôi hệ số khuếch tán. Cũng không nhân cả tổng với rx nếu dx và dy khác nhau.
+Ví dụ, ô ở x=0 đọc bên trái bằng chính nó. Chênh lệch qua mặt trái bằng 0, còn trao đổi với ô x=1 vẫn bình thường. Đây là một lựa chọn biên cụ thể, không phải cách “chống out-of-bounds” dùng tùy tiện cho mọi PDE.
 
-### Bước 3 — Cập nhật điều kiện chấp nhận bước
+### 3. Giữ chỗ gọi trong main
 
-Trong hai chiều, tổng hai hệ số mới quyết định giới hạn:
+Không cần thêm một lời gọi solver mới. Action N vẫn tạo một yêu cầu, `diffuse` vẫn chạy trước vẽ. Chính nội dung bước tính thay đổi; window, brush và cách present giữ nguyên.
 
-```cpp title="include/diffusion.hpp — xét cả hai hướng"
-double sum = ratioX(settings);
-sum += ratioY(settings);
-return std::isfinite(sum) && sum <= 0.5;
-```
-
-Hàm còn kiểm các tham số hữu hạn, alpha không âm, dt/dx/dy dương trước đoạn này. Bản mặc định có tổng 0.4 nên được chấp nhận. Giới hạn r≤0.5 của bài 3 không thể bê nguyên sang mỗi hướng của bài này.
+Kiểm lại rằng `field.current.swap(field.next)` nằm **sau cả hai vòng for**. Đặt nó sau mỗi hàng sẽ trộn các mức thời gian và khiến vùng nhiệt nghiêng theo hướng quét.
 
 ## Ghép các phần lại
 
-Build `project_47_checkpoint_4`. Mọi thao tác chuột, N, C và R giữ nguyên. Solver vẫn chỉ đọc current, ghi next và swap sau toàn lưới; bỏ double buffer ở đây sẽ làm hình ảnh lệch theo thứ tự quét.
+Build/run `project_47_checkpoint_4`. Cảnh mặc định trở lại Gaussian hai chiều; giữ N nhiều lần bằng các lần bấm rời sẽ làm đỉnh thấp dần và vùng ấm rộng dần. Key repeat bị bỏ qua với action step để mỗi lần bấm có ý nghĩa rõ.
 
-Xung đầu tiên loang thành hình dấu cộng, không phải một đĩa tròn mịn. Đó là cấu trúc của lưới và stencil ở vài bước đầu, không tự động chứng minh solver sai. Sau nhiều bước, phân bố mượt dần nhưng vẫn là xấp xỉ trên lưới hữu hạn.
+Để đo đáp án xung, dùng C → radius 0 → Enter ở giữa → N một lần. Di chuyển cursor lần lượt tới tâm, trái, phải, trên, dưới và ô chéo. Nhìn cả `tick` lẫn số theta trên panel.
 
 ## Thử làm sai để hiểu đúng
 
-1. Tạm dùng `x+1` ở chỗ cần `y+1`. Ca xung nhiệt sẽ không còn bốn nhánh đối xứng; kiểm đáp án từng ô sẽ chỉ ra hướng bị thiếu.
-2. Tạm chia value cho 2 sau khi cộng phần dọc. Một tấm đồng đều sẽ nguội dù không có nơi thoát nhiệt. Khôi phục công thức và chạy lại ca đồng đều.
+Thay stencil bằng trung bình vùng 3×3 trong một bản thử. Sau một bước, ô chéo sẽ có nhiệt ngay. Đó là một phép lọc khác, không còn là scheme vừa suy từ phương trình nhiệt. Khôi phục bốn hàng xóm chung cạnh.
+
+Thử đặt `dy` lớn gấp đôi `dx` mà vẫn dùng cùng `ry=rx`. Code có thể chạy, nhưng đang mô phỏng khoảng cách sai. Với dy gấp đôi, ry phải nhỏ đi bốn lần khi D và dt giữ nguyên.
 
 ## Tự kiểm tra kết quả
 
-Tâm và bốn hàng xóm của xung bằng 0.2; tổng vẫn bằng 1. Đường chéo bằng 0 sau bước đầu. Đảo thứ tự duyệt không đổi nghiệm một bước vì tất cả đọc cùng current. Lưới không có ô nóng ngoài miền do index bị nối nhầm giữa hai hàng.
+- Xung 1 cho năm ô cùng 0,2 trong sai số số thực; tổng vẫn 1 ở tấm cách nhiệt không nguồn.
+- Hình đối xứng trái/phải và trên/dưới; ô chéo vẫn 0 sau bước đầu.
+- Mỗi bước xét đủ 1.024 ô ở lưới học 32×32, không chỉ cập nhật vùng đang sáng.
+- Đảo hướng quét không đổi kết quả một bước. Resize không tạo thêm tick hoặc làm lại dữ liệu.
 
 ## Bài tập mở rộng
 
-Giữ dy=1 nhưng đặt dx=2 trong Settings; tính rx rồi dự đoán hướng lan chậm hơn. Không thay cách vẽ để “làm cho giống” dự đoán: đọc giá trị trước. Tiếp theo, [xác định chuyện gì xảy ra ở biên](/projects/heat-plate/05-dieu-kien-bien).
+Tính đáp án một bước khi `rx=0,1`, `ry=0,2`: tâm 0,4, hai ô ngang 0,1 và hai ô dọc 0,2. Dùng ca này bắt lỗi hoán đổi hệ số. Tiếp theo ta sẽ [cho người dùng chọn cách xử lý mép và nguồn nhiệt](/projects/heat-plate/05-dieu-kien-bien).

@@ -42,6 +42,7 @@ inline const char* stepMessage(StepStatus status) {
 }
 
 #if LAB_CHECKPOINT >= 3
+// [snippet diffuse]
 inline StepResult diffuse(Field& field, const Settings& settings) {
     bool twoDimensions = false;
 #if LAB_CHECKPOINT >= 4
@@ -84,11 +85,13 @@ inline StepResult diffuse(Field& field, const Settings& settings) {
 #endif
             }
 #if LAB_CHECKPOINT >= 5
+            // [snippet source-ledger]
             if (!fixedRim && field.pins[index] != Pin::None) {
                 const double target = static_cast<double>(field.pins[index]);
                 result.sourceChange += (target - value) * settings.dx * settings.dy;
                 value = target;
             }
+            // [/snippet source-ledger]
 #endif
             if (!std::isfinite(value)) {
                 result.status = StepStatus::NonFiniteCandidate;
@@ -115,6 +118,8 @@ inline StepResult diffuse(Field& field, const Settings& settings) {
     result.status = StepStatus::Advanced;
     return result;
 }
+
+// [/snippet diffuse]
 #endif
 
 } // namespace heat

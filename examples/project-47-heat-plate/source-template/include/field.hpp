@@ -44,10 +44,12 @@ enum class Pin : std::int8_t {
 };
 
 // Theta chuẩn hóa: không tự gán Kelvin/Celsius hoặc nhiệt lượng Joule.
+// [snippet field-storage]
 struct Field {
     int width;
     int height;
     std::vector<double> current;
+// [/snippet field-storage]
 #if LAB_CHECKPOINT >= 3
     std::vector<double> next;
     std::uint64_t tick = 0;
@@ -76,6 +78,7 @@ struct Field {
 #endif
     }
 
+    // [snippet field-index]
     bool contains(int x, int y) const {
         return x >= 0 && y >= 0 && x < width && y < height;
     }
@@ -85,11 +88,14 @@ struct Field {
         return static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x);
     }
 
+    // [/snippet field-index]
+
     bool edge(int x, int y) const {
         return x == 0 || y == 0 || x == width - 1 || y == height - 1;
     }
 };
 
+// [snippet sample]
 inline double sample(const Field& field, int x, int y) {
     // Cell-centered zero-flux ghost: phản chiếu vào chính ô sát mặt ngoài.
     x = std::clamp(x, 0, field.width - 1);
@@ -97,6 +103,10 @@ inline double sample(const Field& field, int x, int y) {
     return field.current[field.index(x, y)];
 }
 
+// [/snippet sample]
+
+#if LAB_CHECKPOINT >= 5
+// [snippet boundary]
 inline void applyBoundary(Field& field, const Settings& settings) {
     if (settings.boundary != Boundary::ColdRim) {
         return;
@@ -112,5 +122,8 @@ inline void applyBoundary(Field& field, const Settings& settings) {
         }
     }
 }
+
+// [/snippet boundary]
+#endif
 
 } // namespace heat

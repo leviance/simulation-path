@@ -2,184 +2,199 @@ import type { ProjectLearningAssets } from "../../learning/types";
 const learning = {
   guides: {
     "p47-l01": {
-      focus: "Lưu nhiệt độ bằng số thực, tạo một vùng nóng và vẽ lưới bằng SDL3.",
-      expected:
-        "Thấy tấm 64 × 48 ô với vùng vàng 8 × 8 ở giữa; resize chỉ đổi kích thước hiển thị.",
-      files: ["src/main.cpp", "include/field.hpp", "include/view.hpp"],
+      focus: "Lưu theta và vẽ từng ô trước khi thêm chuyển động.",
+      expected: "Gaussian 32×32 đứng yên; resize không tạo lại field.",
+      files: ["src/main.cpp", "include/field.hpp", "include/presets.hpp", "include/view.hpp"],
       steps: [
         {
-          title: "Chạy cửa sổ nền tối",
-          explanation:
-            "Starter đã lo SDL và logical presentation 64 × 48. Xác nhận mở, resize và đóng được trước khi thêm field.",
+          title: "Chạy starter",
+          explanation: "Khung SDL/RAII và panel được cung cấp; bắt đầu từ cửa sổ thật.",
         },
         {
-          title: "Tách số đo khỏi màu",
-          explanation:
-            "Field giữ double theta; colorFor chỉ đổi giá trị sang màu. Giữ thang 0–1 cố định để nhìn ra vùng nóng đang nguội.",
+          title: "Tạo dữ liệu một lần",
+          explanation: "Field giữ double theo row-major, không giữ màu.",
         },
         {
-          title: "Vẽ từng ô",
-          explanation:
-            "drawField gọi SDL_RenderFillRect cho từng ô logical 1 × 1, sau clear và trước present.",
+          title: "Đặt vòng vẽ đúng chỗ",
+          explanation: "Clear, drawGrid, panel rồi present; chưa có diffuse.",
         },
       ],
     },
     "p47-l02": {
-      focus: "Đổi tọa độ input, tô brush tròn và nối các sample thành nét liền.",
-      expected: "Vẽ được nét nóng/lạnh liền mạch và không lệch sau resize; tấm chưa tự lan nhiệt.",
-      files: ["include/field.hpp", "include/view.hpp", "src/main.cpp"],
+      focus: "Biến input thành thay đổi dữ liệu có thể nhìn thấy.",
+      expected: "Vẽ nóng/lạnh liên tục và không lệch sau resize hoặc nối qua ngoài tấm.",
+      files: [
+        "include/layout.hpp",
+        "include/brush.hpp",
+        "include/workshop.hpp",
+        "include/input.hpp",
+      ],
       steps: [
         {
-          title: "Đổi hệ tọa độ đúng chỗ",
+          title: "Đổi tọa độ",
           explanation:
-            "mouseCell dùng SDL_RenderCoordinatesFromWindow rồi kiểm bounds, không kéo điểm ngoài letterbox vào mép lưới.",
+            "Window → logical → cell, kiểm nửa khoảng mở thay vì kéo điểm ngoài vào mép.",
         },
         {
-          title: "Đặt giá trị tại ô",
-          explanation:
-            "paintDisk ghi theta bằng 0 hoặc 1. Đây là dấu bút, chưa phải một nguồn phát nhiệt có công suất.",
+          title: "Tô một đĩa",
+          explanation: "Bán kính theo ô; bút chỉ đặt theta ở sample, không phải công suất.",
         },
         {
-          title: "Nối các dấu bút",
+          title: "Nối và ngắt nét",
           explanation:
-            "paintStroke nội suy tâm brush; mất focus hoặc ra khỏi lưới phải hủy điểm nối trước.",
+            "Stamp dùng cùng hàm cho chuột/phím; hủy previous khi ra ngoài hoặc mất focus.",
         },
       ],
     },
     "p47-l03": {
-      focus: "Từ chênh lệch hai bên, suy ra sai phân bậc hai và cập nhật một hàng.",
-      expected: "Một xung nhiệt cho tâm 0.6 và hai bên 0.2 sau một bước; hàng trên/dưới vẫn lạnh.",
-      files: ["include/diffusion.hpp", "src/main.cpp"],
+      focus: "Xây sai phân 1D từ trao đổi giữa các ô.",
+      expected: "Xung 1 cho tâm 0,6, hai bên 0,2; hàng trên/dưới vẫn 0.",
+      files: ["include/parameters.hpp", "include/diffusion.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Tính trao đổi ở hai phía",
-          explanation:
-            "horizontal = left - 2*center + right. Một ô nhận nhiệt từ phía nóng hơn và mất nhiệt sang phía lạnh hơn.",
+          title: "Tính chênh lệch hai phía",
+          explanation: "Left-center và right-center cộng thành sai phân bậc hai.",
         },
         {
-          title: "Đọc cũ, ghi mới",
-          explanation:
-            "Mỗi ô đọc current và ghi next. Chỉ swap hai vector sau khi tính xong toàn bộ lưới.",
+          title: "Đọc cùng thời điểm",
+          explanation: "Mọi ô đọc current, ghi next; chỉ swap sau khi tính xong.",
         },
         {
-          title: "Tiến từng bước",
-          explanation:
-            "N gọi diffuse đúng một lần; ở bài này ry bằng 0, các hàng chưa truyền nhiệt cho nhau.",
+          title: "Nối nút N",
+          explanation: "Một yêu cầu step gọi một bước solver, không đổi thành một lần mỗi frame.",
         },
       ],
     },
     "p47-l04": {
-      focus: "Thêm hai hàng trên/dưới và phân biệt diffusion với chuyển vật liệu.",
-      expected:
-        "Xung nhiệt lan thành dấu cộng: tâm và bốn ô cạnh cùng bằng 0.2, ô chéo bằng 0 sau bước đầu.",
-      files: ["include/diffusion.hpp"],
+      focus: "Mở bài toán từ từng hàng ra cả mặt phẳng.",
+      expected: "Tâm và bốn ô cạnh bằng 0,2; ô chéo vẫn 0 sau bước đầu.",
+      files: ["include/diffusion.hpp", "include/field.hpp"],
       steps: [
         {
-          title: "Thêm hướng còn thiếu",
-          explanation:
-            "vertical = up - 2*center + down, với hệ số ry riêng. Không lấy trung bình cả tám hàng xóm.",
+          title: "Thêm hướng y",
+          explanation: "Vertical có dy và ry riêng; không lấy trung bình tùy ý tám hàng xóm.",
         },
         {
-          title: "Kiểm một xung nhiệt",
-          explanation:
-            "Với rx=ry=0.2, một ô 1 trong nền 0 trở thành 0.2; bốn hàng xóm cũng bằng 0.2.",
+          title: "Kiểm bằng đáp án tính tay",
+          explanation: "Dấu cộng phân biệt stencil với blur 3×3 và cập nhật tại chỗ.",
         },
         {
-          title: "Giữ nguyên double buffer",
-          explanation:
-            "Không đổi thành cập nhật tại chỗ như hộp cát. Thứ tự vòng lặp không được làm đổi nghiệm một bước.",
+          title: "Giữ double buffer",
+          explanation: "Đảo thứ tự duyệt không được đổi kết quả một bước.",
         },
       ],
     },
     "p47-l05": {
-      focus: "So sánh biên cách nhiệt với vành ô bị giữ lạnh, cả khi người dùng tô lên mép.",
-      expected:
-        "Biên cách nhiệt giữ trường đồng đều; biên lạnh luôn giữ vành ngoài ở 0, kể cả khi tô lên mép.",
-      files: ["include/diffusion.hpp", "src/main.cpp"],
+      focus: "Nói rõ mô hình ở mép và ở nguồn.",
+      expected: "Vành lạnh không bị brush phá; heater giữ 0/1 và unpin không xóa nhiệt đã có.",
+      files: ["include/field.hpp", "include/brush.hpp", "include/diffusion.hpp"],
       steps: [
         {
-          title: "Bịt dòng nhiệt qua mặt ngoài",
-          explanation:
-            "Ở biên cách nhiệt, ghost cell lấy giá trị ô sát biên; chênh lệch qua mặt ngoài bằng 0.",
+          title: "Đóng mặt ngoài",
+          explanation: "Ghost bằng chính ô sát mặt tạo thông lượng ngoài bằng 0.",
         },
         {
-          title: "Giữ vành ô ở nhiệt độ môi trường",
-          explanation:
-            "Cold ép vành ngoài về 0 khi đổi chế độ, sau input và trong solver. Nhiệt được rút ra khỏi miền.",
+          title: "Giữ vành ở 0",
+          explanation: "Đây là giữ tâm các ô ngoài, khác miền ghost-cell cách nhiệt.",
         },
         {
-          title: "Đọc phép đo đúng điều kiện",
+          title: "Ghi nguồn riêng",
           explanation:
-            "Không yêu cầu bảo toàn tổng theta với biên lạnh. Chuyển biên hoặc tô bút cũng có thể đổi tổng tức thời.",
+            "Heater thay giá trị ứng viên và cộng sourceChange; không áp bảo toàn cho ca có nguồn.",
         },
       ],
     },
     "p47-l06": {
-      focus: "Suy ra rx+ry ≤ 1/2, từ chối cấu hình sai và tách solver khỏi FPS.",
+      focus: "Biết giới hạn dt bằng cả trọng số và thí nghiệm.",
       expected:
-        "Chạy liên tục được ở tham số chuẩn; alpha=12, dt=1/30 bị từ chối, giảm dt về 1/60 chạy lại được.",
-      files: ["include/timing.hpp", "src/main.cpp"],
+        "Cấu hình chuẩn chạy; checker dt=0,05 phân kỳ khi chủ động bật experiment, rồi dừng hữu hạn.",
+      files: [
+        "include/parameters.hpp",
+        "include/diffusion.hpp",
+        "include/timing.hpp",
+        "include/input.hpp",
+        "src/main.cpp",
+      ],
       steps: [
+        { title: "Đọc trọng số tâm", explanation: "1-2rx-2ry không âm khi rx+ry≤0,5." },
         {
-          title: "Nhìn các trọng số",
+          title: "Cho phép sai có giới hạn",
           explanation:
-            "Trọng số của ô giữa là 1-2rx-2ry. Khi nó âm, không còn lập luận trung bình có trọng số để giữ min/max.",
+            "Chặn ở chế độ thường; experiment giữ raw theta và từ chối ứng viên vượt biên an toàn.",
         },
         {
-          title: "Không chữa sai số bằng màu",
+          title: "Tách đồng hồ",
           explanation:
-            "alpha=12 và dt=1/30 bị từ chối; dt=1/60 khôi phục ổn định. Không clamp current để giả vờ solver đúng.",
-        },
-        {
-          title: "Giới hạn công việc mỗi frame",
-          explanation:
-            "Accumulator dùng dt của solver, tối đa tám bước/frame và nhận tối đa 0,25 giây. Báo dropped time khi bỏ bước.",
+            "dt là giây mô hình, không phải thời gian một lần vẽ; dropped đã tính speed.",
         },
       ],
     },
     "p47-l07": {
-      focus: "Thêm inspector, min/max, trung bình và tổng nhiệt độ dư.",
-      expected:
-        "Đọc được một ô cùng min/max/mean/sum; thấy max giảm trong khi tổng gần như giữ nguyên ở tấm cách nhiệt.",
-      files: ["include/diagnostics.hpp", "src/main.cpp"],
+      focus: "Vẽ toàn lưới lớn mà không đổi thuật toán nhiệt.",
+      expected: "192×192 cập nhật/vẽ đủ 36.864 ô; G đổi h nhưng không sửa D/dt.",
+      files: ["include/view.hpp", "include/pixels.hpp", "include/workshop.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Chọn ô để đối chiếu",
-          explanation:
-            "Mũi tên chọn tọa độ; I in nhiệt độ thật ra terminal. Canvas còn hiển thị bốn hàng xóm.",
+          title: "Cấp texture một lần",
+          explanation: "Capacity 256² đủ cả ba độ phân giải, source rect chỉ lấy vùng đã upload.",
         },
         {
-          title: "Phân biệt cực đại và tổng",
-          explanation:
-            "Cực đại hạ dần không đồng nghĩa tấm mất nhiệt: tổng có thể giữ nguyên trong khi phân bố phẳng hơn.",
+          title: "Ghi RGBA theo pitch",
+          explanation: "Mọi byte trong vùng lock được ghi; không mặc định pitch=width×4.",
         },
-        {
-          title: "Ghi rõ đơn vị",
-          explanation:
-            "Sum(theta) tỉ lệ với nhiệt lượng nếu kích thước ô, bề dày và nhiệt dung cố định; không ghi nhãn Joule khi chưa có các hệ số đó.",
-        },
+        { title: "Giữ miền vật lý", explanation: "h=96/N; tăng N có thể làm dt cũ vi phạm CFL." },
       ],
     },
     "p47-l08": {
-      focus: "Cảnh mẫu, ca kiểm chứng hữu hạn, nghiệm tham chiếu rời rạc và CTest Debug/Release.",
-      expected:
-        "Bốn preset hoạt động, V báo từng điều kiện và CTest Debug/Release đạt trên các ca có đáp án độc lập.",
-      files: ["include/field.hpp", "include/diagnostics.hpp", "src/main.cpp", "tests/tests.cpp"],
+      focus: "Đọc một thí nghiệm thay vì chỉ nhìn vùng màu sáng.",
+      expected: "Có sáu cảnh, probe cố định trong grid và đồ thị theo thời gian mô hình.",
+      files: [
+        "include/presets.hpp",
+        "include/metrics.hpp",
+        "include/workshop.hpp",
+        "include/panel.hpp",
+      ],
       steps: [
         {
-          title: "Chọn cảnh có đáp án",
-          explanation:
-            "Trường đồng đều phải đứng yên với biên cách nhiệt. Xung nhiệt có đáp án chính xác sau một bước.",
+          title: "Chọn cảnh có dự đoán",
+          explanation: "Uniform, checker và cosine trả lời những câu hỏi khác Gaussian.",
         },
         {
-          title: "Kiểm độc lập với hình ảnh",
-          explanation:
-            "So sánh cosine mode với hệ số suy giảm rời rạc; kiểm bảo toàn tổng, min/max và biên lạnh riêng biệt.",
+          title: "Ghi probe sau bước được chấp nhận",
+          explanation: "Không ghi một sample mỗi lần present hoặc lặp khi pause.",
         },
         {
-          title: "Bàn giao chương trình chạy được",
+          title: "Đọc tích phân đúng đơn vị",
           explanation:
-            "ZIP có starter, tám checkpoint, final và tests. V chỉ kiểm một bản field riêng rồi trả quyền điều khiển.",
+            "I*=sum(theta)dxdy, không tự gán Joule; graph tự đổi y nhưng heatmap không đổi thang.",
+        },
+      ],
+    },
+    "p47-l09": {
+      focus: "Chứng minh đúng mô hình, quy mô và cách dùng bằng các phép kiểm riêng.",
+      expected:
+        "Source đầy đủ chạy được, oracle/CTests có thể thất bại và benchmark Release có raw samples.",
+      files: [
+        "include/reference.hpp",
+        "include/validation.hpp",
+        "include/benchmark.hpp",
+        "tests/tests.cpp",
+        "src/main.cpp",
+      ],
+      steps: [
+        {
+          title: "Oracle khác cách tính",
+          explanation:
+            "Thông lượng qua cạnh kiểm chéo stencil, không gọi lại sample/diffuse của bản chính.",
+        },
+        {
+          title: "Tách hai nghiệm tham chiếu",
+          explanation: "G^n kiểm scheme; exp(-Dk²t) kiểm sai phân so với PDE.",
+        },
+        {
+          title: "Đo và bàn giao",
+          explanation:
+            "Build từng target từ ZIP, chạy CPU tests và kiểm trực tiếp UI; không suy FPS chung từ timing CPU.",
         },
       ],
     },
@@ -200,44 +215,35 @@ const learning = {
       },
     ],
     "p47-l03": [
-      {
-        label: "Laplacian rời rạc",
-        href: "/glossary#heat-laplacian",
-        kind: "Thuật ngữ",
-      },
+      { label: "Laplacian rời rạc", href: "/glossary#heat-laplacian", kind: "Thuật ngữ" },
     ],
     "p47-l04": [
-      {
-        label: "Double buffer",
-        href: "/glossary#heat-double-buffer",
-        kind: "Thuật ngữ",
-      },
+      { label: "Double buffer", href: "/glossary#heat-double-buffer", kind: "Thuật ngữ" },
     ],
     "p47-l05": [
-      {
-        label: "Điều kiện biên nhiệt",
-        href: "/glossary#heat-boundary",
-        kind: "Thuật ngữ",
-      },
+      { label: "Điều kiện biên nhiệt", href: "/glossary#heat-boundary", kind: "Thuật ngữ" },
     ],
     "p47-l06": [
       {
-        label: "Điều kiện ổn định khuếch tán",
-        href: "/glossary#heat-stability",
+        label: "Heat equation / stability — Oxford",
+        href: "https://www.robots.ox.ac.uk/~ian/Teaching/Computation/lab6.pdf",
         kind: "Thuật ngữ",
       },
     ],
     "p47-l07": [
       {
-        label: "Nhiệt độ dư chuẩn hóa",
-        href: "/glossary#normalized-temperature",
-        kind: "Thuật ngữ",
+        label: "SDL_LockTexture: write-only và pitch",
+        href: "https://wiki.libsdl.org/SDL3/SDL_LockTexture",
+        kind: "SDL API",
       },
     ],
     "p47-l08": [
+      { label: "Nhiệt độ chuẩn hóa", href: "/glossary#normalized-temperature", kind: "Thuật ngữ" },
+    ],
+    "p47-l09": [
       {
-        label: "Laplacian rời rạc",
-        href: "/glossary#heat-laplacian",
+        label: "Heat equation / sai phân — Oxford",
+        href: "https://www.robots.ox.ac.uk/~ian/Teaching/Computation/lab6.pdf",
         kind: "Thuật ngữ",
       },
     ],

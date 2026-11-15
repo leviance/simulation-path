@@ -1,87 +1,161 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Vì sao ô nóng truyền nhiệt sang ô bên cạnh?
+# Cho nhiệt lan trên một hàng
 
 ## Vấn đề cần giải quyết
 
-Đặt một ô nóng giữa hai ô lạnh. Trực giác nói ô giữa sẽ nguội, hai ô bên cạnh sẽ ấm lên. Ta cần viết phép cập nhật thể hiện đúng điều đó, chứ không đơn thuần làm mờ màu.
+Ta đã đặt được vùng nóng, nhưng bỏ chuột ra thì mọi ô đứng nguyên. Bây giờ cần trả lời bằng code: sau một khoảng thời gian nhỏ, mỗi ô nhận hoặc mất bao nhiêu nhiệt từ hai ô cạnh nó?
 
-Bài này cố ý chỉ cho nhiệt lan theo chiều ngang. Mỗi hàng là một thanh độc lập; chưa truyền nhiệt giữa các hàng. Như vậy ta có thể kiểm phép tính bằng ba số trước khi nhìn cả tấm.
+Bắt đầu từ checkpoint 2. Ta chỉ thêm trao đổi **theo chiều ngang**, để kiểm được từng con số trước khi mở sang mặt phẳng. Cảnh ban đầu ở checkpoint 3 chỉ nóng ở hàng giữa. Đọc khoảng 25 phút, viết 45 phút, kiểm 30 phút; chưa tính setup.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Gọi nhiệt độ bên trái, giữa, phải là L, C, R. Mức thay đổi do phía trái tỉ lệ với `L-C`; phía phải là `R-C`. Cộng lại:
+Hình dung ba ô: trái 0, giữa 1, phải 0. Ô giữa mất nhiệt sang cả hai phía; mỗi ô bên nhận nhiệt từ giữa. Nếu trái và phải cùng bằng nhiệt độ giữa, chẳng có chênh lệch để trao đổi.
 
-$$(L-C)+(R-C)=L-2C+R.$$
+Hai chênh lệch cộng lại là:
 
-Nếu C nóng hơn hai bên, tổng âm nên C giảm. Nếu ba ô bằng nhau, tổng bằng 0. Đây là sai phân bậc hai, xấp xỉ độ cong của trường nhiệt độ; không phải khoảng cách một hạt di chuyển.
+$$
+(\theta_{x-1}-\theta_x)+(\theta_{x+1}-\theta_x)
+=\theta_{x-1}-2\theta_x+\theta_{x+1}.
+$$
 
-Với hệ số khuếch tán $\alpha$, khoảng cách ô $\Delta x$ và bước thời gian $\Delta t$:
+Chia cho `dx²` cho sai phân bậc hai theo x. D có đơn vị độ dài²/giây mô hình; nhân thêm `dt` để có một lượng thay đổi nhiệt độ chuẩn hóa:
 
-$$r_x=\frac{\alpha\Delta t}{\Delta x^2},\qquad C_{\mathrm{new}}=C+r_x(L-2C+R).$$
+$$
+r_x=\frac{D\,dt}{dx^2},\qquad
+\theta_x^{n+1}=\theta_x^n+r_x(\theta_{x-1}^n-2\theta_x^n+\theta_{x+1}^n).
+$$
 
-Source dùng $\alpha=6$, $\Delta x=1$, $\Delta t=1/30$, nên $r_x=0.2$. Ba ô `0, 1, 0` trong một hàng dài nền 0 sẽ thành `0.2, 0.6, 0.2` sau một bước. Đây là đơn vị khoảng cách và thời gian của mô hình, chưa phải thông số của đồng hay nhôm.
+Với D=1,5, dx=0,5, dt=1/30, `rx=0,2`. Xung 1 ở nền 0 thành tâm 0,6 và hai ô cạnh 0,2 sau một bước. Tổng vẫn 1. Hãy dự đoán bước thứ hai trước khi nhấn N.
 
 <InteractiveLab demo="heat-plate" mode="heat-3" />
 
-Chọn tấm lạnh, bán kính 0, đặt một ô nóng rồi tiến một bước. Ô trên và dưới vẫn lạnh. Đọc các giá trị thay vì chỉ đoán qua màu.
-
 ## Viết code từng bước
 
-### Bước 1 — Đưa tham số vào Settings
+### 1. Tách thông số khỏi mảng nhiệt độ
 
-`include/diffusion.hpp` chứa các tham số tách khỏi Field. Hàm ratioX tính đúng hệ số của công thức:
+`parameters.hpp` giữ cấu hình dùng cho phép tính. Các giá trị dưới đây là mặc định chung; ở bài này ta chỉ dùng D, dt và dx, chưa mở điều khiển biên/experiment:
 
-```cpp title="include/diffusion.hpp — hệ số theo trục x"
-inline double ratioX(const Settings& settings) {
-    return settings.diffusivity * settings.dt / (settings.dx * settings.dx);
+{/* snippet include/parameters.hpp#settings */}
+```cpp title="include/parameters.hpp — thông số của mô hình"
+struct Settings {
+    double diffusivity = 1.5;
+    double dt = 1.0 / 30.0;
+    double dx = 0.5;
+    double dy = 0.5;
+    Boundary boundary = Boundary::Insulated;
+    bool experiment = false;
+};
+```
+
+Đừng lấy `dt` bằng thời gian một frame. Trong bài này, nút N luôn yêu cầu cùng một bước 1/30 giây mô hình, bất kể bạn mất bao lâu mới bấm tiếp.
+
+### 2. Đọc cùng một thời điểm cũ
+
+Nếu sửa `current[x]` rồi dùng nó để tính `current[x+1]`, ô sau đọc giá trị mới còn ô trước đã đọc giá trị cũ. Hướng quét sẽ ảnh hưởng kết quả. Ta thêm `next` cùng kích thước, cùng `tick` và `time` vào `Field`.
+
+`diffuse` đọc `current` qua `sample`, ghi ứng viên vào `next`. Chỉ sau khi tính xong mọi ô mới swap và tiến đồng hồ:
+
+{/* snippet include/diffusion.hpp#diffuse */}
+```cpp title="include/diffusion.hpp — bước khuếch tán chỉ theo x"
+inline StepResult diffuse(Field& field, const Settings& settings) {
+    bool twoDimensions = false;
+    const Stability coefficients = stability(settings, twoDimensions);
+    StepResult result;
+    if (!coefficients.valid) {
+        return result;
+    }
+    bool allowUnstable = false;
+    if (!coefficients.stable && !allowUnstable) {
+        result.status = StepStatus::UnstableSettings;
+        return result;
+    }
+
+    for (int y = 0; y < field.height; ++y) {
+        for (int x = 0; x < field.width; ++x) {
+            const std::size_t index = field.index(x, y);
+            ++result.visited;
+            double value = 0;
+            bool fixedRim = false;
+            if (!fixedRim) {
+                const double center = sample(field, x, y);
+                const double horizontal = sample(field, x - 1, y) - 2 * center + sample(field, x + 1, y);
+                value = center + coefficients.rx * horizontal;
+            }
+            if (!std::isfinite(value)) {
+                result.status = StepStatus::NonFiniteCandidate;
+                return result;
+            }
+            result.maximumAbs = std::max(result.maximumAbs, std::abs(value));
+            field.next[index] = value;
+        }
+    }
+    if (allowUnstable && result.maximumAbs > 16) {
+        result.status = StepStatus::ExperimentAmplitude;
+        return result;
+    }
+    // Mọi ô đã được tính xong: publish một mức thời gian, không clamp nghiệm.
+    field.current.swap(field.next);
+    ++field.tick;
+    field.time += settings.dt;
+    result.advanced = true;
+    result.status = StepStatus::Advanced;
+    return result;
 }
 ```
 
-Chú ý bình phương dx ở mẫu. Chia đôi khoảng cách ô mà giữ nguyên alpha và dt làm hệ số tăng bốn lần, không phải hai.
+Ở checkpoint 3, `twoDimensions=false` nên hệ số y bằng 0 và chưa có phép tính vertical. `Stability`/`StepResult` là phần kiểm tham số và kết quả được cung cấp cùng khung: không cho NaN hoặc một bước không hợp lệ ghi đè nghiệm cũ. Ta sẽ tự suy điều kiện ổn định và mở thí nghiệm phá nó ở bài 6; phần cốt lõi cần viết hôm nay là vòng lặp, sai phân và swap.
 
-### Bước 2 — Đọc current và ghi next
+`sample` ở mép lấy chính ô sát mép cho giá trị bên ngoài. Nhờ vậy mặt ngoài không có chênh lệch để trao đổi. Bài 5 sẽ đối chiếu cách này với giữ lạnh cả vành ô; lúc này giữ nguyên helper, chưa kết luận rằng mọi kiểu biên đều bảo toàn.
 
-Trong vòng lặp `diffuse`, mọi sample đều lấy từ current:
+### 3. Nối một lần bấm với một lần cập nhật
 
-```cpp title="include/diffusion.hpp — cập nhật theo hàng ngang"
-const double center = sample(field, x, y);
-const double horizontal = sample(field, x - 1, y) - 2 * center + sample(field, x + 1, y);
-double value = center + rx * horizontal;
-field.next[index] = value;
+Action Step đặt `singleStep=true` và dừng đồng hồ chạy tự động. Trong `main`, yêu cầu đó tạo `steps=1`; đoạn sau gọi solver và chỉ đánh dấu ảnh thay đổi khi bước được chấp nhận:
+
+{/* snippet src/main.cpp#update-batch */}
+```cpp title="src/main.cpp — gọi solver trước khi vẽ"
+double batchMs = 0;
+int advanced = 0;
+for (int step = 0; step < steps; ++step) {
+    const auto start = Clock::now();
+    state.lastStep = heat::diffuse(field, state.settings);
+    batchMs += millisecondsSince(start);
+    if (!state.lastStep.advanced) {
+        state.pause();
+        state.message = heat::stepMessage(state.lastStep.status);
+        std::cout << state.message << '\n';
+        break;
+    }
+    ++advanced;
+    state.dirty = true;
+    heat::recordProbe(field, state);
+}
+if (advanced > 0) {
+    state.updateMs = batchMs / advanced;
+}
 ```
 
-Nếu ghi thẳng vào current, ô bên phải sẽ đọc nhiệt độ mới của ô bên trái. Khi đó một bước không còn mô tả cùng một khoảng thời gian cho mọi ô. Hình có thể vẫn trông như lan nhiệt, nhưng đáp án phụ thuộc hướng duyệt.
-
-### Bước 3 — Chỉ đổi hai mảng khi xong cả lưới
-
-Sau hai vòng lặp, đổi vai current và next:
-
-```cpp title="include/diffusion.hpp — kết thúc một bước"
-field.current.swap(field.next);
-++field.tick;
-return true;
-```
-
-Không cần xóa next trước mỗi bước: vòng lặp gán lại tất cả phần tử. Cũng không swap bên trong vòng lặp. Field giữ hai vector cùng kích thước và không cấp phát lại ở từng ô.
+`state.lastStep.visited` đếm số ô thực sự đã xét, không lấy một N quảng cáo sẵn. `recordProbe` chưa ghi dữ liệu ở bài này; đó là hook của khung UI, không làm thêm bước tính nhiệt.
 
 ## Ghép các phần lại
 
-Main tạo Settings trước vòng lặp. Phím N gọi `diffuse` một lần sau khi xử lý input; phần render không làm thay đổi field. Build `project_47_checkpoint_3` và lặp lại ca một ô nóng.
+Thứ tự frame trở thành đọc event → nhận yêu cầu step → `diffuse` → cập nhật số liệu → clear/draw/present. Không đặt `diffuse` trong `drawGrid` và không gọi thêm khi vẽ panel.
 
-Ở hai đầu hàng, `sample` dùng giá trị ô sát biên thay cho ô bên ngoài. Chênh lệch qua mặt ngoài bằng 0, tức không có dòng nhiệt thoát qua đó. Bài 5 sẽ so sánh cách này với mép bị giữ lạnh.
-
-`stable` đã bảo vệ bước cập nhật: trong bài một chiều, $r_x$ không vượt 0.5. Ta tạm dùng 0.2; bài 6 sẽ suy ra giới hạn thay vì coi nó là một “con số thần kỳ”.
+Build/run `project_47_checkpoint_3`. Chọn xóa, radius 0, đặt đúng một ô 1 xa mép bằng Enter rồi nhấn N một lần. Dùng mũi tên đọc tâm và hai ô bên trong panel; hàng trên/dưới phải vẫn 0. Cảnh Gaussian ban đầu có nhiều ô nóng nên không dùng nó để đo đáp án xung 0,6/0,2.
 
 ## Thử làm sai để hiểu đúng
 
-1. Tạm thay `field.next[index]` bằng `field.current[index]` và bỏ swap. Đặt một xung ở giữa, đảo hướng vòng lặp và so hai kết quả. Khôi phục double buffer trước khi tiếp tục.
-2. Tạm quên hệ số 2 trước center. Một hàng đồng đều sẽ tự nóng thêm dù không có nguồn nhiệt. Đây là ca thử tốt hơn chỉ quan sát một vệt đang loang.
+Trong một bản thử, ghi thẳng kết quả vào `current` thay vì `next`. Sau một bước, so phía trái và phải của xung rồi đảo hướng vòng x. Hai hình có thể nghiêng ngược nhau: đây là trộn mức thời gian, không phải một tính chất của dẫn nhiệt. Khôi phục double buffer.
+
+Thử nhấn resize nhiều lần mà không bấm N. `tick` không được tăng. Nếu có tăng, bạn đang nối update với việc vẽ thay vì yêu cầu tiến thời gian.
 
 ## Tự kiểm tra kết quả
 
-Xung ở giữa cho tâm 0.6, trái/phải 0.2 sau một bước; các hàng khác giữ nguyên. Trường đồng đều không đổi. Tick tăng đúng một khi bấm N. Tổng giá trị của một hàng cách nhiệt không đổi trong sai số dấu phẩy động khi không có input.
+- Một lần N tăng tick đúng 1, time tăng `dt`; đứng yên không tăng.
+- Xung cho tâm 0,6 và hai ô cạnh 0,2 trong sai số số thực; ô chéo/hàng khác vẫn 0.
+- `next` sau swap còn chứa mức thời gian trước đó. Không cần xóa nó: bước sau sẽ ghi đủ mọi ô.
+- Đảo thứ tự duyệt không đổi nghiệm một bước; bước bị từ chối không đổi current/tick/time.
 
 ## Bài tập mở rộng
 
-Tính bằng tay trường hợp `L=0.3, C=0.4, R=0.5` với r=0.2 rồi kiểm bằng code. Vì sao một phân bố tuyến tính có thể cho cập nhật bằng 0 ở ô giữa? Tiếp theo, [thêm truyền nhiệt theo chiều dọc](/projects/heat-plate/04-mo-rong-sang-hai-chieu).
+Tính tay bước thứ hai của xung: tâm 0,44, hai ô sát tâm 0,24, hai ô cách hai bước 0,04. Kiểm bằng cursor; tổng vẫn 1 khi chưa chạm điều kiện biên khác. Bài sau sẽ [thêm trao đổi giữa các hàng](/projects/heat-plate/04-mo-rong-sang-hai-chieu).

@@ -90,6 +90,7 @@ inline void selectProbe(const Field& field, Workshop& state, int x, int y) {
     state.historyCount = 0;
 }
 
+// [snippet record-probe]
 inline void recordProbe(const Field& field, Workshop& state) {
 #if LAB_CHECKPOINT >= 8
     if (state.historyCount == state.history.size()) {
@@ -103,7 +104,10 @@ inline void recordProbe(const Field& field, Workshop& state) {
     static_cast<void>(state);
 }
 
+// [/snippet record-probe]
+
 #if LAB_CHECKPOINT >= 2
+// [snippet stamp]
 inline void stamp(Field& field, Workshop& state, int x, int y, bool join) {
     double value = state.brushValue;
     if (state.erasing) {
@@ -121,6 +125,8 @@ inline void stamp(Field& field, Workshop& state, int x, int y, bool join) {
     state.previousValid = true;
     state.dirty = true;
 }
+
+// [/snippet stamp]
 #endif
 
 inline void selectScene(Field& field, Workshop& state, Preset preset, int size, bool clear = false) {
@@ -165,6 +171,7 @@ inline void setSlider(Workshop& state, Slider slider, double fraction) {
     state.singleStep = false;
     state.accumulator = 0;
     state.restartClock = true;
+    state.historyCount = 0;
     if (slider == Slider::Diffusivity) {
         state.settings.diffusivity = std::round(6 * fraction * 20) / 20;
     } else if (slider == Slider::Timestep) {

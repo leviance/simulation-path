@@ -178,6 +178,30 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
     prerequisites: "Window/renderer/input từ Project 01–04; không cần OpenGL hoặc Project 45.",
     workload: "Final 512×320 = 163.840 ô thực sự được cập nhật/vẽ; 96×64 chỉ là bước học ban đầu.",
   },
+  "47": {
+    previousTitle: "Tấm kim loại nóng: nhiệt lan từ nơi bạn click ra toàn mặt phẳng",
+    replacement: {
+      slug: "heat-plate",
+    },
+    summary:
+      "Tô nóng/lạnh lên tấm, chọn nguồn giữ nhiệt và dùng slider D/dt để quan sát khuếch tán hoặc bất ổn số.",
+    outcome:
+      "Công cụ C++/SDL3 192×192 ô có hai kiểu biên, heater, probe, gallery, thí nghiệm có giới hạn và chế độ xem sạch.",
+    question:
+      "Một công thức trao đổi giữa các ô tạo ra quá trình lan nhiệt thế nào, và vì sao dt quá lớn làm nghiệm sai?",
+    interactions: [
+      "Tô bằng chuột/phím, chỉnh D/dt, pause/step/reset/clear.",
+      "Chọn biên, heater, cảnh mẫu, độ phân giải và probe; chủ động bật thí nghiệm bất ổn.",
+    ],
+    concepts: [
+      "Laplacian, explicit Euler, double buffer và điều kiện ổn định.",
+      "Nguồn/biên, nghiệm rời rạc/PDE, refinement, texture/pitch và đo chi phí hữu hạn.",
+    ],
+    prerequisites:
+      "Window/input/grid từ Project 01–04; sai phân và mô hình nhiệt được giải thích tại chỗ, không cần OpenGL.",
+    workload:
+      "Final 192×192 = 36.864 ô cập nhật/vẽ thật; 128/192/256 cùng miền cách nhiệt 96×96, 32×32 chỉ là lưới học.",
+  },
 };
 
 export const rebuildRevisions = Object.fromEntries(

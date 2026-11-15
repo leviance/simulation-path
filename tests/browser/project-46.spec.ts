@@ -173,7 +173,7 @@ test("sand legacy lesson URL, progress migration and dark navigation retain the 
         JSON.stringify({
           version: 2,
           completedLessonIds: ["p45-l01", "p46-l07", "p47-l01"],
-          projectContentVersions: { p45: 2 },
+          projectContentVersions: { p45: 2, p47: 2 },
         }),
       );
   }, progressKey);

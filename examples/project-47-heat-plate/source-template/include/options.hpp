@@ -47,10 +47,12 @@ inline double realArgument(const std::string& text, double minimum, double maxim
     return value;
 }
 
+// Viewer, fixture và benchmark là các chế độ riêng; không âm thầm bỏ qua cờ.
 inline Options parseOptions(int argc, char** argv) {
     Options options;
     bool viewerSpecified = false;
     bool workloadSpecified = false;
+    bool modelSpecified = false;
     auto valueAfter = [&](int& index) {
         ++index;
         if (index >= argc) {
@@ -91,6 +93,7 @@ inline Options parseOptions(int argc, char** argv) {
             }
             viewerSpecified = true;
         } else if (argument == "--size") {
+            modelSpecified = true;
             options.size = integerArgument(valueAfter(index), 1, 256);
 #if LAB_CHECKPOINT >= 7
             if (options.size != 128 && options.size != 192 && options.size != 256) {
@@ -102,12 +105,16 @@ inline Options parseOptions(int argc, char** argv) {
             }
 #endif
         } else if (argument == "--preset") {
+            modelSpecified = true;
             options.preset = static_cast<Preset>(integerArgument(valueAfter(index), 0, 5));
         } else if (argument == "--diffusivity") {
+            modelSpecified = true;
             options.settings.diffusivity = realArgument(valueAfter(index), 0, 6);
         } else if (argument == "--dt") {
+            modelSpecified = true;
             options.settings.dt = realArgument(valueAfter(index), 0.002, 0.1);
         } else if (argument == "--boundary") {
+            modelSpecified = true;
             const std::string boundary = valueAfter(index);
             if (boundary == "insulated") {
                 options.settings.boundary = Boundary::Insulated;
@@ -117,6 +124,7 @@ inline Options parseOptions(int argc, char** argv) {
                 throw std::invalid_argument("Boundary is insulated or rim");
             }
         } else if (argument == "--experiment") {
+            modelSpecified = true;
             options.settings.experiment = true;
         } else {
             throw std::invalid_argument("Unknown option: " + argument);
@@ -125,7 +133,7 @@ inline Options parseOptions(int argc, char** argv) {
     if (!options.help && !options.verify && !options.benchmark && (options.hidden || !options.capture.empty()) && options.seconds == 0) {
         throw std::invalid_argument("Hidden/capture runs require finite --seconds");
     }
-    if (options.verify && (options.benchmark || viewerSpecified || workloadSpecified)) {
+    if (options.verify && (options.benchmark || viewerSpecified || workloadSpecified || modelSpecified)) {
         throw std::invalid_argument("--verify is a separate finite CPU fixture run");
     }
     if (options.benchmark && viewerSpecified) {
@@ -134,6 +142,11 @@ inline Options parseOptions(int argc, char** argv) {
     if (!options.benchmark && workloadSpecified) {
         throw std::invalid_argument("--steps/--repeats are CPU benchmark options");
     }
+#if LAB_CHECKPOINT < 9
+    if (options.verify || options.benchmark) {
+        throw std::invalid_argument("CPU verification/benchmark are introduced in checkpoint 9");
+    }
+#endif
 #if LAB_CHECKPOINT < 5
     if (options.settings.boundary != Boundary::Insulated || options.preset == Preset::Heaters) {
         throw std::invalid_argument("Boundary/heater controls are introduced in checkpoint 5");
@@ -160,7 +173,7 @@ inline Options parseOptions(int argc, char** argv) {
 #endif
     const std::uint64_t visits = static_cast<std::uint64_t>(options.size) * options.size * options.steps * options.repeats;
     if (options.benchmark && (visits > 100000000ULL || options.settings.experiment || !stability(options.settings).stable)) {
-        throw std::invalid_argument("Benchmark requires a stable unforced policy and at most 100-million cell visits");
+        throw std::invalid_argument("Benchmark requires a stable policy and at most 100-million timed cell visits");
     }
     return options;
 }

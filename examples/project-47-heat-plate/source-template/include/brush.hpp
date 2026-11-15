@@ -12,6 +12,8 @@ enum class BrushMode {
 };
 
 #if LAB_CHECKPOINT >= 2
+// Radius tính bằng ô; giới hạn đầu vào của bút không phải clamp nghiệm solver.
+// [snippet paint-disk]
 inline void paintDisk(Field& field, const Settings& settings, int centerX, int centerY, int radius, double value, BrushMode mode = BrushMode::Temperature) {
     if (!field.contains(centerX, centerY) || !std::isfinite(value)) {
         return;
@@ -54,6 +56,10 @@ inline void paintDisk(Field& field, const Settings& settings, int centerX, int c
     static_cast<void>(mode);
 }
 
+// [/snippet paint-disk]
+
+// Bù các vị trí thiếu giữa hai event, không nối từ một endpoint ngoài tấm.
+// [snippet paint-stroke]
 inline void paintStroke(Field& field, const Settings& settings, int x0, int y0, int x1, int y1, int radius, double value, BrushMode mode = BrushMode::Temperature) {
     if (!field.contains(x0, y0) || !field.contains(x1, y1)) {
         return;
@@ -72,6 +78,8 @@ inline void paintStroke(Field& field, const Settings& settings, int x0, int y0, 
         paintDisk(field, settings, x, y, radius, value, mode);
     }
 }
+
+// [/snippet paint-stroke]
 #endif
 
 } // namespace heat

@@ -113,6 +113,12 @@ inline void drawPanel(SDL_Renderer* renderer, const Field& field, const Workshop
         status = "RUNNING";
     }
     text(renderer, 780, 45, status + " | " + std::to_string(field.width) + " x " + std::to_string(field.height) + " cells");
+#if LAB_CHECKPOINT >= 2
+    text(renderer, 780, 82, "Cell (" + std::to_string(state.cursorX) + "," + std::to_string(state.cursorY) + ") theta=" + decimal(sample(field, state.cursorX, state.cursorY), 6));
+#endif
+#if LAB_CHECKPOINT >= 8
+    text(renderer, 780, 103, "Probe (" + std::to_string(state.probeX) + "," + std::to_string(state.probeY) + ") theta=" + decimal(sample(field, state.probeX, state.probeY), 6));
+#endif
     for (const Button& button : buttons()) {
         if (taughtStage() < button.introducedAt) {
             continue;
@@ -138,7 +144,11 @@ inline void drawPanel(SDL_Renderer* renderer, const Field& field, const Workshop
         statusColor = {255, 122, 91, 255};
     }
     text(renderer, 780, 268, "rx+ry = " + decimal(coefficients.sum, 5), statusColor);
-    text(renderer, 780, 286, "h = " + decimal(state.settings.dx) + ", " + decimal(state.settings.dy) + " | max dt " + decimal(coefficients.maximumDt, 5));
+    std::string maximumDt = decimal(coefficients.maximumDt, 5);
+    if (state.settings.diffusivity == 0) {
+        maximumDt = "unbounded (D=0)";
+    }
+    text(renderer, 780, 286, "h " + decimal(state.settings.dx) + "," + decimal(state.settings.dy) + " | max dt " + maximumDt);
 #endif
     std::string boundary = "INSULATED: CLOSED OUTER FACES";
     if (state.settings.boundary == Boundary::ColdRim) {
@@ -172,7 +182,16 @@ inline void drawPanel(SDL_Renderer* renderer, const Field& field, const Workshop
     if (state.settings.experiment) {
         scale = "EXPERIMENT COLORS [-1,2]; raw theta may exceed display range";
     }
-    text(renderer, 24, 115, scale);
+    for (int index = 0; index < 128; ++index) {
+        double theta = static_cast<double>(index) / 127;
+        if (state.settings.experiment) {
+            theta = -1 + 3 * theta;
+        }
+        setColor(renderer, heatColor(theta, state.settings.experiment));
+        const SDL_FRect swatch{24 + static_cast<float>(index), 116, 1, 8};
+        requireSdl(SDL_RenderFillRect(renderer, &swatch), "fixed color legend");
+    }
+    text(renderer, 164, 115, scale);
 #if LAB_CHECKPOINT >= 2
     const float cellWidth = view.width / field.width;
     const float cellHeight = view.height / field.height;
@@ -181,7 +200,10 @@ inline void drawPanel(SDL_Renderer* renderer, const Field& field, const Workshop
     requireSdl(SDL_RenderRect(renderer, &cursor), "cell cursor");
 #endif
     // Thông báo không che heatmap; giới hạn chiều dài phù hợp panel.
-    text(renderer, 780, 837, state.message.substr(0, 49), {238, 196, 112, 255});
+    text(renderer, 780, 830, state.message.substr(0, 49), {238, 196, 112, 255});
+    if (state.message.size() > 49) {
+        text(renderer, 780, 842, state.message.substr(49, 49), {238, 196, 112, 255});
+    }
 }
 
 } // namespace heat
