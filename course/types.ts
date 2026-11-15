@@ -75,6 +75,7 @@ export interface PublishedProjectMeta extends PublishedProjectSummary {
   challenge: ProjectChallenge;
   sourceDirectory: string;
   checkpointCount: number;
+  lessonAliases?: Readonly<Record<string, string>>;
 }
 
 export type ProjectMeta = PublishedProjectMeta;
@@ -91,4 +92,5 @@ export interface PublishedProjectEditorial {
   objectives: string[];
   lessons: LessonMeta[];
   challenge: ProjectChallenge;
+  lessonAliases?: Readonly<Record<string, string>>;
 }

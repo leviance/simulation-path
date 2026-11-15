@@ -3,6 +3,7 @@ import path from "node:path";
 import ts from "typescript";
 import { loadProjectCatalog, workspace } from "./project-catalog.mjs";
 import { interactiveLabUsages } from "./mdx-contracts.mjs";
+import { validateLessonAliases } from "./lesson-aliases.mjs";
 import { assertSelfContainedModule } from "./typescript-module-contract.mjs";
 import { reconcileGeneratedFiles } from "./generated-files.mjs";
 import { projectSummaryModules } from "./project-summary-shards.mjs";
@@ -117,6 +118,7 @@ function validateEditorial(project, editorial, lessonIds) {
       );
     }
   });
+  validateLessonAliases(editorial.lessonAliases, editorial.lessons, `Project ${project.id}`);
 }
 
 function validateLearning(project, learning, lessons) {

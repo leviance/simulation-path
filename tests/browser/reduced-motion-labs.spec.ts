@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 const cases = [
   {
     project: 46,
-    route: "falling-sand/07-kiem-chung-va-hoan-thien",
+    route: "falling-sand/09-kiem-chung-va-hoan-thien",
     step: "Tiến một tick",
     label: "Tick",
   },

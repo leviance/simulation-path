@@ -1,90 +1,113 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Giữ nhịp mô phỏng khi tốc độ vẽ thay đổi
+# Chạy đều, tạm dừng và điều chỉnh tốc độ
 
 ## Vấn đề cần giải quyết
 
-Nhấn N từng lần giúp hiểu luật, nhưng không tiện để chơi với hộp cát. Ta muốn chạy liên tục mà vẫn giữ kết quả có thể kiểm tra. Nếu gọi `stepGrid` đúng một lần mỗi frame, máy vẽ 120 FPS sẽ làm cát chạy nhanh gấp đôi máy vẽ 60 FPS.
+Cho đến giờ ta chủ động bấm N nên mỗi lần chỉ có một tick. Nếu thay bằng “mỗi frame gọi `stepGrid` một lần”, máy vẽ nhanh sẽ làm cát rơi nhanh hơn. Ta muốn nhịp mô phỏng được quyết định bằng thời gian, còn frame chỉ là những lần nhìn thấy trạng thái ấy.
 
-Bài này giữ nguyên `stepGrid`. Nó vẫn làm một tick, không nhận `dt`. Việc quyết định frame hiện tại cần chạy bao nhiêu tick thuộc về một hàm mới: `planSteps` trong `timing.hpp`.
+Bài này thêm Space để chạy/dừng và tốc độ 0,25× đến 4×. Thuật toán trong `rules.hpp` vẫn giữ nguyên; nó không nhận một `dt` tùy ý rồi cho hạt nhảy nhiều hàng.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Chọn nhịp 30 tick/giây, tức mỗi tick tương ứng `h=1/30` giây. Tích thời gian frame vào một phần dư `accumulator`:
+Ta quy ước 30 tick cho một giây mô hình:
 
-$$n=\left\lfloor\frac{a+\Delta t}{h}\right\rfloor,\qquad a_{new}=a+\Delta t-nh.$$
+$$h=\frac{1}{30}\text{ s},\qquad A\leftarrow A+\Delta t_{accepted}\,speed.$$
 
-Ở 60 FPS, thường cần hai frame mới đủ một tick. Ở 15 FPS, thường có hai tick cho mỗi frame. Nếu nhận cùng hai giây, không có input mới và không vượt giới hạn xử lý, cả hai cách chia frame phải tạo ra 60 tick và cùng lưới.
+`A` là accumulator, giữ phần thời gian chưa đủ một tick. Với tốc độ 2×, một giây thực tương ứng hai giây mô hình, tức mục tiêu 60 tick. Các bước vẫn có cùng ý nghĩa “mỗi hạt thử đi một ô”.
 
-Khi máy dừng vài giây, chạy bù mọi tick có thể khiến nó càng chậm. Bản này nhận tối đa 0,25 giây mỗi frame và chạy tối đa 4 tick. Tick đến hạn còn lại được bỏ, có báo số giây bị bỏ qua. Như vậy ứng dụng giữ được phản hồi, nhưng **không còn theo kịp thời gian thực trong lúc quá tải**.
+Ta chỉ nhận tối đa 0,25 giây thực từ một frame và chạy tối đa bốn tick trong frame đó. Phần vượt ngân sách được bỏ và báo riêng. Vì vậy khi quá tải, ứng dụng có thể **không còn theo kịp thời gian thực**; ta không giấu điều ấy bằng một vòng bù chạy mãi.
 
 <InteractiveLab demo="falling-sand" mode="sand-6" />
 
-Reset rồi chạy ở 15, 30 và 60 FPS hiển thị tối đa. Đừng vẽ thêm trong khi so sánh. FPS là giới hạn hiển thị, không phải cam kết màn hình của bạn thực sự đạt con số đó.
+Thử 15 và 60 FPS ở tốc độ 1×. Sau đó chọn 15 FPS và 4×: nhu cầu khoảng tám tick/frame vượt ngân sách bốn tick, nên dropped time tăng. Đây là một thí nghiệm để đọc giới hạn, không phải kết luận máy nào cũng đạt một FPS nhất định.
 
 ## Viết code từng bước
 
-### Bước 1 — Tính lịch bước bằng code thuần
+### 1. Viết hàm lập kế hoạch, chưa sửa lưới
 
-`planSteps` loại elapsed âm/không hữu hạn và accumulator không hợp lệ trước khi tính. Sau đó:
+Trong `include/timing.hpp`, `StepPlan` giữ `steps`, `remainder` và `dropped`. Thêm `planSteps`:
 
-```cpp title="include/timing.hpp — tính tick đến hạn"
-const double accepted = std::min(elapsed, 0.25);
-const double total = accumulator + accepted;
-const int due = static_cast<int>(std::floor((total + 1e-9) / kTickSeconds));
-StepPlan plan;
-plan.steps = std::min(due, 4);
-plan.remainder = std::max(0.0, total - due * kTickSeconds);
-plan.dropped = elapsed - accepted + (due - plan.steps) * kTickSeconds;
-return plan;
-```
-
-`1e-9` chỉ xử lý sai số làm tròn rất nhỏ sát ranh giới tick; nó không phải một tick phụ. Chú ý phần dư trừ **due** tick, không trừ riêng `plan.steps`. Nếu giữ phần thời gian đã quyết định bỏ, frame sau sẽ lại phải chạy bù nó.
-
-`dropped` gồm hai phần: thời gian vượt 0,25 giây và các tick đến hạn nhưng vượt budget bốn bước. Ví dụ một frame dài 10 giây vẫn chỉ thực hiện tối đa bốn tick.
-
-### Bước 2 — Đo thời gian bằng đồng hồ SDL
-
-Lưu `previousTime` trước vòng lặp. Mỗi frame lấy thời điểm mới và đổi nanosecond thành giây:
-
-```cpp title="src/main.cpp — đo elapsed"
-const std::uint64_t now = SDL_GetTicksNS();
-const double elapsed = static_cast<double>(now - previousTime) / 1e9;
-previousTime = now;
-```
-
-Ta vẫn cập nhật `previousTime` trong lúc pause, nhưng không cộng elapsed vào accumulator. Khi bấm Space, xóa accumulator và đặt lại mốc đồng hồ để thời gian chờ không trở thành nợ mô phỏng.
-
-### Bước 3 — Chạy đúng số tick, rồi vẽ một lần
-
-```cpp title="src/main.cpp — áp dụng kế hoạch bước"
-if (!paused && !singleStep) {
-    const auto plan = sand::planSteps(accumulator, elapsed);
-    accumulator = plan.remainder;
-    droppedSeconds += plan.dropped;
-    for (int step = 0; step < plan.steps; ++step) {
-        sand::stepGrid(grid);
+```cpp title="include/timing.hpp — phần việc hữu hạn cho một frame"
+inline StepPlan planSteps(double accumulator, double elapsed, double speed = 1.0) {
+    if (!std::isfinite(accumulator) || accumulator < 0 || accumulator >= kTickSeconds) {
+        accumulator = 0;
     }
+    if (!std::isfinite(elapsed) || elapsed < 0) {
+        elapsed = 0;
+    }
+    if (!std::isfinite(speed)) {
+        speed = 1.0;
+    }
+    speed = std::clamp(speed, 0.25, 4.0);
+    const double accepted = std::min(elapsed, 0.25);
+    const double total = accumulator + accepted * speed;
+    const int due = static_cast<int>(std::floor((total + 1e-9) / kTickSeconds));
+    StepPlan plan;
+    plan.steps = std::min(due, 4);
+    plan.remainder = std::clamp(total - due * kTickSeconds, 0.0, kTickSeconds - 1e-12);
+    plan.dropped = (elapsed - accepted) * speed + (due - plan.steps) * kTickSeconds;
+    return plan;
 }
 ```
 
-Phím N đặt `paused=true`, xóa phần dư rồi thực hiện một tick riêng. Điều kiện `!singleStep` bảo đảm không vừa step thủ công vừa chạy thêm các bước tự động trong cùng frame.
+`kTickSeconds` là `1.0/30.0`. `due` là số tick đã đến hạn, `steps` là số thực sự được chạy. Ta bỏ các tick vượt budget và chỉ giữ phần lẻ, không để accumulator mang nợ cho hàng nghìn frame sau.
+
+Các số `1e-9` và `1e-12` chỉ xử lý trôi số thực gần biên tick; chúng không phải tham số vật lý. Dữ liệu thời gian âm hoặc NaN không được tạo ra một vòng lặp cập nhật. `dropped` có đơn vị **giây mô hình**, vì phần thời gian bị bỏ cũng được nhân speed.
+
+### 2. Đọc clock nhưng không tích nợ trong lúc pause
+
+Trong main, đọc `SDL_GetTicksNS` mỗi vòng. Bộ khung đã có `previousTime`; thêm phần tính elapsed và kiểm cờ khởi động lại clock:
+
+```cpp title="src/main.cpp — reset mốc thời gian, không bù thời gian đang dừng"
+const std::uint64_t now = SDL_GetTicksNS();
+double elapsed = static_cast<double>(now - previousTime) / 1e9;
+previousTime = now;
+if (state.restartClock) {
+    elapsed = 0;
+    state.restartClock = false;
+}
+```
+
+Trong `Workshop::pause`, accumulator được xóa, nét vẽ kết thúc và `restartClock=true`. Resume, reset, đổi tốc độ hoặc mất focus không được dùng lại một elapsed rất lớn từ trước đó. Pause dừng vật liệu, không làm các nút hoặc thao tác vẽ ngừng phản hồi.
+
+### 3. Chọn số bước rồi mới cập nhật
+
+Giữ đường Step từ Bài 3. Khi không pause, dùng thời gian để lập kế hoạch:
+
+```cpp title="src/main.cpp — chuyển kế hoạch thành số lần gọi luật"
+if (!state.paused) {
+    const auto plan = sand::planSteps(state.accumulator, elapsed, state.speed());
+    state.accumulator = plan.remainder;
+    state.dropped += plan.dropped;
+    steps = plan.steps;
+}
+```
+
+Main chỉ chạy vòng `for (int step=0; step<steps; ++step)` hữu hạn và gọi `stepGrid`. Sau đó vẫn clear, vẽ lưới và present như cũ. `stepGrid` không biết frame dài bao nhiêu; nó chỉ thực hiện một tick.
+
+### 4. Nối các lệnh chạy/dừng và tốc độ
+
+`Workshop::speed()` đọc một trong năm giá trị `{0.25, 0.5, 1, 2, 4}`. Trong `commands.hpp`, action Run đổi `state.paused`, xóa accumulator, bật `restartClock` và hủy yêu cầu Step cũ. Action Speed chuyển chỉ số tới giá trị kế tiếp và cũng reset clock. `keyInput` gắn Space với Run, `=` với Speed.
+
+N vẫn gọi pause trước khi đặt `singleStep=true`, nên không vừa tiến một tick theo phím vừa vô tình cộng thêm các tick tự động trong cùng frame.
 
 ## Ghép các phần lại
 
-Build `project_46_checkpoint_6`. Chương trình mở ở trạng thái pause; Space chạy/dừng, N tiến từng tick. Reset cũng dừng. `SDL_Delay(16)` chỉ giảm việc quay vòng render quá nhanh, không quyết định bước vật liệu.
+Build `project_46_checkpoint_6`. Chương trình mở ở trạng thái dừng. Vẽ vài vật cản rồi nhấn Space; vật liệu chạy theo tick. Space lần nữa dừng, nhưng vẫn cho vẽ. Chờ vài giây, resume: không có một đợt mô phỏng bù do thời gian đã chờ.
 
-Khi mất focus, main tạm dừng và hủy nét vẽ. Canvas tương ứng cũng dừng khi tab bị ẩn; reduced motion dùng nút từng tick thay cho animation. Những việc này vừa giúp kiểm tra dễ hơn vừa tránh bù thời gian ngoài ý muốn khi quay lại.
+Trong Canvas, thay đổi FPS hiển thị chỉ giới hạn các lượt xử lý/vẽ; FPS thực tế còn phụ thuộc màn hình và trình duyệt. Bài này kiểm **số tick từ cùng elapsed và speed**, không kiểm một con số FPS được hứa sẵn.
 
 ## Thử làm sai để hiểu đúng
 
-1. Thay toàn bộ phần lập lịch bằng một `stepGrid` mỗi frame. Đổi `SDL_Delay(16)` thành `SDL_Delay(66)`: cát chậm rõ rệt. Khôi phục fixed tick rồi lặp lại phép thử.
-2. Tạm không xóa accumulator ở pause/resume và thử tích cả thời gian pause vào nó. Dừng vài giây rồi chạy lại: xuất hiện các bước bù không mong muốn. Khôi phục và xác nhận N vẫn chỉ tiến một tick.
+1. Gọi `stepGrid` đúng một lần mỗi render. Đổi giới hạn FPS và quan sát tốc độ rơi thay đổi.
+2. Giữ accumulator khi pause và không reset `previousTime` khi resume. Thời gian dừng bị nhận nhầm thành nợ mô phỏng. Khôi phục cả hai phần, không chỉ một cờ.
+3. Bỏ `min(due,4)`. Tưởng tượng debugger dừng 10 giây: một frame sẽ phải chạy hàng trăm tick trước khi xử lý input tiếp. Giữ budget và công bố dropped time.
 
 ## Tự kiểm tra kết quả
 
-Không input và không drop time, 2 giây ở 15/30/120 FPS phải tương ứng 60 tick. Pause giữ nguyên tick. N tăng đúng một; reset đưa về 0. Một elapsed rất lớn vẫn chỉ tạo tối đa 4 bước, remainder nằm trong `[0,h)` và dropped tăng. Bài sau sẽ kiểm tra các điều này bằng code thay vì đo tay.
+Với các chuỗi frame 15/30/120 FPS mô phỏng đúng hai giây ở 1×, helper phải tạo 60 tick khi không vượt budget. Ở 0,5× là 30 tick; 2× là 120 tick. Một stall 10 giây ở 4× chỉ tạo tối đa bốn bước, remainder nhỏ hơn một tick và báo phần bị bỏ. Pause/reset/mất focus không làm phát sinh tick tự động.
 
 ## Bài tập mở rộng
 
-Thử 20 tick/giây rồi mô tả cát chậm đi thế nào. Vì mỗi tick chỉ di chuyển tối đa một ô, đổi tick rate ở đây đổi tốc độ vật liệu, không chỉ độ chính xác như khi giảm `dt` cho một phương trình vận tốc liên tục. Tiếp theo là [kiểm chứng và hoàn thiện](/projects/falling-sand/07-kiem-chung-va-hoan-thien).
+Ghi số ô phải xét khi tăng từ 96×64 lên 512×320: nhiều hơn khoảng 26,7 lần. Đừng thay lưới bằng hàng chục nghìn lời gọi vẽ rồi mới hỏi vì sao chậm; sang [bài 7 — texture và lưới lớn](/projects/falling-sand/07-texture-va-luoi-lon) để tổ chức phần hiển thị trước khi nâng quy mô.

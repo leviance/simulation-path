@@ -158,6 +158,26 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
     workload:
       "Mục tiêu: ít nhất 1 triệu mẫu vị trí hợp lệ; đây không phải 1 triệu electron tương tác. 5 triệu mẫu là mở rộng.",
   },
+  "46": {
+    previousTitle: "Hộp cát số: cát rơi, nước giả và cellular automata",
+    replacement: {
+      slug: "falling-sand",
+    },
+    summary: "Vẽ cát, nước và tường rồi phá bệ, mở đập hoặc rót qua phễu trên lưới 163.840 ô.",
+    outcome:
+      "Hộp cát C++/SDL3 tương tác với bút vẽ, tốc độ, cảnh mẫu, inspector và chế độ xem sạch.",
+    question: "Vài quy tắc đổi chỗ trong lân cận tạo nên đống cát và dòng nước giả thế nào?",
+    interactions: [
+      "Vẽ/tẩy, chạy/dừng/từng tick và đổi speed.",
+      "Đổi preset/seed/order, xóa hoặc đặt lại; xem sạch hoặc đọc bộ đếm.",
+    ],
+    concepts: [
+      "Grid, material rules, moved mask và cập nhật tại chỗ có thứ tự.",
+      "Fixed tick, RGBA/pitch, streaming texture, fixtures và benchmark hữu hạn.",
+    ],
+    prerequisites: "Window/renderer/input từ Project 01–04; không cần OpenGL hoặc Project 45.",
+    workload: "Final 512×320 = 163.840 ô thực sự được cập nhật/vẽ; 96×64 chỉ là bước học ban đầu.",
+  },
 };
 
 export const rebuildRevisions = Object.fromEntries(

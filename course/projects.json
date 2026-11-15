@@ -349,7 +349,8 @@
     "id": "46",
     "slug": "falling-sand",
     "sourceDirectory": "project-46-falling-sand",
-    "checkpointCount": 7,
+    "checkpointCount": 9,
+    "contentRevision": 2,
     "demoId": "falling-sand"
   },
   {

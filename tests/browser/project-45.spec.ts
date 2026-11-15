@@ -68,7 +68,7 @@ test("Atomic edition redirects old URLs, migrates only retired progress and pres
         JSON.stringify({
           version: 2,
           completedLessonIds: ["p44-l12", "p45-l01", "p45-l10", "p46-l01"],
-          projectContentVersions: { p44: 2 },
+          projectContentVersions: { p44: 2, p46: 2 },
         }),
       );
   }, progressKey);

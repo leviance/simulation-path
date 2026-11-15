@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "@/components/app-link";
-import { notFound, redirect } from "next/navigation";
+import { notFound, permanentRedirect, redirect } from "next/navigation";
+import { canonicalLessonSlug } from "@/lib/lesson-routing";
 import { CourseSidebar } from "@/components/course-sidebar";
 import { LessonProgress } from "@/components/progress";
 import { LessonTableOfContents } from "@/components/lesson-toc";
@@ -34,7 +35,8 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { slug, lesson: lessonSlug } = await params;
   const project = await getPublishedProject(slug);
-  const lesson = project?.lessons.find((item) => item.slug === lessonSlug);
+  const canonical = project ? canonicalLessonSlug(project, lessonSlug) : lessonSlug;
+  const lesson = project?.lessons.find((item) => item.slug === canonical);
   return lesson && project
     ? {
         title: `${lesson.title}${getProjectRevision(project.id) ? " (bản cũ)" : ""}`,
@@ -55,6 +57,10 @@ export default async function LessonPage({
     getPublishedProject(slug),
     renderLesson(slug, lessonSlug),
   ]);
+  if (project) {
+    const canonical = canonicalLessonSlug(project, lessonSlug);
+    if (canonical !== lessonSlug) permanentRedirect(`/projects/${project.slug}/${canonical}`);
+  }
   const lesson = project?.lessons.find((item) => item.slug === lessonSlug);
   if (!project || !lesson || !content) notFound();
   const learning = await getProjectLearning(project.id);

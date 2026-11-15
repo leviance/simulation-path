@@ -131,6 +131,7 @@ inline void selectScene(Grid& grid, Workshop& state, int preset, std::uint32_t s
     state.singleStep = false;
     state.dropped = 0;
     state.stats = {};
+    state.updateMs = 0;
     state.dirty = true;
     state.message = "NEW SCENE: paused, tick zero";
 }

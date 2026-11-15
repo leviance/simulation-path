@@ -2,7 +2,7 @@
 
 Ngày 15/11/2026 (Asia/Bangkok). Nguồn chuẩn: Project 46, hợp đồng 0.9–0.10 và [kế hoạch xây lại](project-46-rebuild-plan.md).
 
-**Đang xây dựng, chưa nghiệm thu toàn bộ học phần.** Nguồn mới nằm trong `examples/drafts/falling-sand-workshop`; catalog, bài học và Canvas đang phát hành chưa bị thay. Không dùng các kết quả native dưới đây để công nhận ZIP hoặc giao diện web mới chưa tích hợp.
+**Hồ sơ lịch sử của bản nháp, không phải trạng thái hiện tại.** Bản nháp đã được chuyển sang source/bài học chính thức; xem [hồ sơ tích hợp và nghiệm thu](project-46-rebuild-validation.md). Các kết quả dưới đây chỉ áp dụng cho phiên bản và giai đoạn được ghi rõ.
 
 ## Trạng thái khi lưu bản nháp vào Git
 
@@ -41,12 +41,12 @@ Các fixture một bước có vị trí biết trước kiểm cát rơi, đáy
 
 Oracle kiểm chéo lưu **ID riêng đi cùng từng vật liệu**, dùng tập ID đã di chuyển, không dùng mask theo tọa độ hoặc gọi `tryMove`. Mảng vật liệu 8×8 khớp oracle ở từng tick trong 50 tick, đủ bốn order. Kết quả cuối của fixture ấy:
 
-| Order | Checksum sau 50 tick |
-| --- | --- |
-| Alternating bottom-up | 3694149450 |
-| Left-to-right bottom-up | 380760090 |
-| Right-to-left bottom-up | 1912800860 |
-| Alternating top-down | 3694149450 |
+| Order                   | Checksum sau 50 tick |
+| ----------------------- | -------------------- |
+| Alternating bottom-up   | 3694149450           |
+| Left-to-right bottom-up | 380760090            |
+| Right-to-left bottom-up | 1912800860           |
+| Alternating top-down    | 3694149450           |
 
 Hai order cùng checksum ở fixture này không chứng minh chúng tương đương với mọi input. Những số này cũng **chưa** được gọi là C++/Canvas parity: Canvas cũ chưa dùng luật vacancy mới.
 

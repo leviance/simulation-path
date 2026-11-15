@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import "./checkpoint-generation.cases.mjs";
+import "./lesson-routing.test.mjs";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
 import {

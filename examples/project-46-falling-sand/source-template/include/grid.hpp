@@ -1,7 +1,9 @@
 #pragma once
+
 #ifndef LAB_CHECKPOINT
-#define LAB_CHECKPOINT 7
+#define LAB_CHECKPOINT 9
 #endif
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -10,6 +12,7 @@
 #include <vector>
 
 namespace sand {
+
 enum class Cell : std::uint8_t {
     Empty,
     Wall,
@@ -17,7 +20,13 @@ enum class Cell : std::uint8_t {
     Water
 };
 
-// Mỗi phần tử là một ô vật liệu, không phải một hạt có position/velocity riêng.
+enum class ScanOrder {
+    Alternating,
+    LeftToRight,
+    RightToLeft,
+    TopDown
+};
+
 struct Grid {
     int width;
     int height;
@@ -26,15 +35,21 @@ struct Grid {
     std::vector<std::uint8_t> moved;
     std::uint32_t tick = 0;
 #endif
+#if LAB_CHECKPOINT >= 8
+    ScanOrder order = ScanOrder::Alternating;
+#endif
 
-    Grid(int columns = 96, int rows = 64)
-        : width(columns), height(rows) {
-        if (columns < 1 || rows < 1 || columns > 256 || rows > 256) {
-            throw std::invalid_argument("Grid dimensions must be in [1, 256]");
+    // Kiểm kích thước trước phép nhân/cấp phát; không lấy kích thước window làm stride.
+    Grid(int columns = 96, int rows = 64) :
+        width(columns),
+        height(rows) {
+        if (columns < 1 || rows < 1 || columns > 1024 || rows > 768) {
+            throw std::invalid_argument("Grid dimensions must be in [1,1024] x [1,768]");
         }
-        cells.assign(static_cast<std::size_t>(width * height), Cell::Empty);
+        const std::size_t size = static_cast<std::size_t>(columns) * static_cast<std::size_t>(rows);
+        cells.assign(size, Cell::Empty);
 #if LAB_CHECKPOINT >= 3
-        moved.assign(cells.size(), 0);
+        moved.assign(size, 0);
 #endif
     }
 
@@ -42,8 +57,9 @@ struct Grid {
         return x >= 0 && y >= 0 && x < width && y < height;
     }
 
+    // Caller phải kiểm contains trước khi dùng index để truy cập vector.
     std::size_t index(int x, int y) const {
-        return static_cast<std::size_t>(y * width + x);
+        return static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x);
     }
 
     Cell at(int x, int y) const {
@@ -60,6 +76,7 @@ struct Grid {
     }
 };
 
+#if LAB_CHECKPOINT >= 1
 inline Grid makeScene() {
     Grid grid;
     for (int x = 8; x < 88; ++x) {
@@ -79,13 +96,14 @@ inline Grid makeScene() {
 #endif
     return grid;
 }
+#endif
 
 #if LAB_CHECKPOINT >= 2
 inline void paintDisk(Grid& grid, int centerX, int centerY, int radius, Cell material) {
     if (!grid.contains(centerX, centerY)) {
         return;
     }
-    radius = std::clamp(radius, 0, 8);
+    radius = std::clamp(radius, 0, 24);
     for (int dy = -radius; dy <= radius; ++dy) {
         for (int dx = -radius; dx <= radius; ++dx) {
             if (dx * dx + dy * dy <= radius * radius) {
@@ -95,7 +113,7 @@ inline void paintDisk(Grid& grid, int centerX, int centerY, int radius, Cell mat
     }
 }
 
-// Đi qua các tâm ô liên tiếp, tránh đứt nét khi chuột gửi ít event.
+// Các tâm cách nhau tối đa một ô theo mỗi trục, kể cả khi brush có radius = 0.
 inline void paintStroke(Grid& grid, int x0, int y0, int x1, int y1, int radius, Cell material) {
     if (!grid.contains(x0, y0) || !grid.contains(x1, y1)) {
         return;
@@ -116,10 +134,9 @@ inline void paintStroke(Grid& grid, int x0, int y0, int x1, int y1, int radius, 
 }
 #endif
 
-#if LAB_CHECKPOINT >= 7
-inline std::array<int, 4> countMaterials(const Grid& grid) {
-    std::array<int, 4> counts{};
-    for (const Cell material : grid.cells) {
+inline std::array<std::uint32_t, 4> countMaterials(const Grid& grid) {
+    std::array<std::uint32_t, 4> counts{};
+    for (Cell material : grid.cells) {
         ++counts[static_cast<std::size_t>(material)];
     }
     return counts;
@@ -127,30 +144,10 @@ inline std::array<int, 4> countMaterials(const Grid& grid) {
 
 inline std::uint32_t checksum(const Grid& grid) {
     std::uint32_t hash = 2166136261U;
-    for (const Cell material : grid.cells) {
+    for (Cell material : grid.cells) {
         hash = (hash ^ static_cast<std::uint32_t>(material)) * 16777619U;
     }
     return hash;
 }
 
-inline Grid makePreset(int preset) {
-    if (preset == 0) {
-        return makeScene();
-    }
-    Grid grid;
-    if (preset == 1) {
-        // Hai vách nghiêng, chừa khe rộng bốn ô ở giữa.
-        for (int i = 0; i < 34; ++i) {
-            grid.set(12 + i, 18 + i, Cell::Wall);
-            grid.set(83 - i, 18 + i, Cell::Wall);
-        }
-        for (int y = 3; y < 15; ++y) {
-            for (int x = 35; x < 61; ++x) {
-                grid.set(x, y, Cell::Sand);
-            }
-        }
-    }
-    return grid;
-}
-#endif
 } // namespace sand

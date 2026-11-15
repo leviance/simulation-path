@@ -1,84 +1,103 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Thêm nước giả mà không làm mất cát hoặc nước
+# Thêm nước giả mà không làm mất vật liệu
 
 ## Vấn đề cần giải quyết
 
-Ta muốn tô nước vào hộp, thấy nó chảy xuống và lan sang hai bên. Đồng thời, một ô cát đặt trên nước nên có thể đi xuống thay vì nằm mãi trên bề mặt. Nếu chỉ ghi Sand đè lên Water, cảnh có thể trông hợp lý nhưng nước đã bị xóa mất.
+Một bức tường chỉ có thể đứng yên hoặc bị người dùng tẩy. Nước thì khác: nó cũng di chuyển, có thể nằm dưới cát và bị cát đẩy lên. Nếu chỉ ghi đè Sand lên ô Water, hình sẽ trông như cát đang chìm nhưng nước đã biến mất khỏi dữ liệu.
 
-Bài này thêm luật Water và mở rộng phép swap. Phần bút chỉ cần cho phím `3` chọn `Cell::Water`; cách vẽ ô không đổi.
+Ta cần mở rộng **cả luật nước tự đi lẫn luật cát đổi chỗ với nước**. Hai thay đổi đó liên quan nhau nhưng không phải cùng một điều kiện.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Nước thử các đích theo thứ tự: xuống → chéo thứ nhất → chéo thứ hai → ngang thứ nhất → ngang thứ hai. Như vậy nó ưu tiên rơi trước khi lan ngang. Cát chỉ dùng ba đích đầu.
+Nước thử xuống và hai ô chéo như cát. Chỉ khi cả ba đích đó thất bại, nó mới thử hai ô ngang. Cát được đổi chỗ với Water chưa di chuyển; Water không được tự đi vào Sand.
 
-Một cặp Sand/Water được **đổi chỗ**: cát xuống ô đích, nước về ô nguồn. Do đó số ô từng loại không đổi. Hai ô phải cùng được đánh dấu moved, kể cả ô nguồn vừa nhận nước.
-
-Đây là nước giả phục vụ quan sát luật ô lưới. Nó chưa có áp suất, vận tốc, độ nhớt hoặc bảo toàn động lượng. Trong một hàng bằng phẳng, nước có thể qua lại mãi. Đừng xem việc xanh lan ngang là bằng chứng đã giải được bài toán chất lỏng vật lý.
+Sau một lần swap Sand/Water, cả hai vật liệu đều đã tham gia chuyển động trong tick. Nước bị đẩy về ô nguồn của cát không được lập tức rơi xuống lại. Ngược lại, nếu đích là Empty thì không có “hạt trống” cần giữ tại đó.
 
 <InteractiveLab demo="falling-sand" mode="sand-5" />
 
-Chọn lưới trống, vẽ một bệ dài, đặt một ô nước ngay trên bệ với bán kính 0. Sau một tick nó chỉ được đi sang một ô bên cạnh, không chạy hết hàng.
+Đặt cát lên một vùng nước, tiến từng tick và đọc bộ đếm. “Chìm” ở đây là cách ta gọi kết quả của luật ưu tiên, không phải tính lực đẩy nổi hay tỷ trọng từ phương trình vật lý. Mô hình **chưa có áp suất**, độ nhớt hoặc vận tốc của chất lỏng.
 
 ## Viết code từng bước
 
-### Bước 1 — Cho Water tham gia bước cập nhật
+### 1. Cho phép chọn và nhìn thấy Water
 
-Trong `stepGrid`, điều kiện `movable` chấp nhận cả Sand lẫn Water. Hai loại dùng chung phép thử xuống và chéo. Nếu tất cả thất bại, chỉ Water thử ngang:
+`Cell::Water` cùng màu xanh đã có trong các kiểu/tiện ích được cung cấp. Trong `commands.hpp`, thêm phần áp dụng lựa chọn:
 
-```cpp title="include/rules.hpp — nước thử thêm hai đích ngang"
-if (material == Cell::Water) {
-    if (tryMove(grid, x, y, x + direction, y)) {
-        continue;
-    }
-    tryMove(grid, x, y, x - direction, y);
+```cpp title="include/commands.hpp — lựa chọn nước có hiệu lực từ mốc này"
+if (action == Action::Water) {
+    state.material = Cell::Water;
 }
 ```
 
-`direction` được tính đúng như bài 4. Không tăng số ô được đi để làm nước có vẻ nhanh hơn: một lần swap/tick là hợp đồng đang cần kiểm chứng.
+`keyInput` đã ánh xạ phím 3 đến action này. Trong `makeScene`, thêm nước dưới bệ như đáp án: các hàng 38–49, cột 20–75. Đó là 672 ô nước, không chồng lên 80 ô tường ở hàng 50. Việc thêm cảnh chỉ giúp kiểm luật; không thay phần thuật toán bên dưới.
 
-### Bước 2 — Mở thêm đúng một trường hợp đổi chỗ
+### 2. Cho nước vào vòng xét, không chỉ cho nó một màu
 
-Ở `tryMove`, đích Empty vốn đã được phép. Bổ sung trường hợp sau trước nhánh `if (!allowed)`:
+Trong `stepGrid`, mở điều kiện xác định vật liệu động:
 
-```cpp title="include/rules.hpp — cát được đổi chỗ với nước"
+```cpp title="include/rules.hpp — Sand và Water đều được xét"
+bool movable = material == Cell::Sand;
+movable = movable || material == Cell::Water;
+```
+
+`tryMove` cũng có một kiểm tra nguồn riêng. Phải mở rộng nó nữa, nếu không nước được duyệt nhưng lần đi nào cũng bị từ chối:
+
+```cpp title="include/rules.hpp — nguồn hợp lệ của một lần đi"
+bool sourceCanMove = grid.cells[source] == Cell::Sand;
+sourceCanMove = sourceCanMove || grid.cells[source] == Cell::Water;
+```
+
+Hai điều kiện đều diễn đạt luật rõ ràng, không dựa vào việc enum của vật liệu nào có số lớn hơn.
+
+### 3. Cho cát đổi chỗ với nước chưa di chuyển
+
+Trong `tryMove`, sau kiểm nguồn, biên và cờ, thay điều kiện `allowed` bằng:
+
+```cpp title="include/rules.hpp — đi vào Empty hoặc đổi Sand với Water"
+bool allowed = grid.cells[destination] == Cell::Empty;
 if (grid.cells[source] == Cell::Sand && grid.cells[destination] == Cell::Water) {
     allowed = true;
 }
 ```
 
-Không viết `source > destination` để suy ra “vật liệu nặng hơn”. Giá trị enum là nhãn lưu trữ; nó không chứa mật độ vật lý. Hai điều kiện cụ thể dễ đọc và không bị đổi nghĩa khi thêm một vật liệu mới.
+Không đảo chiều điều kiện. Water đi vào Sand vẫn bị từ chối. Phần kiểm `moved[destination]` ở Bài 3 nằm **trước** đoạn này: nếu đích đang là một hạt nước đã đi, phép đổi chỗ không được thực hiện.
 
-Water không tự đổi chỗ với Sand. Tuy nhiên, nước có thể bị cát đẩy lên bằng swap, và ta vẫn tính đó là một lần di chuyển của nước trong tick hiện tại.
+Giữ `std::swap` và hai lần đánh dấu. Sau swap, nước về ô nguồn và cát ở ô đích. Bảo toàn từng vật liệu đến từ việc đổi hai giá trị, không phải một lời hứa trong giao diện.
 
-### Bước 3 — Giữ moved ở cả hai đầu
+### 4. Thêm hai đích ngang ở cuối chuỗi thử
 
-Phần swap từ bài 3 không cần thay đổi:
+Sau các nhánh xuống và chéo trong `stepGrid`, thêm:
 
-```cpp title="include/rules.hpp — giữ đủ hai vật liệu"
-std::swap(grid.cells[source], grid.cells[destination]);
-grid.moved[source] = 1;
-grid.moved[destination] = 1;
-return true;
+```cpp title="include/rules.hpp — nước chỉ lan ngang khi không rơi được"
+if (!moved && material == Cell::Water) {
+    moved = tryMove(grid, x, y, x + direction, y);
+    if (!moved) {
+        moved = tryMove(grid, x, y, x - direction, y);
+    }
+}
 ```
 
-Khi nước đi ngang tới một cột chưa được duyệt, `moved[destination]` ngăn nó chạy tiếp. Khi cát đẩy nước lên hàng chưa được duyệt, dấu ở ô nguồn ngăn nước vừa bị đẩy tiếp tục di chuyển lần nữa. Đó là lý do chỉ duyệt dưới-lên chưa đủ.
+Biến `material` được đọc trước chuỗi thử nên vẫn cho biết vật liệu ban đầu của ô đang xét. Các nhánh ngang không chạy nếu một bước rơi đã thành công. Phần tăng `stats.swaps` vẫn đặt sau toàn bộ chuỗi.
 
 ## Ghép các phần lại
 
-`makeScene` của checkpoint 05 thêm một vùng nước dưới khối cát. Main nhận phím `3`; `drawGrid` đã biết màu Water nên không cần một renderer riêng. Build và chạy `project_46_checkpoint_5`.
+Không thêm một vòng cập nhật nước sau vòng cát. Cả hai cùng nằm trong một lượt duyệt có thứ tự và dùng chung moved mask. Một vòng thứ hai có thể xử lý lại nước vừa bị cát đẩy hoặc đưa ra một mô hình khác với điều bạn đang kiểm.
 
-Để quan sát swap thật rõ, dùng lưới trống: vẽ ba ô tường thành đáy, hai tường bên cạnh ô nước, rồi đặt một ô cát ngay trên nước. Nước bị vây nên chưa đi trước; khi đến lượt cát, chúng đổi chỗ. Nếu nước đã di chuyển trong tick thì dấu moved có thể buộc cát chờ tick sau — đó là hành vi dự kiến.
+Build `project_46_checkpoint_5`. Trước hết chỉ đặt một ô nước trên một sàn ngang. Nó được lan một ô khi bấm N, không được đi hai lần. Sau đó tạo một ô nước bị tường vây ở hai bên và bên dưới, đặt cát phía trên: N phải đổi hai ô ấy cho nhau.
 
 ## Thử làm sai để hiểu đúng
 
-1. Tạm thay swap bằng việc gán cát vào đích và Empty vào nguồn. Ca cát/trên/nước làm giảm số ô nước. Khôi phục swap rồi kiểm lại cả hai bộ đếm, không chỉ tổng số ô của lưới.
-2. Tạm bỏ kiểm tra moved của nguồn ở cả `stepGrid` lẫn `tryMove`. Đặt một hạt nước trên bệ dài và chọn tick có chiều di chuyển trùng chiều quét. Nó có thể đi nhiều ô trong một tick. Khôi phục cả hai chỗ trước khi tiếp tục.
+1. Thay swap bằng việc ghi Sand vào đích và Empty vào nguồn. Số nước giảm khi cát “chìm”: hình ảnh có chuyển động nhưng dữ liệu sai.
+2. Bỏ kiểm cờ tại nguồn. Với một ô nước ở `(2,3)` trên sàn hàng 4, nó có thể được xét lại khi vòng lặp đến ô mới. Do hướng ưu tiên thay đổi theo tọa độ, nó thậm chí quay về chỗ cũ trong cùng tick; ảnh cuối không cho biết đã có hai lần đi.
+3. Thử ngang trước khi thử xuống. Nước sẽ ưu tiên trôi sang bên ngay cả khi còn chỗ rơi. Đó là đổi luật, không phải chỉ đổi thứ tự các dòng code tương đương.
 
 ## Tự kiểm tra kết quả
 
-Không vẽ/tẩy/reset giữa các tick thì số ô Sand và Water phải giữ nguyên. Tường không đổi vị trí. Cát có thể chìm qua nước bị chặn; nước không tự thay thế cát. Mỗi hạt chỉ tham gia tối đa một swap trong một tick, kể cả hạt bị đẩy.
+Một ô nước chỉ đi một ô trong tick. Đổi cát/nước giữ đủ một ô mỗi loại. Tường không chuyển động. Khi không paint/erase/reset, so **bốn** bộ đếm Empty/Wall/Sand/Water trước và sau: tổng số ô luôn bằng `W×H`, nên chỉ kiểm tổng chưa đủ phát hiện vật liệu bị biến đổi.
+
+Nước có thể tiếp tục đổi vị trí ngang mãi dù không có hạt nào được thêm. Đừng gọi đó là bảo toàn động lượng hay dùng cảnh này làm bằng chứng cho solver chất lưu ở các project sau.
 
 ## Bài tập mở rộng
 
-Giới hạn nước chỉ đi ngang ở tick chẵn. So sánh tốc độ lan với bản chuẩn và giải thích vì sao đó là đổi luật, không phải đổi FPS. Sang [bài 6 — nhịp mô phỏng cố định](/projects/falling-sand/06-nhip-mo-phong-co-dinh) để tách hai khái niệm này rõ hơn.
+Làm một cái bể có vách ba ô rồi tẩy một lỗ bên hông. Dự đoán thứ tự các ô nước đi qua lỗ trước khi bấm N. Khi luật đã kiểm được theo từng bước, sang [bài 6 — giữ nhịp mô phỏng](/projects/falling-sand/06-nhip-mo-phong-co-dinh) để cho nó chạy theo thời gian.

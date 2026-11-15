@@ -15,7 +15,7 @@ export const cellularGlossaryTerms = [
     id: "moved-mask",
     term: "Moved mask",
     definition:
-      "Mảng đánh dấu các ô đã tham gia một lần di chuyển trong tick hiện tại. Hộp cát đánh dấu cả hai đầu của phép swap và xóa toàn bộ dấu ở đầu tick kế tiếp, để nước đi ngang hoặc bị đẩy lên không được di chuyển nhiều lần.",
+      "Mảng đánh dấu các ô đã tham gia một lần di chuyển trong tick hiện tại. Hộp cát đánh dấu hai đầu swap và xóa dấu đầu tick kế tiếp để một hạt không đi nhiều lần. Cờ ở đích Empty không giữ chỗ trống: hạt phía trên vẫn được dùng ô vừa nhường; đích Water đã di chuyển thì không được đổi chỗ thêm.",
   },
   {
     id: "cell-material-conservation",

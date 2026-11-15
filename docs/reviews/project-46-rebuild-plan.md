@@ -41,4 +41,4 @@ Nguồn mới được soạn ở `examples/drafts/falling-sand-workshop` trong 
 - Web: đúng trình tự học, snippet liên tiếp, công thức, glossary, mode và source đầy đủ; Canvas pointer/keyboard/pause/reset/presets/speed, DPR/reduced-motion và cleanup.
 - Công cụ: từng stage qua process supervisor, một heavy job mỗi lúc, hard timeout và dọn process tree. Không tự bật server hoặc commit/push.
 
-Đây là kế hoạch triển khai, chưa phải hồ sơ nghiệm thu.
+Đây là kế hoạch triển khai, chưa phải hồ sơ nghiệm thu. Nguồn nháp hiện đã chuyển sang các thư mục chính thức; tiến độ và bằng chứng hiện tại ở [hồ sơ xây lại Project 46](project-46-rebuild-validation.md).

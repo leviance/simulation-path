@@ -4,164 +4,237 @@ const learning = {
   guides: {
     "p46-l01": {
       focus:
-        "Từ cửa sổ nền tối của starter, thêm Grid, vài ô vật liệu và drawGrid. Chưa xử lý chuyển động.",
-      expected:
-        "Thấy một khối cát vàng đứng trên bệ xám; resize không làm thay đổi số ô hoặc vị trí trên lưới.",
-      files: ["src/main.cpp", "include/grid.hpp", "include/view.hpp"],
+        "Giữ khung SDL/RAII của starter; tự thêm Cell, Grid và đường gọi drawGrid. Chưa có chuyển động.",
+      expected: "Thấy cát vàng và bệ xám trên lưới 96×64; resize không đổi dữ liệu.",
+      files: [
+        "src/main.cpp",
+        "include/grid.hpp",
+        "include/view.hpp",
+        "include/layout.hpp",
+        "include/sdl_resources.hpp",
+      ],
       steps: [
         {
-          title: "Cố định thế giới, không cố định kích thước cửa sổ",
+          title: "Biết phần nào đã được cung cấp",
           explanation:
-            "SDL render theo lưới 96 × 64; logical presentation lo phần phóng lên màn hình. Width của Grid dùng để tính index, không lấy từ kích thước window.",
+            "SdlResources lo cleanup; main mở window/renderer và clear/present. Đó là nền chạy được, không phải thuật toán hộp cát đã viết hộ.",
         },
         {
-          title: "Lưu vật liệu trước, chọn màu sau",
+          title: "Lưu vật liệu, không lưu màu",
           explanation:
-            "Grid giữ Cell; colorFor chỉ chuyển Cell thành màu để vẽ. Đổi màu cát không được làm thay đổi thuật toán.",
+            "Cell trong vector xác định vật liệu. index=y*width+x; màu được chọn ở đường vẽ và không quyết định luật.",
         },
         {
-          title: "Vẽ sau khi xóa nền",
+          title: "Nối dữ liệu tới màn hình",
           explanation:
-            "Mỗi ô là SDL_FRect 1 × 1 trong logical coordinates. Thứ tự là clear, drawGrid, present; ở starter chưa có drawGrid.",
+            "Gọi drawGrid sau clear, trước present; logical presentation giữ cùng lưới khi window đổi kích thước.",
         },
       ],
     },
     "p46-l02": {
-      focus: "Thêm mouseCell, paintDisk và paintStroke; lưu trạng thái nét vẽ qua các mouse event.",
+      focus:
+        "Thêm brush tròn và nội suy, rồi nối mouse event với chúng qua vị trí ô đã đổi tọa độ.",
       expected:
-        "Tô được cát/tường/tẩy bằng chuột, kể cả sau resize; click vào dải letterbox không vẽ nhầm ô biên.",
-      files: ["include/grid.hpp", "include/view.hpp", "src/main.cpp"],
+        "Vẽ/tẩy liên tục bằng chuột hoặc Enter; không có nét chéo khi rời lưới rồi vào lại.",
+      files: [
+        "include/grid.hpp",
+        "include/layout.hpp",
+        "include/input.hpp",
+        "include/workshop.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Đổi tọa độ rồi mới lấy phần nguyên",
+          title: "Đổi tọa độ trước khi chọn ô",
           explanation:
-            "SDL_RenderCoordinatesFromWindow xử lý scale/viewport/letterbox. Chỉ floor tọa độ sau khi xác nhận điểm nằm trong miền lưới.",
+            "SDL_RenderCoordinatesFromWindow bỏ scale/letterbox. logicalCell chỉ nhận điểm trong viewport; không clamp dải đen thành ô biên.",
         },
         {
-          title: "Dùng một điều kiện hình tròn",
+          title: "Một nét gồm nhiều lần chấm",
           explanation:
-            "Một offset thuộc brush khi dx*dx+dy*dy không vượt radius*radius. Grid::set loại các điểm ngoài biên.",
+            "paintDisk xét dx²+dy²≤r². paintStroke nối các tâm đủ gần để sample chuột thưa không làm đứt nét.",
         },
         {
-          title: "Nối sample nhưng không nối qua ngoài lưới",
+          title: "Kết thúc nét là một phần của input",
           explanation:
-            "paintStroke nội suy các tâm ô. Khi mouse ra ngoài, hủy previousValid; lần vào lại bắt đầu nét mới để tránh một đường chéo ngoài ý muốn.",
+            "Mouse up, mất focus hoặc ra ngoài đều xóa trạng thái nối; phím Enter dùng cùng thao tác stamp thay vì viết brush thứ hai.",
         },
       ],
     },
     "p46-l03": {
-      focus: "Tạo stepGrid và tryMove. Phím N gọi đúng một tick, render không được cập nhật grid.",
-      expected: "Một ô cát ở (x,y) chuyển tới (x,y+1) nếu trống; sàn và biên chặn được nó.",
-      files: ["include/rules.hpp", "include/grid.hpp", "src/main.cpp"],
+      focus:
+        "Tạo tryMove, stepGrid và singleStep; phím N tiến một tick, còn render chỉ đọc dữ liệu.",
+      expected:
+        "Cát xuống đúng một hàng/tick; hai ô cát cùng cột có thể nối tiếp vào chỗ vừa trống.",
+      files: ["include/rules.hpp", "include/grid.hpp", "include/workshop.hpp", "include/input.hpp"],
       steps: [
         {
-          title: "Chọn thứ tự duyệt có chủ đích",
+          title: "Duyệt từ phía hạt sắp rơi tới",
           explanation:
-            "Duyệt từ hàng cuối lên đầu để ô đích ở dưới đã qua lượt xét. Không duyệt theo thứ tự của framebuffer chỉ vì dữ liệu lưu row-major.",
+            "Hàng dưới được xét trước. Đổi chỗ với Empty giữ số hạt, thay vì tạo bản sao rồi quên xóa nguồn.",
         },
         {
-          title: "Đổi chỗ thay vì tạo thêm một hạt",
+          title: "Đánh dấu hạt, không giữ chỗ trống",
           explanation:
-            "Swap ô cát với ô trống giữ số ô cát. Việc quên xóa ô nguồn không thể xảy ra trong phép đổi chỗ này.",
+            "Mask theo tọa độ được cập nhật ở hai đầu swap, nhưng cờ đích Empty không chặn hạt khác. Nhờ đó một vacancy có thể truyền lên trong tick.",
         },
         {
-          title: "Đánh dấu ngay khi di chuyển",
+          title: "Chạy một bước ở nơi duy nhất",
           explanation:
-            "moved được xóa đầu tick; hai ô của lần swap được đánh dấu. Quy tắc này chuẩn bị cho chuyển động ngang và đổi chỗ nước ở các bài sau.",
+            "Workshop::singleStep gọi stepGrid và tăng tick. main/event không tự viết một vòng cập nhật khác.",
         },
       ],
     },
     "p46-l04": {
-      focus: "Thêm thứ tự down, diagonal-first, diagonal-second và thay đổi chiều quét mỗi tick.",
-      expected:
-        "Cát không còn chồng thành cột khi chạm bệ; nó trượt sang bên nếu một ô chéo còn trống.",
+      focus: "Thêm hai đích chéo sau down; tách thứ tự xét ô khỏi hướng đích ưu tiên.",
+      expected: "Cát chạm bệ rồi trượt thành đống, thay vì tạo một cột đứng vô hạn.",
       files: ["include/rules.hpp"],
       steps: [
         {
-          title: "Dừng sau phép di chuyển đầu tiên thành công",
+          title: "Dừng khi một đích đã nhận hạt",
           explanation:
-            "continue kết thúc xử lý hạt hiện tại. Nếu thử cả ba đích dù đã chuyển, tọa độ nguồn có thể không còn chứa hạt đang xét.",
+            "tryMove thành công thì continue. Những phép thử sau không còn được dùng tọa độ nguồn cũ để di chuyển một hạt khác.",
         },
         {
-          title: "Tách thứ tự ô và thứ tự đích",
+          title: "Hai nguồn thiên lệch khác nhau",
           explanation:
-            "tick lẻ đảo chiều ngang; x+y+tick quyết định chéo trái hay phải được thử trước. Hai lựa chọn xử lý hai nguồn thiên lệch khác nhau.",
+            "Tick lẻ đảo chiều ngang của vòng quét; parity x+y+tick đổi chéo trái/phải được thử trước. Đây không phải RNG.",
         },
         {
-          title: "Thừa nhận giới hạn của cập nhật tại chỗ",
+          title: "Thừa nhận ảnh hưởng của thứ tự",
           explanation:
-            "Ô sau nhìn thấy thay đổi của ô trước. Đây không phải double buffer; đảo chiều không biến kết quả thành độc lập thứ tự.",
+            "Cập nhật tại chỗ cho ô sau thấy kết quả của ô trước. Đảo chiều giảm một số lệch hướng nhưng không biến nó thành cập nhật đồng bộ.",
         },
       ],
     },
     "p46-l05": {
-      focus:
-        "Cho phép Water tham gia stepGrid, thêm hai đích ngang và luật Sand đổi chỗ với Water.",
+      focus: "Cho Water đi xuống/chéo/ngang và cho Sand đổi chỗ với Water chưa di chuyển.",
       expected:
-        "Nước rơi rồi lan ngang, cát có thể chìm qua nước; số ô của từng loại giữ nguyên trong tick không có input.",
-      files: ["include/rules.hpp", "include/grid.hpp", "src/main.cpp"],
+        "Nước lan trong bể, cát đi qua nước; từng loại vật liệu giữ nguyên số lượng khi không vẽ/tẩy.",
+      files: ["include/rules.hpp", "include/grid.hpp", "include/input.hpp"],
       steps: [
         {
-          title: "Giữ thứ tự ưu tiên của nước",
+          title: "Chỉ lan ngang khi không rơi được",
           explanation:
-            "Water thử xuống và chéo trước; chỉ thử ngang khi cả ba đích đó bị chặn. Nhờ vậy nước không ưu tiên trôi ngang trên không.",
+            "Nước thử xuống và hai chéo trước; hai ô ngang là phương án sau cùng, không phải ưu tiên trôi trên không.",
         },
         {
-          title: "Xác định ai được đổi chỗ với ai",
+          title: "Viết rõ cặp vật liệu được phép đổi",
           explanation:
-            "Nguồn Sand, đích Water được phép. Chiều ngược lại không được phép; không suy diễn từ màu hoặc từ giá trị enum lớn hơn.",
+            "Sand→Water được phép, Water→Sand không được. Không suy luật từ thứ tự enum hoặc độ sáng của màu.",
         },
         {
-          title: "Giữ cả hạt bị đẩy lên",
+          title: "Giữ hạt nước bị đẩy lên",
           explanation:
-            "Swap đưa nước về ô nguồn của cát. Đánh dấu cả nguồn lẫn đích để nước bị đẩy lên không lập tức rơi lại hoặc đổi chỗ lần thứ hai.",
+            "Water về ô nguồn của Sand sau swap. Cờ nguồn và đích ngăn cả hai hạt đi tiếp trong tick, kể cả khi ô nguồn còn sắp được duyệt.",
         },
       ],
     },
     "p46-l06": {
-      focus: "Thêm planSteps và accumulator, giữ thuật toán stepGrid không nhận dt.",
+      focus:
+        "Thêm planSteps/advance vào vòng frame, giữ luật ô không nhận dt và mở điều khiển speed.",
       expected:
-        "Đổi tốc độ render không đổi tốc độ tick ở tải bình thường; frame quá chậm bị giới hạn và có dropped time.",
-      files: ["include/timing.hpp", "src/main.cpp"],
+        "15/30/120 FPS cho cùng số tick ở tải bình thường; stall bị chặn và có dropped model seconds.",
+      files: ["include/timing.hpp", "include/workshop.hpp", "src/main.cpp", "include/input.hpp"],
       steps: [
         {
-          title: "Tích lũy giây, tiêu thụ tick",
+          title: "Tích lũy giây mô hình",
           explanation:
-            "Một tick luôn là 1/30 giây. elapsed cộng vào accumulator; số tick đến hạn là floor(total/h), phần lẻ giữ cho frame sau.",
+            "Chấp nhận tối đa 0,25 giây wall time rồi nhân speed; mỗi tick tiêu thụ 1/30 giây mô hình. Phần lẻ được giữ lại.",
         },
         {
-          title: "Giới hạn phần việc phải bù",
+          title: "Không bù vô hạn",
           explanation:
-            "Chỉ nhận tối đa 0,25 giây mỗi frame, chạy tối đa 4 tick rồi bỏ các tick đến hạn còn lại. Ghi rõ thời gian bỏ qua thay vì giấu việc mô phỏng chạy chậm.",
+            "Chạy nhiều nhất bốn tick/frame, bỏ các tick đến hạn còn lại và cộng vào dropped. Khi chạm budget, mô phỏng không còn theo kịp wall time.",
         },
         {
-          title: "Pause không tích lũy nợ",
+          title: "Pause phải xóa nợ thời gian",
           explanation:
-            "Pause/reset/đổi preset xóa accumulator. N luôn tạm dừng rồi tiến một tick; mất focus dừng chạy và kết thúc nét vẽ.",
+            "Pause/reset/mất focus xóa accumulator và kết thúc nét. Single-step luôn dừng trước rồi tiến đúng một tick.",
         },
       ],
     },
     "p46-l07": {
       focus:
-        "Thêm preset, đếm vật liệu, checksum và ca validateScene; kiểm tra những điều hình ảnh đẹp chưa chứng minh được.",
+        "Giữ nguyên luật nhưng nâng lưới lên 512×320; chuyển presentation sang một streaming texture.",
       expected:
-        "V chạy 120 tick trên cảnh chuẩn riêng và báo ba điều kiện; CTest kiểm thêm các ca nhỏ, nhịp thời gian và kết quả C++/Canvas.",
-      files: ["include/grid.hpp", "include/validation.hpp", "src/main.cpp", "tests/tests.cpp"],
+        "Toàn bộ 163.840 ô được xử lý/vẽ; ảnh vẫn đúng khi pitch có padding hoặc đổi màu phẳng.",
+      files: ["include/pixels.hpp", "include/view.hpp", "include/presets.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Đếm đúng từng loại vật liệu",
+          title: "Đừng gọi mỗi ô một draw call",
           explanation:
-            "Tổng số ô luôn bằng W*H nên chỉ kiểm tổng là chưa đủ. So sánh bốn bộ đếm trước/sau để phát hiện cát bị biến thành nước hoặc bị xóa.",
+            "encodePixels chuyển Cell thành bốn byte RGBA. Vòng ghi hàng dùng pitch trả bởi SDL_LockTexture, không giả định width*4.",
         },
         {
-          title: "So sánh trạng thái, không chỉ ảnh",
+          title: "Tôn trọng hợp đồng lock",
           explanation:
-            "Hai lần chạy phải khớp từng Cell. Checksum là dấu vết gọn để đối chiếu; nó không thay thế so sánh mảng trong unit test.",
+            "SDL_PIXELFORMAT_RGBA32 cho layout byte R/G/B/A; texture streaming được ghi đầy đủ rồi unlock trước khi SDL_RenderTexture.",
         },
         {
-          title: "Bản hoàn chỉnh vẫn đọc được",
+          title: "Đọc số đo theo đúng phạm vi",
           explanation:
-            "Code thuần ở grid/rules/timing/validation, SDL ở view và main. Bài cuối hiển thị toàn bộ file từ source chuẩn cùng CMake và tests; ZIP build được riêng.",
+            "Tách update, encode/upload CPU và draw submission. CPU trả khỏi lời gọi render chưa có nghĩa GPU đã làm xong.",
+        },
+      ],
+    },
+    "p46-l08": {
+      focus:
+        "Hoàn thiện sandbox bằng commands dùng chung, năm preset, seed, order và hold-to-pour theo tick.",
+      expected:
+        "Chuột/phím cho cùng kết quả; clear không quên preset, reset tái tạo đúng cảnh và về pause.",
+      files: [
+        "include/commands.hpp",
+        "include/input.hpp",
+        "include/panel.hpp",
+        "include/presets.hpp",
+        "include/workshop.hpp",
+      ],
+      steps: [
+        {
+          title: "Một lệnh, nhiều cách gọi",
+          explanation:
+            "Button và hotkey đều gọi commands. Không để phím R và nút Reset khôi phục hai loại trạng thái khác nhau.",
+        },
+        {
+          title: "Seed không phải nguồn chuyển động",
+          explanation:
+            "LCG chỉ xếp vật liệu của Mixture. Những tick sau dùng luật xác định; ghi seed/order để người khác dựng lại input.",
+        },
+        {
+          title: "Giữ cảnh hợp lệ khi thay cấu hình",
+          explanation:
+            "Tạo grid ứng viên trước rồi mới thay dữ liệu/config. Nếu thông số sai hoặc cấp phát lỗi, cảnh cũ vẫn còn.",
+        },
+      ],
+    },
+    "p46-l09": {
+      focus:
+        "Đối chiếu luật với ca biết trước và oracle ID, chạy CTest/benchmark hữu hạn, mở toàn bộ mã hoàn chỉnh.",
+      expected:
+        "Biết kết quả nào đã chứng minh, đo phần nào và cách kiểm code tự viết thay vì vô tình test final mẫu.",
+      files: [
+        "include/validation.hpp",
+        "include/benchmark.hpp",
+        "include/options.hpp",
+        "tests/tests.cpp",
+        "src/main.cpp",
+      ],
+      steps: [
+        {
+          title: "Dùng reference không gọi lại thuật toán",
+          explanation:
+            "Oracle gán ID cho hạt và nhớ ID đã đi, không dùng moved mask/tryMove của production. Kiểm từng ô qua nhiều tick và bốn order.",
+        },
+        {
+          title: "Kiểm code đang sửa",
+          explanation:
+            "CTest mặc định đọc final mẫu. Khi hoàn thiện starter, thêm target tests trỏ starter/include như bài hướng dẫn, rồi chủ động làm sai luật để thấy test thất bại.",
+        },
+        {
+          title: "Đo ngắn, công bố đủ điều kiện",
+          explanation:
+            "Benchmark CPU dùng Mixture/seed/order/steps cố định, warm-up 32 tick và raw samples; giới hạn 500 triệu cell visits và deadline 30 giây.",
         },
       ],
     },
@@ -202,11 +275,23 @@ const learning = {
     ],
     "p46-l07": [
       {
+        label: "SDL_LockTexture",
+        href: "https://wiki.libsdl.org/SDL3/SDL_LockTexture",
+        kind: "SDL API",
+      },
+    ],
+    "p46-l08": [
+      { label: "Cập nhật tại chỗ", href: "/glossary#in-place-cell-update", kind: "Thuật ngữ" },
+    ],
+    "p46-l09": [
+      {
         label: "Bảo toàn vật liệu",
         href: "/glossary#cell-material-conservation",
         kind: "Thuật ngữ",
       },
+      { label: "SDL3 với CMake", href: "https://wiki.libsdl.org/SDL3/README-cmake", kind: "CMake" },
     ],
   },
 } satisfies ProjectLearningAssets;
+
 export default learning;
