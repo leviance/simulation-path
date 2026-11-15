@@ -28,6 +28,8 @@ So Rotation và Shear với lớp Curl. Tại gốc, cả hai có vector bằng 
 
 Hàm curl lấy đạo hàm **chéo** và phép trừ:
 
+{/* snippet include/derivatives.hpp#curl */}
+
 ```cpp title="include/derivatives.hpp — curl z trong world space"
 inline double curl(const Field& field, int x, int y) {
     // Thành phần z của curl trong mặt phẳng world x phải, y lên.
@@ -39,11 +41,13 @@ Không đổi vy sang screen trước khi tính đạo hàm. Đổi tọa độ 
 
 ### Bước 2 — Vẽ curl bằng cùng thang có dấu
 
-Thêm lựa chọn layer, không thêm một loại dữ liệu vector mới:
+Thêm nhánh `Layer::Curl` vào `overlayValue` trong `view.hpp`, không tạo thêm một trường vận tốc mới:
+
+{/* snippet include/view.hpp#curl-layer */}
 
 ```cpp title="include/view.hpp — lớp màu curl"
 if (layer == Layer::Curl) {
-    value = curl(field, x, y);
+    return curl(field, x, y);
 }
 ```
 
@@ -51,17 +55,21 @@ Giữ nguyên thang −2..2 dùng ở bài divergence. Nhờ vậy Rotation cho 
 
 ### Bước 3 — Đưa số đo vào inspector
 
-Phím I bổ sung curl vào dòng console đang có:
+Trong `drawPanel` của `panel.hpp`, tính curl tại nút cursor, chuyển kết quả thành chuỗi bằng `number`, rồi gọi `text` để vẽ chữ ngay dưới divergence. Đây là đường đọc dữ liệu, không phải đường cập nhật vận tốc:
 
-```cpp title="src/main.cpp — đọc curl tại nút chọn"
-std::cout << " curl_z=" << wind::curl(field, cursorX, cursorY);
+{/* snippet include/panel.hpp#curl-inspector */}
+
+```cpp title="include/panel.hpp — đọc curl tại nút chọn"
+if (!text(renderer, 888, 400, "curl z " + number(curl(app.field, app.cursorX, app.cursorY), 6))) {
+    return false;
+}
 ```
 
 Kiểm các preset có đáp án trước khi thêm một xoáy cục bộ. Màu và mũi tên có thể trông hợp lý ngay cả khi dấu sai; số 2 và −1 sẽ phát hiện lỗi rõ hơn.
 
 ## Ghép các phần lại
 
-Build `project_48_checkpoint_5`. Chương trình mở với Rotation và lớp Curl. P đổi các trường, L chuyển scalar/div/curl, I đọc vector cùng các đạo hàm. Thử một nút mép rồi về gốc: trường tuyến tính vẫn cho cùng curl ở mọi nơi.
+Build `project_48_checkpoint_5`. Chương trình mở với Rotation và lớp Curl. P đổi các trường, L chuyển scalar/gradient/div/curl, panel đọc vector cùng các đạo hàm. Thử một nút mép rồi về gốc: trường tuyến tính vẫn cho cùng curl ở mọi nơi.
 
 Chọn preset Gradient và scalar Bowl: curl phải gần 0. Với scalar đủ trơn, đạo hàm hỗn hợp bằng nhau nên curl của gradient bằng 0; bài 9 sẽ kiểm quan hệ này bằng số với Hill.
 

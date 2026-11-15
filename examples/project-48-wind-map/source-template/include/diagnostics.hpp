@@ -18,6 +18,7 @@ struct GradientError {
     bool finite = true;
 };
 
+// [snippet gradient-error]
 inline GradientError gradientError(const Field& field, Potential potential) {
     GradientError report;
     for (int y = 0; y < field.height; ++y) {
@@ -37,6 +38,8 @@ inline GradientError gradientError(const Field& field, Potential potential) {
     }
     return report;
 }
+
+// [/snippet gradient-error]
 #endif
 
 #if LAB_CHECKPOINT >= 9
@@ -48,13 +51,16 @@ struct ValidationReport {
     bool passed = false;
 };
 
+// [snippet validate-map]
 inline ValidationReport validateMap() {
     // Kiểm trên field riêng; không sửa thí nghiệm đang chạy của người học.
     ValidationReport report;
     Field field;
+    // [snippet oracle-table]
     const Preset presets[] = {Preset::Uniform, Preset::Source, Preset::Sink, Preset::Rotation, Preset::Shear};
     const double expectedDiv[] = {0, 2, -2, 0, 0};
     const double expectedCurl[] = {0, 0, 0, 2, -1};
+    // [/snippet oracle-table]
     for (int fixture = 0; fixture < 5; ++fixture) {
         Scene scene;
         scene.preset = presets[fixture];
@@ -75,12 +81,16 @@ inline ValidationReport validateMap() {
             report.gradientCurl = maximumError(report.gradientCurl, std::abs(curl(field, x, y)));
         }
     }
+    // [snippet refinement]
     report.coarse = gradientError(field, scene.potential);
     Field fine(65, 49);
     populate(fine, scene);
     report.refined = gradientError(fine, scene.potential);
+    // [/snippet refinement]
     report.passed = report.coarse.finite && report.refined.finite && report.derivativeError < 1e-10 && report.gradientCurl < 1e-10 && report.refined.interior < report.coarse.interior / 3 && report.refined.boundary < report.coarse.boundary / 3;
     return report;
 }
+
+// [/snippet validate-map]
 #endif
 } // namespace wind

@@ -223,3 +223,111 @@ test("wind reference validation is finite, independent and color saturation is d
   assert.notDeepEqual(wind.scalarColor(-2), wind.scalarColor(2));
   assert.deepEqual(wind.scalarColor(NaN), [255, 0, 255]);
 });
+
+test("wind final session meets sample scale and overlays cannot change a tracer path", () => {
+  const app = new wind.WindSession(9);
+  app.mount();
+  app.resize(900, 650);
+  assert.deepEqual(app.size, { width: 900, height: 650 });
+  assert.equal(app.field.width, 65);
+  assert.equal(app.field.height, 49);
+  assert.equal(app.field.vx.length, 3185);
+  const before = app.field.vx.slice();
+  const oracle = wind.makeParticles();
+  for (const layer of ["arrows", "gradient", "potential", "curl", "divergence"]) {
+    app.layer = layer;
+    app.step();
+    wind.advanceParticles(app.field, oracle);
+  }
+  assert.deepEqual(app.particles, oracle);
+  assert.deepEqual(app.field.vx, before);
+  assert.equal(app.tick, 5);
+  assert.equal(app.visitedLastStep, 128);
+  app.verify();
+  assert.match(app.report, /^PASS/);
+  assert.equal(app.tick, 5);
+  assert.deepEqual(app.particles, oracle);
+  app.dispose();
+});
+
+test("wind session reset, tracer toggle, field changes and disposal have explicit clock semantics", () => {
+  const app = new wind.WindSession(9);
+  app.mount();
+  app.resume();
+  app.frame(1 / 30);
+  assert.equal(app.tick, 2);
+  app.toggleTracers();
+  app.frame(1);
+  app.step();
+  assert.equal(app.tick, 2);
+  assert.equal(app.paused, true);
+  app.toggleTracers();
+  assert.equal(app.paused, true);
+  app.point({ x: 0.5, y: -0.5 }, true);
+  assert.equal(app.scene.vortex, true);
+  assert.equal(app.tick, 0);
+  assert.equal(app.visitedLastStep, 0);
+  const data = app.field.vy.slice();
+  app.point({ x: 0.5, y: -0.5 }, true);
+  assert.deepEqual(app.field.vy, data);
+  app.resolution(129);
+  assert.equal(app.field.vx.length, 12513);
+  near(app.field.dx, 1 / 32);
+  near(app.field.dy, 1 / 32);
+  app.clean = true;
+  app.reset();
+  assert.equal(app.field.width, 65);
+  assert.equal(app.scene.vortex, false);
+  assert.equal(app.clean, false);
+  assert.equal(app.tick, 0);
+  app.dispose();
+  app.resume();
+  app.frame(1);
+  app.step();
+  assert.equal(app.tick, 0);
+  assert.equal(app.paused, true);
+});
+
+test("wind trails are bounded and invalid field samples cannot silently advance tracers", () => {
+  const field = wind.makeField(65, 49);
+  wind.populate(field, wind.initialScene());
+  const particles = wind.makeParticles();
+  for (let i = 0; i < 200; i++) wind.advanceParticles(field, particles);
+  for (const particle of particles) {
+    assert.equal(particle.trail.length, 24);
+    assert.ok(particle.trailSize <= 24 && particle.trailHead < 24);
+  }
+  field.vx.fill(NaN);
+  assert.equal(wind.sampleVelocity(field, { x: 0, y: 0 }), null);
+  wind.advanceParticles(field, particles);
+  assert.equal(particles[0].trailSize, 0);
+  assert.equal(particles[0].age, 0);
+});
+
+test("wind Gaussian vortex differential error decreases against a continuum oracle", () => {
+  const errors = [];
+  for (const columns of [33, 65, 129]) {
+    const field = wind.makeField(columns, 1 + ((columns - 1) * 3) / 4);
+    const scene = {
+      ...wind.initialScene(),
+      preset: "uniform",
+      vortex: true,
+      center: { x: 0.25, y: -0.25 },
+    };
+    wind.populate(field, scene);
+    let error = 0;
+    for (let y = 0; y < field.height; y++)
+      for (let x = 0; x < field.width; x++) {
+        const p = wind.world(field, x, y);
+        const radius2 = (p.x - scene.center.x) ** 2 + (p.y - scene.center.y) ** 2;
+        const exactCurl = 2 * Math.exp(-radius2 / 0.55 ** 2) * (2 - (2 * radius2) / 0.55 ** 2);
+        error = Math.max(
+          error,
+          Math.abs(wind.curl(field, x, y) - exactCurl),
+          Math.abs(wind.divergence(field, x, y)),
+        );
+      }
+    errors.push(error);
+  }
+  assert.ok(errors[1] < errors[0] / 3.5 && errors[2] < errors[1] / 3.5, String(errors));
+});

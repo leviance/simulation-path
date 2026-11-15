@@ -2,9 +2,9 @@ import type { ProjectLabMeta } from "../../labs/types";
 const lab = {
   base: {
     label: "WIND MAP LAB",
-    title: "Đọc trường gió bằng mũi tên và số đo",
+    title: "Vì sao gió tỏa ra, hút vào hoặc xoay?",
     description:
-      "So sánh gradient, divergence và curl, đọc số tại một nút rồi thả hạt đánh dấu. Công thức, miền và các ca kiểm chứng khớp source C++.",
+      "Đặt xoáy, thả tracer và so chuyển động với các bản đồ gradient/divergence/curl. Lưới 65×49 và công thức khớp chương trình C++; mỗi lớp màu trả lời một câu hỏi khác nhau.",
   },
   modes: {
     "wind-1": {

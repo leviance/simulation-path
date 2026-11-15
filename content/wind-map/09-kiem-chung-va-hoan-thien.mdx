@@ -10,6 +10,8 @@ Bài cuối bổ sung validator V trên field riêng và tests không cần SDL 
 
 ## Hiểu ý tưởng trước khi viết code
 
+[OpenStax — Divergence and Curl](https://openstax.org/books/calculus-volume-3/pages/6-5-divergence-and-curl) là tài liệu đối chiếu định nghĩa. Trong bài này, điều cần làm thêm là biến các định nghĩa ấy thành những phép kiểm có đáp án biết trước cho chương trình.
+
 Chọn các ca có đáp án độc lập:
 
 | Trường | Divergence | Curl z |
@@ -34,6 +36,8 @@ Chạy kiểm chứng trường chuẩn. Validator báo lỗi lớn nhất của
 
 Validator có ba bảng khớp nhau theo index fixture:
 
+{/* snippet include/diagnostics.hpp#oracle-table */}
+
 ```cpp title="include/diagnostics.hpp — các oracle đạo hàm"
 const Preset presets[] = {Preset::Uniform, Preset::Source, Preset::Sink, Preset::Rotation, Preset::Shear};
 const double expectedDiv[] = {0, 2, -2, 0, 0};
@@ -45,6 +49,8 @@ Mỗi ca dựng một Field riêng, duyệt tất cả nút và lấy sai số l
 ### Bước 2 — Kiểm gradient bằng hai phép khác nhau
 
 Sau ca Hill trên lưới thô, tạo lưới mịn trong cùng miền:
+
+{/* snippet include/diagnostics.hpp#refinement */}
 
 ```cpp title="include/diagnostics.hpp — tinh lưới để đo hội tụ"
 report.coarse = gradientError(field, scene.potential);
@@ -63,6 +69,8 @@ Tests thêm bilinear của trường affine và quỹ đạo quay giải tích. 
 
 `check` tăng failures và in nhãn khi điều kiện sai. Không dùng assert có thể bị tắt bởi NDEBUG. Cuối tests:
 
+{/* snippet tests/tests.cpp#test-result */}
+
 ```cpp title="tests/tests.cpp — trả mã lỗi cho CTest"
 if (failures != 0) {
     return EXIT_FAILURE;
@@ -78,15 +86,15 @@ Tại thư mục ZIP có CMake, build final rồi chạy tests:
 
 ```bash title="Terminal — kiểm bản hoàn chỉnh trong Debug và Release"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
+cmake --build build --config Debug --parallel 1
 ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
+cmake --build build --config Release --parallel 1
 ctest --test-dir build -C Release --output-on-failure --timeout 20
 ```
 
 Windows/Visual Studio chạy `build/Debug/project_48_final.exe`. Với generator một cấu hình, chọn CMAKE_BUILD_TYPE lúc configure và dùng build directory riêng cho cấu hình khác. Tests không mở window; ứng dụng final mới là chương trình tương tác.
 
-P chọn trường, H chọn scalar, L chọn lớp, G chọn lưới. I in inspector; N/Space điều khiển tracer; B/S/chuột/Enter điều khiển xoáy; R reset Scene; V kiểm ca chuẩn; Esc thoát. Source đầy đủ sau bài và README trong ZIP giải thích từng phím.
+P chọn trường, H chọn scalar, L chọn lớp, G chọn lưới. Inspector nằm bên phải. N/Space điều khiển tracer, T bật/tắt hạt, F1 xem sạch; M chọn đọc nút/đặt xoáy, B/S/chuột/Enter điều khiển xoáy; R đặt lại, V kiểm ca chuẩn, Esc thoát. Source đầy đủ sau bài và README trong ZIP giải thích từng phím.
 
 ## Thử làm sai để hiểu đúng
 
@@ -98,6 +106,10 @@ P chọn trường, H chọn scalar, L chọn lớp, G chọn lưới. I in insp
 Validator chuẩn báo PASS, nhưng bạn vẫn kiểm riêng tương tác: đổi preset/layer, resize, chọn mép, đặt xoáy bằng chuột và Enter, pause/reset, mất focus. Tests phải bao phủ đáp án affine, Bowl/Hill, mép, nội suy, quỹ đạo, scheduling và xoáy không cộng dồn. Build được starter, chín checkpoint, final và CTest Debug/Release.
 
 Các kết quả thuộc miền, công thức, resolution và tolerance đã nêu. Mật độ tracer và hình mũi tên không chứng minh một fluid solver bảo toàn khối lượng hoặc giải pressure đúng.
+
+Đơn vị trong bài là world unit và giây mô hình, không gán mét/giây cho một mô phỏng thời tiết thật. Vận tốc có đơn vị world unit/giây; divergence/curl có đơn vị 1/giây. Nếu chọn velocity = gradient(phi), phi được hiểu có đơn vị world unit²/giây để hai vế nhất quán. Bowl/Hill chỉ là các scalar mẫu, không phải nghiệm áp suất hay độ cao khí quyển.
+
+`project_48_final.exe --verify` chạy các fixture CPU rồi thoát, không khởi tạo SDL. Có thể smoke hữu hạn bằng `--hidden --run --seconds=1 --capture=wind.bmp`; `--seconds` chỉ nhận 0,05–60 giây. Không dùng lệnh smoke này thay việc thử chuột/phím. Ngưỡng đạo hàm 1e−10 áp cho sai số tuyệt đối của div/curl tại mọi nút; lỗi gradient dùng max độ dài vector, tách trong miền/mép. NaN/Inf luôn làm phép kiểm thất bại.
 
 ## Bài tập mở rộng
 

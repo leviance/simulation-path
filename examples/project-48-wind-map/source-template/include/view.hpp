@@ -4,33 +4,42 @@
 #include <SDL3/SDL.h>
 
 namespace wind {
+// Bố cục logical cố định; SDL scale/letterbox khi window hoặc DPI thay đổi.
+inline constexpr int logicalWidth = 1180;
+inline constexpr int logicalHeight = 780;
+inline constexpr double plotLeft = 28;
+inline constexpr double plotTop = 108;
+inline constexpr double plotScale = 208;
+
 enum class Layer {
     Arrows,
     Potential,
+    Gradient,
     Divergence,
-    Curl,
+    Curl
 };
 
 inline Layer initialLayer() {
 #if LAB_CHECKPOINT == 3
-    return Layer::Potential;
+    return Layer::Gradient;
 #elif LAB_CHECKPOINT == 6
-    return Layer::Potential;
-#elif LAB_CHECKPOINT >= 5
-    return Layer::Curl;
+    return Layer::Gradient;
 #elif LAB_CHECKPOINT == 4
     return Layer::Divergence;
+#elif LAB_CHECKPOINT >= 5
+    return Layer::Curl;
 #else
     return Layer::Arrows;
 #endif
 }
 
+// [snippet world-screen]
+// [snippet to-screen]
 inline Vec2 toScreen(Vec2 p) {
-    const double scale = std::min((800.0 - 32) / 4, (600.0 - 32) / 3);
-    const double left = (800 - 4 * scale) / 2;
-    const double top = (600 - 3 * scale) / 2;
-    return {left + (p.x + 2) * scale, top + (1.5 - p.y) * scale};
+    return {plotLeft + (p.x + 2) * plotScale, plotTop + (1.5 - p.y) * plotScale};
 }
+
+// [/snippet to-screen]
 
 inline bool mouseWorld(SDL_Renderer* renderer, float mouseX, float mouseY, Vec2& p) {
     float logicalX = 0;
@@ -38,11 +47,8 @@ inline bool mouseWorld(SDL_Renderer* renderer, float mouseX, float mouseY, Vec2&
     if (!SDL_RenderCoordinatesFromWindow(renderer, mouseX, mouseY, &logicalX, &logicalY)) {
         return false;
     }
-    const double scale = std::min((800.0 - 32) / 4, (600.0 - 32) / 3);
-    const double left = (800 - 4 * scale) / 2;
-    const double top = (600 - 3 * scale) / 2;
-    p = {(logicalX - left) / scale - 2, 1.5 - (logicalY - top) / scale};
-    // Logical coordinates của SDL là float; cho phép sai số làm tròn sát cạnh.
+    p = {(logicalX - plotLeft) / plotScale - 2, 1.5 - (logicalY - plotTop) / plotScale};
+    // SDL nhận float: chỉ hấp thụ sai số sát cạnh, không hút cả letterbox vào miền.
     if (!std::isfinite(p.x) || !std::isfinite(p.y) || p.x < -2 - 1e-6 || p.x > 2 + 1e-6 || p.y < -1.5 - 1e-6 || p.y > 1.5 + 1e-6) {
         return false;
     }
@@ -51,58 +57,91 @@ inline bool mouseWorld(SDL_Renderer* renderer, float mouseX, float mouseY, Vec2&
     return true;
 }
 
+// [/snippet world-screen]
+
+// [snippet signed-color]
 inline SDL_Color scalarColor(double value, double range = 2) {
     if (!std::isfinite(value)) {
         return {255, 0, 255, 255};
     }
     const double t = std::min(1.0, std::abs(value) / range);
     if (value >= 0) {
-        return {static_cast<Uint8>(std::lround(35 + 205 * t)), static_cast<Uint8>(std::lround(45 + 55 * t)), static_cast<Uint8>(std::lround(60 - 20 * t)), 255};
+        return {static_cast<Uint8>(std::lround(21 + 112 * t)), static_cast<Uint8>(std::lround(32 + 37 * t)), static_cast<Uint8>(std::lround(47 - 9 * t)), 255};
     }
-    return {static_cast<Uint8>(std::lround(35 - 15 * t)), static_cast<Uint8>(std::lround(45 + 95 * t)), static_cast<Uint8>(std::lround(60 + 180 * t)), 255};
+    return {static_cast<Uint8>(std::lround(21 - t)), static_cast<Uint8>(std::lround(32 + 59 * t)), static_cast<Uint8>(std::lround(47 + 99 * t)), 255};
 }
 
+// [/snippet signed-color]
+
 #if LAB_CHECKPOINT >= 1
+// [snippet line]
 inline bool line(SDL_Renderer* renderer, Vec2 a, Vec2 b) {
     const Vec2 start = toScreen(a);
     const Vec2 end = toScreen(b);
     return SDL_RenderLine(renderer, static_cast<float>(start.x), static_cast<float>(start.y), static_cast<float>(end.x), static_cast<float>(end.y));
 }
 
+// [/snippet line]
+
+// [snippet arrow]
 inline bool drawArrow(SDL_Renderer* renderer, Vec2 p, Vec2 v) {
     const double speed = std::hypot(v.x, v.y);
+    if (!std::isfinite(speed)) {
+        return false;
+    }
     if (speed < 1e-12) {
         const Vec2 screen = toScreen(p);
         return SDL_RenderPoint(renderer, static_cast<float>(screen.x), static_cast<float>(screen.y));
     }
-    // Giới hạn chiều dài chỉ để mũi tên không che hàng xóm; dữ liệu v giữ nguyên.
+    // Giới hạn chỉ tác động nét vẽ. Không chuẩn hóa hoặc clamp vận tốc lưu trong field.
     const double length = std::min(0.16, 0.09 * speed);
     const Vec2 direction{v.x / speed, v.y / speed};
     const Vec2 tip{p.x + length * direction.x, p.y + length * direction.y};
-    const Vec2 left{tip.x - 0.035 * direction.x - 0.018 * direction.y, tip.y - 0.035 * direction.y + 0.018 * direction.x};
-    const Vec2 right{tip.x - 0.035 * direction.x + 0.018 * direction.y, tip.y - 0.035 * direction.y - 0.018 * direction.x};
+    const double head = std::min(0.035, length * 0.35);
+    const Vec2 left{tip.x - head * direction.x - head * 0.5 * direction.y, tip.y - head * direction.y + head * 0.5 * direction.x};
+    const Vec2 right{tip.x - head * direction.x + head * 0.5 * direction.y, tip.y - head * direction.y - head * 0.5 * direction.x};
     return line(renderer, p, tip) && line(renderer, tip, left) && line(renderer, tip, right);
 }
 
-// Layer được dùng từ bài 3; hai checkpoint đầu chỉ vẽ mũi tên.
+// [/snippet arrow]
+
+#if LAB_CHECKPOINT >= 3
+// [snippet overlay-value]
+inline double overlayValue(const Field& field, Layer layer, int x, int y) {
+    const auto i = field.index(x, y);
+    if (layer == Layer::Gradient) {
+        return std::hypot(derivativeX(field, field.scalar, x, y), derivativeY(field, field.scalar, x, y));
+    }
+#if LAB_CHECKPOINT >= 4
+    // [snippet divergence-layer]
+    if (layer == Layer::Divergence) {
+        return divergence(field, x, y);
+    }
+    // [/snippet divergence-layer]
+#endif
+#if LAB_CHECKPOINT >= 5
+    // [snippet curl-layer]
+    if (layer == Layer::Curl) {
+        return curl(field, x, y);
+    }
+    // [/snippet curl-layer]
+#endif
+    return field.scalar[i];
+}
+
+// [/snippet overlay-value]
+#endif
+
 inline bool drawField(SDL_Renderer* renderer, const Field& field, [[maybe_unused]] Layer layer) {
+    const SDL_Rect clip{28, 108, 833, 625};
+    if (!SDL_SetRenderClipRect(renderer, &clip)) {
+        return false;
+    }
 #if LAB_CHECKPOINT >= 3
     if (layer != Layer::Arrows) {
         for (int y = 0; y < field.height; ++y) {
             for (int x = 0; x < field.width; ++x) {
-                const auto i = field.index(x, y);
-                double value = field.scalar[i];
-#if LAB_CHECKPOINT >= 4
-                if (layer == Layer::Divergence) {
-                    value = divergence(field, x, y);
-                }
-#endif
-#if LAB_CHECKPOINT >= 5
-                if (layer == Layer::Curl) {
-                    value = curl(field, x, y);
-                }
-#endif
-                const SDL_Color color = scalarColor(value);
+                const SDL_Color color = scalarColor(overlayValue(field, layer, x, y));
                 if (!SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a)) {
                     return false;
                 }
@@ -117,31 +156,46 @@ inline bool drawField(SDL_Renderer* renderer, const Field& field, [[maybe_unused
         }
     }
 #endif
-    if (!SDL_SetRenderDrawColor(renderer, 225, 235, 245, 255)) {
+    // Axes còn thấy được trên bản đồ màu; chỉ glyph bị lấy thưa, dữ liệu không bị giảm.
+    if (!SDL_SetRenderDrawColor(renderer, 76, 101, 129, 255) || !line(renderer, {-2, 0}, {2, 0}) || !line(renderer, {0, -1.5}, {0, 1.5})) {
         return false;
     }
     const int stride = std::max(1, (field.width - 1) / 16);
     for (int y = 0; y < field.height; y += stride) {
         for (int x = 0; x < field.width; x += stride) {
             const auto i = field.index(x, y);
-            if (!drawArrow(renderer, world(field, x, y), {field.vx[i], field.vy[i]})) {
+            // [snippet gradient-glyph]
+            Vec2 vector{field.vx[i], field.vy[i]};
+#if LAB_CHECKPOINT >= 3
+            if (layer == Layer::Gradient) {
+                vector = {derivativeX(field, field.scalar, x, y), derivativeY(field, field.scalar, x, y)};
+            }
+#endif
+            // [/snippet gradient-glyph]
+            if (!SDL_SetRenderDrawColor(renderer, 199, 221, 238, 255) || !drawArrow(renderer, world(field, x, y), vector)) {
                 return false;
             }
         }
     }
-    return true;
+    return SDL_SetRenderClipRect(renderer, nullptr);
 }
 #endif
 
 #if LAB_CHECKPOINT >= 7
 inline bool drawParticles(SDL_Renderer* renderer, const std::vector<Particle>& particles) {
-    if (!SDL_SetRenderDrawColor(renderer, 250, 220, 110, 255)) {
-        return false;
-    }
     for (const auto& particle : particles) {
+        // Đọc ring buffer theo thứ tự thời gian, kể cả sau khi đã quay vòng.
+        for (int age = 1; age < particle.trailSize; ++age) {
+            const int a = (particle.trailHead - particle.trailSize + age - 1 + 24) % 24;
+            const int b = (a + 1) % 24;
+            const auto brightness = static_cast<Uint8>(70 + 150 * age / 24);
+            if (!SDL_SetRenderDrawColor(renderer, brightness, brightness, 105, 255) || !line(renderer, particle.trail[a], particle.trail[b])) {
+                return false;
+            }
+        }
         const Vec2 p = toScreen(particle.position);
-        const SDL_FRect marker{static_cast<float>(p.x - 1.5), static_cast<float>(p.y - 1.5), 3, 3};
-        if (!SDL_RenderFillRect(renderer, &marker)) {
+        const SDL_FRect marker{static_cast<float>(p.x - 1.6), static_cast<float>(p.y - 1.6), 3.2F, 3.2F};
+        if (!SDL_SetRenderDrawColor(renderer, 253, 228, 143, 255) || !SDL_RenderFillRect(renderer, &marker)) {
             return false;
         }
     }

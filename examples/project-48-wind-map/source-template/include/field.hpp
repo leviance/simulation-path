@@ -8,11 +8,15 @@
 #include <vector>
 
 namespace wind {
+// [snippet vectors]
 struct Vec2 {
     double x = 0;
     double y = 0;
 };
 
+// [/snippet vectors]
+
+// [snippet field-storage]
 struct Field {
     int width;
     int height;
@@ -39,10 +43,15 @@ struct Field {
     }
 };
 
+// [/snippet field-storage]
+
+// [snippet world-nodes]
 inline Vec2 world(const Field& field, int x, int y) {
     // Nút lưới gồm cả hai đầu miền; y tăng từ đáy lên trên.
     return {-2 + x * field.dx, -1.5 + y * field.dy};
 }
+
+// [/snippet world-nodes]
 
 inline bool inside(Vec2 p) {
     return std::isfinite(p.x) && std::isfinite(p.y) && p.x >= -2 && p.x <= 2 && p.y >= -1.5 && p.y <= 1.5;
@@ -90,6 +99,7 @@ inline Scene initialScene() {
     return scene;
 }
 
+// [snippet potential]
 inline double potentialAt(Vec2 p, Potential potential) {
     const double r2 = p.x * p.x + p.y * p.y;
     if (potential == Potential::Hill) {
@@ -98,6 +108,9 @@ inline double potentialAt(Vec2 p, Potential potential) {
     return 0.5 * r2;
 }
 
+// [/snippet potential]
+
+// [snippet exact-gradient]
 inline Vec2 exactGradient(Vec2 p, Potential potential) {
     if (potential == Potential::Hill) {
         const double value = std::exp(-p.x * p.x - p.y * p.y);
@@ -105,5 +118,7 @@ inline Vec2 exactGradient(Vec2 p, Potential potential) {
     }
     return p;
 }
+
+// [/snippet exact-gradient]
 #endif
 } // namespace wind

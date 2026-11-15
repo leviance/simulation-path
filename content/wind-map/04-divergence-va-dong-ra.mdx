@@ -32,6 +32,8 @@ Chọn lớp Divergence. So Source, Sink và Uniform ở cùng nút rồi thử 
 
 Hàm divergence rất ngắn vì hai hàm đạo hàm đã làm phần kiểm mép và chia khoảng cách:
 
+{/* snippet include/derivatives.hpp#divergence */}
+
 ```cpp title="include/derivatives.hpp — divergence của vector"
 inline double divergence(const Field& field, int x, int y) {
     return derivativeX(field, field.vx, x, y) + derivativeY(field, field.vy, x, y);
@@ -42,31 +44,44 @@ Vx được lấy đạo hàm theo x, vy theo y. Không cộng derivativeY(vx) v
 
 ### Bước 2 — Chọn dữ liệu cho lớp màu
 
-Trong `drawField`, mỗi nút bắt đầu với scalar phi. Nếu layer là Divergence, thay **giá trị dùng để vẽ** bằng số đo divergence:
+Trong `overlayValue(field, layer, x, y)` đã có ở bài 3, thêm nhánh trả về divergence. Hàm này chọn **giá trị dùng để vẽ** tại nút, không sửa Field:
+
+{/* snippet include/view.hpp#divergence-layer */}
 
 ```cpp title="include/view.hpp — chọn số cho lớp divergence"
 if (layer == Layer::Divergence) {
-    value = divergence(field, x, y);
+    return divergence(field, x, y);
 }
 ```
 
-Không ghi value vào scalar hoặc vx/vy. Mảng trường giữ nguyên, nên đổi lớp màu không thể làm chuyển động hạt đổi ở bài sau.
+Vòng vẽ nền trong `drawField` gọi `scalarColor(overlayValue(...))`. Như vậy số divergence vừa trả về đi vào hàm chọn màu, không ghi ngược vào scalar hoặc vx/vy. Mảng trường giữ nguyên, nên đổi lớp màu không làm quỹ đạo hạt đổi ở bài sau.
 
 ### Bước 3 — Giữ dấu khi đổi sang màu
 
 `scalarColor` dùng thang cố định −2 đến 2. Độ bão hòa phụ thuộc độ lớn, còn dấu chọn xanh hoặc cam:
 
+{/* snippet include/view.hpp#signed-color */}
+
 ```cpp title="include/view.hpp — độ bão hòa màu"
-const double t = std::min(1.0, std::abs(value) / range);
+inline SDL_Color scalarColor(double value, double range = 2) {
+    if (!std::isfinite(value)) {
+        return {255, 0, 255, 255};
+    }
+    const double t = std::min(1.0, std::abs(value) / range);
+    if (value >= 0) {
+        return {static_cast<Uint8>(std::lround(21 + 112 * t)), static_cast<Uint8>(std::lround(32 + 37 * t)), static_cast<Uint8>(std::lround(47 - 9 * t)), 255};
+    }
+    return {static_cast<Uint8>(std::lround(21 - t)), static_cast<Uint8>(std::lround(32 + 59 * t)), static_cast<Uint8>(std::lround(47 + 99 * t)), 255};
+}
 ```
 
 Tính độ bão hòa bằng trị tuyệt đối không có nghĩa bỏ dấu của số đo. Nhánh `value>=0` chọn màu cam; nhánh còn lại chọn xanh. Giá trị 0 có cùng nền tối ở cả hai phía. Số không hữu hạn được tô hồng để lộ lỗi.
 
 ## Ghép các phần lại
 
-Checkpoint 04 mở với Source và lớp Divergence. P đổi trường, L đổi lớp, I đọc số tại nút. Build `project_48_checkpoint_4`; kiểm Source/Sink trước khi nhìn hình phức tạp hơn. Phần code hoàn chỉnh sau bài cho thấy layer chỉ đi vào renderer.
+Checkpoint 04 mở với Source và lớp Divergence. P đổi trường, L đổi lớp, panel đọc số tại nút. Build `project_48_checkpoint_4`; kiểm Source/Sink trước khi nhìn hình phức tạp hơn. Phần code hoàn chỉnh sau bài cho thấy layer chỉ đi vào renderer.
 
-Với thang cố định, Source và Sink có độ bão hòa tương đương nhưng màu khác dấu. Nếu sửa trường thành `(2x,2y)`, divergence bằng 4 và màu bão hòa; I vẫn phải báo 4.
+Với thang cố định, Source và Sink có độ bão hòa tương đương nhưng màu khác dấu. Nếu sửa trường thành `(2x,2y)`, divergence bằng 4 và màu bão hòa; panel vẫn phải báo 4.
 
 ## Thử làm sai để hiểu đúng
 

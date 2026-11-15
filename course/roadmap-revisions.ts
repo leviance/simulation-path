@@ -202,6 +202,29 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
     workload:
       "Final 192×192 = 36.864 ô cập nhật/vẽ thật; 128/192/256 cùng miền cách nhiệt 96×96, 32×32 chỉ là lưới học.",
   },
+  "48": {
+    previousTitle: "Bản đồ gió: nhìn thấy gradient, divergence và curl",
+    replacement: {
+      slug: "wind-map",
+    },
+    summary:
+      "Đọc một trường gió bằng mũi tên, các toán tử số và tracer cùng đi theo dữ liệu trên lưới.",
+    outcome:
+      "Công cụ C++/SDL3 có preset, gradient riêng, divergence/curl, inspector, legend, vệt tracer và xoáy tương tác.",
+    question: "Độ dốc của scalar, dòng ra ròng và xu hướng quay cục bộ khác nhau ở đâu?",
+    interactions: [
+      "Chọn overlay/preset, kéo xoáy hoặc đặt bằng bàn phím.",
+      "Pause/step/reset, bật tắt tracer, xem sạch và tinh lưới.",
+    ],
+    concepts: [
+      "Gradient, divergence, curl và sai phân hai phía/một phía.",
+      "Bilinear, midpoint RK2, thời gian mô hình và oracle giải tích.",
+    ],
+    prerequisites:
+      "SDL/input/vector 2D; sai phân và nội suy được giải thích tại chỗ. Không cần OpenGL hoặc solver chất lưu.",
+    workload:
+      "Final 65×49 = 3.185 mẫu thật, có 129×97; 221 glyph và 128 tracer. 33×25 chỉ là lưới học.",
+  },
 };
 
 export const rebuildRevisions = Object.fromEntries(

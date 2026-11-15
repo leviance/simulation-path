@@ -3,6 +3,7 @@
 
 namespace wind {
 #if LAB_CHECKPOINT >= 8
+// [snippet add-vortex]
 inline void addVortex(Field& field, Vec2 center, double strength) {
     // Vector tiếp tuyến nhân Gaussian: trơn tại tâm và giảm dần ra xa.
     if (!inside(center) || !std::isfinite(strength) || std::abs(strength) > 2) {
@@ -20,9 +21,12 @@ inline void addVortex(Field& field, Vec2 center, double strength) {
         }
     }
 }
+
+// [/snippet add-vortex]
 #endif
 
 #if LAB_CHECKPOINT >= 2
+// [snippet populate]
 inline void populate(Field& field, const Scene& scene) {
     // Ghi lại toàn bộ nền trước khi cộng xoáy, để cùng Scene cho cùng Field.
     for (int y = 0; y < field.height; ++y) {
@@ -31,18 +35,22 @@ inline void populate(Field& field, const Scene& scene) {
             const Vec2 p = world(field, x, y);
             field.scalar[i] = potentialAt(p, scene.potential);
             Vec2 v{1, 0.25};
+            // [snippet source-sink]
             if (scene.preset == Preset::Source) {
                 v = p;
             }
             if (scene.preset == Preset::Sink) {
                 v = {-p.x, -p.y};
             }
+            // [/snippet source-sink]
+            // [snippet rotation-shear]
             if (scene.preset == Preset::Rotation) {
                 v = {-p.y, p.x};
             }
             if (scene.preset == Preset::Shear) {
                 v = {p.y, 0};
             }
+            // [/snippet rotation-shear]
             field.vx[i] = v.x;
             field.vy[i] = v.y;
         }
@@ -53,10 +61,14 @@ inline void populate(Field& field, const Scene& scene) {
     }
 #endif
 #if LAB_CHECKPOINT >= 8
+    // [snippet apply-vortex]
     if (scene.vortex) {
         addVortex(field, scene.center, scene.strength);
     }
+    // [/snippet apply-vortex]
 #endif
 }
+
+// [/snippet populate]
 #endif
 } // namespace wind

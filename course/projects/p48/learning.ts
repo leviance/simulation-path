@@ -8,7 +8,8 @@ const learning = {
       steps: [
         {
           title: "Chạy starter",
-          explanation: "Mở cửa sổ nền tối, kiểm renderer và logical presentation 800×600.",
+          explanation:
+            "Chạy scaffold SDL và panel 1180×780; xác định chỗ gọi drawWorkshop trong vòng lặp.",
         },
         {
           title: "Tạo lưới các nút",
@@ -24,8 +25,15 @@ const learning = {
     },
     "p48-l02": {
       focus: "Xem các trường mẫu rồi đọc số tại nút.",
-      expected: "P đổi gió đều/tỏa/hút/xoay/trượt; chuột, mũi tên và I đọc được vector đúng.",
-      files: ["include/field.hpp", "include/scenes.hpp", "src/main.cpp"],
+      expected:
+        "P đổi gió đều/tỏa/hút/xoay/trượt; chuột hoặc mũi tên chọn nút, panel đọc vector đúng.",
+      files: [
+        "include/field.hpp",
+        "include/scenes.hpp",
+        "include/input.hpp",
+        "include/workshop.hpp",
+        "include/panel.hpp",
+      ],
       steps: [
         {
           title: "Đặt công thức tại nút",
@@ -38,14 +46,14 @@ const learning = {
         {
           title: "Chọn và đọc nút",
           explanation:
-            "Input đổi qua logical presentation, đảo y về world rồi chọn nút gần nhất; I in giá trị ra console.",
+            "Input đổi qua logical presentation, đảo y về world rồi chọn nút gần nhất; panel đọc mẫu tại nút đó.",
         },
       ],
     },
     "p48-l03": {
       focus: "Dựng gradient của một trường scalar.",
       expected: "Lòng chảo có gradient hướng ra; đỉnh đồi có gradient hướng về đỉnh.",
-      files: ["include/derivatives.hpp", "include/scenes.hpp", "src/main.cpp"],
+      files: ["include/derivatives.hpp", "include/scenes.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
           title: "Lưu scalar phi",
@@ -100,8 +108,7 @@ const learning = {
         },
         {
           title: "So rotation với shear",
-          explanation:
-            "Dùng L và I để kiểm số; hình vòng tròn không phải điều kiện bắt buộc để có curl.",
+          explanation: "Dùng L và bảng số để kiểm; đường dòng không cần tròn mới có curl.",
         },
       ],
     },
@@ -109,7 +116,12 @@ const learning = {
       focus: "Đo lỗi của phép lấy đạo hàm.",
       expected:
         "Sai số hill giảm hơn ba lần khi tăng từ 33×25 lên 65×49; sai số mép được báo riêng.",
-      files: ["include/diagnostics.hpp", "src/main.cpp"],
+      files: [
+        "include/diagnostics.hpp",
+        "include/input.hpp",
+        "include/workshop.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
           title: "Viết đáp án giải tích",
@@ -123,7 +135,8 @@ const learning = {
         },
         {
           title: "Tinh lưới trên cùng miền",
-          explanation: "G đổi số nút, giữ miền world; dx/dy giảm một nửa và I in lại sai số.",
+          explanation:
+            "G đổi 33×25, 65×49, 129×97 trên cùng miền; dòng dưới viewport đọc sai số trong miền/mép.",
         },
       ],
     },
@@ -131,7 +144,7 @@ const learning = {
       focus: "Lấy vận tốc ở vị trí bất kỳ rồi di chuyển tracer.",
       expected:
         "N tiến đúng 1/60 s, Space chạy có giới hạn công việc; hạt đi theo trường nhưng không sửa Field.",
-      files: ["include/particles.hpp", "include/view.hpp", "src/main.cpp"],
+      files: ["include/particles.hpp", "include/workshop.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
           title: "Nội suy bốn nút",
@@ -154,7 +167,7 @@ const learning = {
       focus: "Thêm một xoáy Gaussian có tâm tương tác.",
       expected:
         "Kéo tâm xoáy hoặc dùng Enter, đổi dấu quay, thấy curl thay đổi mà không cộng dồn qua event.",
-      files: ["include/scenes.hpp", "src/main.cpp"],
+      files: ["include/scenes.hpp", "include/input.hpp", "include/workshop.hpp"],
       steps: [
         {
           title: "Tạo vector tiếp tuyến",

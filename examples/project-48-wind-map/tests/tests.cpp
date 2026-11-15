@@ -1,4 +1,5 @@
 #include "diagnostics.hpp"
+#include "options.hpp"
 #include "particles.hpp"
 #include <cstdlib>
 #include <iostream>
@@ -19,7 +20,28 @@ bool near(double actual, double expected, double tolerance = 1e-10) {
     return std::isfinite(actual) && std::abs(actual - expected) <= tolerance;
 }
 
+bool acceptsOptions(std::vector<std::string> arguments) {
+    arguments.insert(arguments.begin(), "wind-map");
+    std::vector<char*> argv;
+    for (auto& argument : arguments) {
+        argv.push_back(argument.data());
+    }
+    try {
+        wind::parseOptions(static_cast<int>(argv.size()), argv.data());
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 int main() {
+    check(acceptsOptions({"--hidden", "--seconds=0.05"}), "finite hidden CLI accepted");
+    check(acceptsOptions({"--seconds=60"}), "native UI has a finite upper duration");
+    for (const std::string bad : {"0", "0.049", "61", "nan", "inf", "1oops"}) {
+        check(!acceptsOptions({"--seconds=" + bad}), "invalid or unbounded CLI duration rejected");
+    }
+    check(!acceptsOptions({"--hidden"}) && !acceptsOptions({"--capture=frame.bmp"}), "automation cannot launch unbounded hidden or capture run");
+    check(!acceptsOptions({"--verify", "--run"}), "CPU validation does not silently ignore rendering flags");
     bool invalidSize = false;
     try {
         wind::Field invalid(2, 25);
@@ -159,9 +181,61 @@ int main() {
     check(near(wind::curl(field, 16, 12), 4 * std::exp(-field.dx * field.dx / (0.55 * 0.55))), "vortex center matches independent stencil answer");
     check(wind::validateMap().passed, "bounded reference validation passes");
 
+    // Kiểm mẫu thật ở hai lưới dùng trong ứng dụng cuối, không nhầm với số glyph.
+    for (const int columns : {65, 129}) {
+        wind::Field full(columns, 1 + (columns - 1) * 3 / 4);
+        wind::Scene sourceScene;
+        sourceScene.preset = wind::Preset::Source;
+        wind::populate(full, sourceScene);
+        check(full.width >= 32 && full.height >= 32, "final grid satisfies both minimum dimensions");
+        check(full.vx.size() == static_cast<std::size_t>(full.width * full.height), "all final field samples allocated");
+        for (int y = 0; y < full.height; ++y) {
+            for (int x = 0; x < full.width; ++x) {
+                check(near(wind::divergence(full, x, y), 2), "every final node participates in numerical operators");
+            }
+        }
+    }
+
+    // Curl Gaussian có đáp án liên tục; không dùng chính stencil làm oracle hội tụ.
+    double vortexErrors[3]{};
+    int resolutionIndex = 0;
+    for (const int columns : {33, 65, 129}) {
+        wind::Field grid(columns, 1 + (columns - 1) * 3 / 4);
+        wind::Scene vortexScene;
+        vortexScene.vortex = true;
+        vortexScene.center = {0.25, -0.25};
+        wind::populate(grid, vortexScene);
+        double error = 0;
+        for (int y = 0; y < grid.height; ++y) {
+            for (int x = 0; x < grid.width; ++x) {
+                const auto p = wind::world(grid, x, y);
+                const double qx = p.x - 0.25;
+                const double qy = p.y + 0.25;
+                const double r2 = qx * qx + qy * qy;
+                const double expected = 2 * std::exp(-r2 / (0.55 * 0.55)) * (2 - 2 * r2 / (0.55 * 0.55));
+                error = wind::maximumError(error, std::abs(wind::curl(grid, x, y) - expected));
+                error = wind::maximumError(error, std::abs(wind::divergence(grid, x, y)));
+            }
+        }
+        vortexErrors[resolutionIndex++] = error;
+    }
+    check(vortexErrors[1] < vortexErrors[0] / 3.5 && vortexErrors[2] < vortexErrors[1] / 3.5, "Gaussian vortex converges to continuum derivatives");
+    auto traced = wind::makeParticles();
+    for (int i = 0; i < 200; ++i)
+        wind::advanceParticles(field, traced);
+    for (const auto& particle : traced) {
+        check(particle.trail.size() == 24 && particle.trailSize <= 24 && particle.trailHead < 24, "trail memory bounded after wrap");
+    }
+    field.vx.assign(field.vx.size(), std::numeric_limits<double>::quiet_NaN());
+    check(!wind::sampleVelocity(field, {0, 0}, result), "nonfinite field sample rejected before integration");
+    wind::advanceParticles(field, traced);
+    check(traced[0].trailSize == 0 && traced[0].age == 0, "respawn clears trail instead of drawing a discontinuity");
+
     std::cout << "Wind map tests: " << failures << " failure(s)\n";
+    // [snippet test-result]
     if (failures != 0) {
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;
+    // [/snippet test-result]
 }

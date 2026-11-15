@@ -30,13 +30,26 @@ Chọn Uniform để nền có div/curl bằng 0, bật xoáy và đặt tâm �
 
 `addVortex` kiểm tâm trong miền và strength hữu hạn trong giới hạn trước khi sửa Field. Trong vòng lặp:
 
+{/* snippet include/scenes.hpp#add-vortex */}
+
 ```cpp title="include/scenes.hpp — thêm xoáy Gaussian"
-const Vec2 p = world(field, x, y);
-const double qx = p.x - center.x;
-const double qy = p.y - center.y;
-const double weight = strength * std::exp(-(qx * qx + qy * qy) / (0.55 * 0.55));
-field.vx[i] += -qy * weight;
-field.vy[i] += qx * weight;
+inline void addVortex(Field& field, Vec2 center, double strength) {
+    // Vector tiếp tuyến nhân Gaussian: trơn tại tâm và giảm dần ra xa.
+    if (!inside(center) || !std::isfinite(strength) || std::abs(strength) > 2) {
+        throw std::invalid_argument("Invalid vortex");
+    }
+    for (int y = 0; y < field.height; ++y) {
+        for (int x = 0; x < field.width; ++x) {
+            const auto i = field.index(x, y);
+            const Vec2 p = world(field, x, y);
+            const double qx = p.x - center.x;
+            const double qy = p.y - center.y;
+            const double weight = strength * std::exp(-(qx * qx + qy * qy) / (0.55 * 0.55));
+            field.vx[i] += -qy * weight;
+            field.vy[i] += qx * weight;
+        }
+    }
+}
 ```
 
 Weight nhân vector chưa chuẩn hóa. Chuẩn hóa q trước sẽ làm công thức khác, khó xử lý ở tâm và mất đặc tính trơn đang dùng để kiểm đạo hàm.
@@ -44,6 +57,8 @@ Weight nhân vector chưa chuẩn hóa. Chuẩn hóa q trước sẽ làm công 
 ### Bước 2 — Dựng lại nền trước khi cộng
 
 Đoạn cuối của `populate` chỉ cộng xoáy sau khi toàn bộ nền và gradient đã hoàn thành:
+
+{/* snippet include/scenes.hpp#apply-vortex */}
 
 ```cpp title="include/scenes.hpp — cộng đúng một lần cho mỗi Scene"
 if (scene.vortex) {
@@ -55,23 +70,23 @@ Mỗi lần gọi populate, vòng đầu ghi lại vx/vy từ công thức nền
 
 ### Bước 3 — Chuyển chuột thành tâm world
 
-Khi nhấn chuột trái, main bắt đầu dragging và yêu cầu mouse capture. Khi thả hoặc mất focus, kết thúc kéo và giải phóng capture. Chỉ đặt tâm nếu mouseWorld nhận vị trí trong miền:
+Chọn “Đặt/kéo tâm xoáy” trên Canvas; trong C++ nhấn M để chuyển từ probe sang edit. Khi nhấn chuột trái trong bản đồ, `handleInput` bắt đầu dragging và yêu cầu mouse capture. Khi thả hoặc mất focus, kết thúc kéo và giải phóng capture. Chỉ đặt tâm nếu mouseWorld nhận vị trí trong miền:
 
-```cpp title="src/main.cpp — thay đổi tâm xoáy"
-if (dragging) {
-    scene.center = p;
-    scene.vortex = true;
-    changed = true;
-}
+{/* snippet include/input.hpp#place-vortex */}
+
+```cpp title="include/input.hpp — thay đổi tâm xoáy"
+app.scene.center = p;
+app.scene.vortex = true;
+app.rebuild();
 ```
 
 Enter đặt tâm tại nút cursor nên có thể dùng hoàn toàn bằng bàn phím. B bật/tắt, S đảo strength. Nền vẫn là preset hiện tại; thay đổi xoáy không chuyển tất cả preset thành Rotation.
 
 ## Ghép các phần lại
 
-Build `project_48_checkpoint_8`. Input chỉ sửa Scene; nhánh changed gọi populate, dừng, xóa accumulator, gieo lại 128 hạt và đưa tick về 0. Sau đó bạn chủ động bấm N hoặc Space để xem đường đi.
+Build `project_48_checkpoint_8`. `selectPoint` sửa `app.scene`; `app.rebuild()` gọi populate, dừng, xóa accumulator, gieo lại 128 hạt và đưa tick về 0. Khi chỉ đọc nút hoặc đổi overlay, không gọi rebuild. Sau đó bạn chủ động bấm N hoặc Space để xem đường đi.
 
-Với tâm tại gốc và strength=2, curl giải tích tại tâm là 4. Trên lưới 33×25, sai phân cho $4e^{-h^2/\sigma^2}$ với h=0.125, nên nhỏ hơn 4. Đây là ví dụ cụ thể về sai số lấy đạo hàm, không phải solver cần clamp lại cho bằng đáp án.
+Với nền Uniform, tâm xoáy ở gốc và strength=2, curl giải tích tại tâm là 4. Sai phân trên lưới cho $4e^{-h^2/\sigma^2}$: bản mặc định 65×49 dùng h=0.0625; nếu chọn lưới học 33×25 thì h=0.125. Cả hai nhỏ hơn 4 và lưới mịn gần đáp án hơn. Nếu giữ nền Rotation, phải cộng thêm curl 2 của nền. Không clamp số đo về đáp án giải tích.
 
 ## Thử làm sai để hiểu đúng
 

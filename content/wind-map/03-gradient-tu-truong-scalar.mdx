@@ -26,7 +26,7 @@ Hai mẫu cách nhau 2h nên mẫu số phải là 2h. Mảng y tăng hướng l
 
 <InteractiveLab demo="wind-map" mode="wind-3" />
 
-Chọn Gradient của phi, rồi đổi Bowl/Hill. Tại `(1,0)`, Bowl cho vector `(1,0)`, Hill hướng sang trái. Màu là scalar, mũi tên là gradient: chúng biểu diễn hai kiểu dữ liệu khác nhau.
+Chọn Gradient của phi, rồi đổi Bowl/Hill. Tại `(1,0)`, Bowl cho vector `(1,0)`, Hill hướng sang trái. Lớp Gradient tô độ lớn |∇φ| và vẽ ∇φ. Chọn lớp Scalar φ để xem giá trị phi; khi ấy mũi tên vẫn là vận tốc. Chỉ preset “Vận tốc = gradient φ” ghi gradient vào vx/vy.
 
 ## Viết code từng bước
 
@@ -34,12 +34,16 @@ Chọn Gradient của phi, rồi đổi Bowl/Hill. Tại `(1,0)`, Bowl cho vecto
 
 `potentialAt` tính phi từ vị trí world. Cả hai trường đều trơn và có đáp án giải tích để kiểm về sau:
 
+{/* snippet include/field.hpp#potential */}
+
 ```cpp title="include/field.hpp — tính phi tại một vị trí"
-const double r2 = p.x * p.x + p.y * p.y;
-if (potential == Potential::Hill) {
-    return std::exp(-r2);
+inline double potentialAt(Vec2 p, Potential potential) {
+    const double r2 = p.x * p.x + p.y * p.y;
+    if (potential == Potential::Hill) {
+        return std::exp(-r2);
+    }
+    return 0.5 * r2;
 }
-return 0.5 * r2;
 ```
 
 `populate` ghi scalar cho tất cả nút trước. Gradient chỉ đọc mảng scalar đã hoàn chỉnh; không tính đạo hàm khi một nửa mảng vẫn là dữ liệu cũ.
@@ -48,11 +52,15 @@ return 0.5 * r2;
 
 `derivativeX` nhận Field để lấy dx và index, cùng mảng giá trị cần lấy đạo hàm. Nhánh bên trong miền là:
 
+{/* snippet include/derivatives.hpp#centered-x */}
+
 ```cpp title="include/derivatives.hpp — sai phân trung tâm theo x"
 return (values[i + 1] - values[i - 1]) / (2 * field.dx);
 ```
 
 Ở đầu trái/phải không có đủ hai mẫu. Source dùng ba điểm phía trong miền. Ở đầu trái:
+
+{/* snippet include/derivatives.hpp#one-sided-left */}
 
 ```cpp title="include/derivatives.hpp — đạo hàm tại đầu trái"
 if (x == 0) {
@@ -66,17 +74,56 @@ Hệ số −3, 4, −1 cho tổng bằng 0 khi scalar hằng, và trả đúng 
 
 Hàm gradient duyệt lại lưới và gán hai thành phần:
 
+{/* snippet include/derivatives.hpp#gradient */}
+
 ```cpp title="include/derivatives.hpp — ghi vector gradient tại nút"
-const auto i = field.index(x, y);
-field.vx[i] = derivativeX(field, field.scalar, x, y);
-field.vy[i] = derivativeY(field, field.scalar, x, y);
+inline void gradient(Field& field) {
+    for (int y = 0; y < field.height; ++y) {
+        for (int x = 0; x < field.width; ++x) {
+            const auto i = field.index(x, y);
+            field.vx[i] = derivativeX(field, field.scalar, x, y);
+            field.vy[i] = derivativeY(field, field.scalar, x, y);
+        }
+    }
+}
 ```
 
 Không chuẩn hóa vector này trong dữ liệu: độ dài gradient cũng chứa thông tin về độ dốc. Renderer tự giới hạn độ dài mũi tên để hình dễ đọc.
 
+Hàm trên chỉ được `populate` gọi khi preset vận tốc là Gradient. Riêng lớp hiển thị Gradient đọc `derivativeX/Y(field.scalar)` ngay lúc vẽ, không gọi hàm ghi vx/vy. Thử giữ vận tốc Uniform, chọn lớp Gradient/Hill: mũi tên gradient hướng vào đỉnh nhưng tracer ở bài sau vẫn đi đều sang phải. Đó không phải hai kết quả mâu thuẫn, mà là hai trường khác nhau.
+
+### Bước 4 — Vẽ gradient mà không sửa vận tốc
+
+Trong `view.hpp`, `drawField` đang đi qua các nút để vẽ. Trước khi gọi `drawArrow`, chọn vector cục bộ dùng cho nét vẽ:
+
+{/* snippet include/view.hpp#gradient-glyph */}
+
+```cpp title="include/view.hpp — chọn mũi tên để hiển thị"
+Vec2 vector{field.vx[i], field.vy[i]};
+if (layer == Layer::Gradient) {
+    vector = {derivativeX(field, field.scalar, x, y), derivativeY(field, field.scalar, x, y)};
+}
+```
+
+Lời gọi `drawArrow(renderer, world(field,x,y), vector)` phía dưới không cần biết vector đến từ đâu. Ta chỉ thay biến `vector` của renderer, không gán `field.vx[i]` hoặc `field.vy[i]`. Với lớp màu, `overlayValue` đọc cùng scalar:
+
+{/* snippet include/view.hpp#overlay-value */}
+
+```cpp title="include/view.hpp — chọn giá trị cho nền màu"
+inline double overlayValue(const Field& field, Layer layer, int x, int y) {
+    const auto i = field.index(x, y);
+    if (layer == Layer::Gradient) {
+        return std::hypot(derivativeX(field, field.scalar, x, y), derivativeY(field, field.scalar, x, y));
+    }
+    return field.scalar[i];
+}
+```
+
+Lớp Gradient dùng độ dài của hai đạo hàm; lớp Scalar dùng phi gốc. Vòng vẽ nền gọi `scalarColor(overlayValue(...))`, còn vòng mũi tên dùng nhánh vừa thêm. Như vậy phần chọn layer chỉ đi vào renderer, không đi vào công thức vận tốc.
+
 ## Ghép các phần lại
 
-Sau vòng lặp tạo scalar/nền, `populate` gọi gradient nếu chọn preset Gradient. H đổi Bowl/Hill; L chuyển giữa chỉ mũi tên và lớp màu scalar. I in phi và vector. Build `project_48_checkpoint_3`, chọn Gradient rồi thử hai scalar.
+Sau vòng lặp tạo scalar/nền, `populate` gọi gradient nếu chọn preset Gradient. H đổi Bowl/Hill; L chuyển giữa vận tốc, Scalar φ và Gradient φ. Panel đọc phi, gradient và vận tốc cạnh nhau. Build `project_48_checkpoint_3`, chọn Gradient rồi thử hai scalar.
 
 Thang màu cố định −2..2; Bowl gần góc có thể vượt 2 và bão hòa màu. Inspector vẫn đọc số thật. Không dùng màu để lưu lại phi hoặc sửa nghiệm.
 
@@ -87,7 +134,7 @@ Thang màu cố định −2..2; Bowl gần góc có thể vượt 2 và bão h�
 
 ## Tự kiểm tra kết quả
 
-Bowl cho gradient `(x,y)` trong sai số dấu phẩy động, kể cả mép. Scalar hằng cho gradient 0. Hill hướng về đỉnh, gradient ở đỉnh bằng 0. Chuyển scalar trong preset Rotation không biến Rotation thành gradient. Kiểm số bằng I và Canvas; [OpenStax giải thích gradient và đạo hàm theo hướng](https://openstax.org/books/calculus-volume-3/pages/4-6-directional-derivatives-and-the-gradient).
+Bowl cho gradient `(x,y)` trong sai số dấu phẩy động, kể cả mép. Scalar hằng cho gradient 0. Hill hướng về đỉnh, gradient ở đỉnh bằng 0. Chuyển scalar trong preset Rotation không biến Rotation thành gradient. Kiểm số trên panel và Canvas; [OpenStax giải thích gradient và đạo hàm theo hướng](https://openstax.org/books/calculus-volume-3/pages/4-6-directional-derivatives-and-the-gradient).
 
 ## Bài tập mở rộng
 

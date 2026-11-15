@@ -8,9 +8,11 @@ Một bản đồ nhiệt cho mỗi vị trí một con số. Bản đồ gió c
 
 [Tải source Project 48](/downloads/project-48-wind-map.zip), giải nén và mở terminal ở thư mục có `CMakeLists.txt`. Starter đã có window, renderer, event loop và logical presentation. Hãy chạy cửa sổ nền tối trước:
 
+Scaffold còn cung cấp `Workshop` để giữ trạng thái, `input.hpp` để chuyển event thành thao tác và `panel.hpp` để vẽ nút/chữ. `Field` đã được khai báo để panel khởi động được; bài này giải thích cách lưu nó rồi thêm đường vẽ mũi tên. Các phép gradient/divergence/curl và bước tracer chưa có trong starter. Bạn không phải tự đoán vị trí ghép một helper vào ứng dụng: `main → handleInput → drawWorkshop → drawField` là đường gọi cần theo dõi.
+
 ```bash title="Terminal — build và chạy starter trên Windows"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_48_starter --parallel 2
+cmake --build build --config Debug --target project_48_starter --parallel 1
 .\build\Debug\project_48_starter.exe
 ```
 
@@ -30,13 +32,30 @@ Nút `(0,0)` ở góc dưới trái, `(32,24)` ở góc trên phải. Cách này
 
 Hình đứng yên là đúng. Chuyển động của hạt chỉ xuất hiện ở bài 7; mũi tên hiện tại là các mẫu của một trường.
 
+Lưới 33×25 ở sáu bài đầu chỉ là bước học. Từ bài 7, chương trình mở ở 65×49 = 3.185 nút để đạt quy mô của bản hoàn chỉnh; miền world vẫn giữ nguyên.
+
 ## Viết code từng bước
 
 ### Bước 1 — Giữ bộ khung SDL3 chạy được
 
 Sau khi tạo window, starter tạo renderer và kiểm lỗi riêng. Không gọi hàm vẽ nếu renderer chưa tồn tại:
 
+{/* snippet src/main.cpp#sdl-setup */}
+
 ```cpp title="src/main.cpp — tạo renderer"
+if (!SDL_Init(SDL_INIT_VIDEO)) {
+    std::cerr << SDL_GetError() << '\n';
+    return EXIT_FAILURE;
+}
+SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+if (options.hidden)
+    flags |= SDL_WINDOW_HIDDEN;
+SDL_Window* window = SDL_CreateWindow("Project 48 / Wind Map", 1180, 780, flags);
+if (!window) {
+    std::cerr << SDL_GetError() << '\n';
+    SDL_Quit();
+    return EXIT_FAILURE;
+}
 SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
 if (!renderer) {
     std::cerr << SDL_GetError() << '\n';
@@ -46,45 +65,116 @@ if (!renderer) {
 }
 ```
 
-Logical presentation là 800×600, chế độ LETTERBOX. Đây là hệ tọa độ để SDL vẽ, còn world chỉ rộng 4 đơn vị. `toScreen` lo chuyển giữa hai hệ; khi resize, SDL lo scale logical lên cửa sổ thật.
+Logical presentation là 1180×780, chế độ LETTERBOX. Đây là hệ tọa độ để SDL vẽ, còn world chỉ rộng 4 đơn vị. `toScreen` lo chuyển giữa hai hệ; khi resize, SDL lo scale logical lên cửa sổ thật.
 
 ### Bước 2 — Lưu hai thành phần ở mỗi nút
 
 `Vec2` là cặp số x/y. Field có ba mảng: scalar được chuẩn bị cho bài sau, vx/vy giữ trường vector hiện tại. Sau khi kiểm kích thước, constructor tạo đủ phần tử:
 
+{/* snippet include/field.hpp#vectors */}
+
+```cpp title="include/field.hpp — kiểu vector hai thành phần"
+struct Vec2 {
+    double x = 0;
+    double y = 0;
+};
+```
+
+{/* snippet include/field.hpp#field-storage */}
+
 ```cpp title="include/field.hpp — cấp phát dữ liệu lưới"
-dx = 4.0 / (width - 1);
-dy = 3.0 / (height - 1);
-scalar.assign(static_cast<std::size_t>(width * height), 0.0);
-vx.assign(scalar.size(), 1.0);
-vy.assign(scalar.size(), 0.25);
+struct Field {
+    int width;
+    int height;
+    double dx;
+    double dy;
+    std::vector<double> scalar;
+    std::vector<double> vx;
+    std::vector<double> vy;
+
+    explicit Field(int columns = 33, int rows = 25)
+        : width(columns), height(rows) {
+        if (width < 3 || height < 3 || width > 129 || height > 129) {
+            throw std::invalid_argument("Grid dimensions must be in [3, 129]");
+        }
+        dx = 4.0 / (width - 1);
+        dy = 3.0 / (height - 1);
+        scalar.assign(static_cast<std::size_t>(width * height), 0.0);
+        vx.assign(scalar.size(), 1.0);
+        vy.assign(scalar.size(), 0.25);
+    }
+
+    std::size_t index(int x, int y) const {
+        return static_cast<std::size_t>(y * width + x);
+    }
+};
 ```
 
 `world(field,x,y)` biến index lưới thành vị trí trong miền. Đừng dùng `(x,y)` của vòng lặp làm world trực tiếp, nếu không miền sẽ thành 0..32 và 0..24.
+
+{/* snippet include/field.hpp#world-nodes */}
+
+```cpp title="include/field.hpp — vị trí của một nút"
+inline Vec2 world(const Field& field, int x, int y) {
+    // Nút lưới gồm cả hai đầu miền; y tăng từ đáy lên trên.
+    return {-2 + x * field.dx, -1.5 + y * field.dy};
+}
+```
 
 ### Bước 3 — Vẽ thân và hai cạnh đầu mũi tên
 
 `drawArrow` tính độ lớn bằng `hypot`. Nếu gần 0, nó vẽ chấm thay vì chia cho 0. Với vector khác 0, ta lấy hướng đơn vị rồi tìm đầu mũi tên:
 
+{/* snippet include/view.hpp#arrow */}
+
 ```cpp title="include/view.hpp — tính đầu mũi tên"
-const double length = std::min(0.16, 0.09 * speed);
-const Vec2 direction{v.x / speed, v.y / speed};
-const Vec2 tip{p.x + length * direction.x, p.y + length * direction.y};
+inline bool drawArrow(SDL_Renderer* renderer, Vec2 p, Vec2 v) {
+    const double speed = std::hypot(v.x, v.y);
+    if (!std::isfinite(speed)) {
+        return false;
+    }
+    if (speed < 1e-12) {
+        const Vec2 screen = toScreen(p);
+        return SDL_RenderPoint(renderer, static_cast<float>(screen.x), static_cast<float>(screen.y));
+    }
+    // Giới hạn chỉ tác động nét vẽ. Không chuẩn hóa hoặc clamp vận tốc lưu trong field.
+    const double length = std::min(0.16, 0.09 * speed);
+    const Vec2 direction{v.x / speed, v.y / speed};
+    const Vec2 tip{p.x + length * direction.x, p.y + length * direction.y};
+    const double head = std::min(0.035, length * 0.35);
+    const Vec2 left{tip.x - head * direction.x - head * 0.5 * direction.y, tip.y - head * direction.y + head * 0.5 * direction.x};
+    const Vec2 right{tip.x - head * direction.x + head * 0.5 * direction.y, tip.y - head * direction.y - head * 0.5 * direction.x};
+    return line(renderer, p, tip) && line(renderer, tip, left) && line(renderer, tip, right);
+}
 ```
 
 Hai nhánh đầu mũi tên lấy hướng lùi và hướng vuông góc. Hàm `line` đổi cả hai đầu sang screen rồi gọi SDL:
 
+{/* snippet include/view.hpp#line */}
+
 ```cpp title="include/view.hpp — vẽ một đoạn thẳng"
-const Vec2 start = toScreen(a);
-const Vec2 end = toScreen(b);
-return SDL_RenderLine(renderer, static_cast<float>(start.x), static_cast<float>(start.y), static_cast<float>(end.x), static_cast<float>(end.y));
+inline bool line(SDL_Renderer* renderer, Vec2 a, Vec2 b) {
+    const Vec2 start = toScreen(a);
+    const Vec2 end = toScreen(b);
+    return SDL_RenderLine(renderer, static_cast<float>(start.x), static_cast<float>(start.y), static_cast<float>(end.x), static_cast<float>(end.y));
+}
 ```
 
 `toScreen` dùng `1.5-p.y` cho tọa độ screen y. Chỉ đảo ở đây; vy trong Field vẫn dương khi vector hướng lên.
 
+{/* snippet include/view.hpp#to-screen */}
+
+```cpp title="include/view.hpp — đổi world sang vị trí vẽ"
+inline Vec2 toScreen(Vec2 p) {
+    return {plotLeft + (p.x + 2) * plotScale, plotTop + (1.5 - p.y) * plotScale};
+}
+```
+
+`plotLeft=28`, `plotTop=108`, `plotScale=208` là bố cục được cung cấp sẵn: vùng world rộng 4 và cao 3 được vẽ thành 832×624 logical pixel, chừa bên phải cho inspector. Chúng không tham gia đạo hàm hay vận tốc. Các hàm trong `view.hpp` nằm trong `namespace wind`; vì thế main gọi chúng qua tiền tố `wind::`.
+
 ## Ghép các phần lại
 
-Main tạo Field một lần trước vòng lặp. Sau clear, gọi `drawField(renderer,field,layer)` rồi present. `drawField` duyệt một phần các nút để mũi tên không quá dày; toàn bộ dữ liệu vẫn có đủ 825 nút. Build target `project_48_checkpoint_1` rồi chạy trong `build/Debug/` trên Windows.
+`main.cpp` tạo `Workshop app` một lần trước vòng lặp. `Workshop` giữ `field` và lựa chọn hiển thị; `drawWorkshop` clear, gọi `drawField(renderer, app.field, app.layer)`, vẽ panel rồi main present. `drawField` duyệt một phần các nút để mũi tên không quá dày; toàn bộ dữ liệu vẫn có đủ 825 nút. Build target `project_48_checkpoint_1` rồi chạy trong `build/Debug/` trên Windows.
 
 Lỗi SDL được chuyển thành `failed=true`, sau đó dọn renderer và window rồi trả `EXIT_FAILURE`. Đóng cửa sổ bình thường trả `EXIT_SUCCESS`.
 

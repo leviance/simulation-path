@@ -1,31 +1,43 @@
 #pragma once
 #include "field.hpp"
+#include <array>
 #include <cstdint>
 
 namespace wind {
 #if LAB_CHECKPOINT >= 7
 inline constexpr double dt = 1.0 / 60.0;
 
+// [snippet bilinear]
+// [snippet bilinear-component]
+inline double bilinear(double bottomLeft, double bottomRight, double topLeft, double topRight, double tx, double ty) {
+    const double bottom = (1 - tx) * bottomLeft + tx * bottomRight;
+    const double top = (1 - tx) * topLeft + tx * topRight;
+    return (1 - ty) * bottom + ty * top;
+}
+
+// [/snippet bilinear-component]
+
 inline bool sampleVelocity(const Field& field, Vec2 p, Vec2& result) {
     if (!inside(p)) {
         return false;
     }
+    // [snippet bilinear-cell]
     const double gx = (p.x + 2) / field.dx;
     const double gy = (p.y + 1.5) / field.dy;
     const int x = std::min(field.width - 2, static_cast<int>(std::floor(gx)));
     const int y = std::min(field.height - 2, static_cast<int>(std::floor(gy)));
     const double tx = gx - x;
     const double ty = gy - y;
+    // [/snippet bilinear-cell]
     const auto i = field.index(x, y);
-    const auto blend = [&](const std::vector<double>& values) {
-        const double bottom = (1 - tx) * values[i] + tx * values[i + 1];
-        const double top = (1 - tx) * values[i + field.width] + tx * values[i + field.width + 1];
-        return (1 - ty) * bottom + ty * top;
-    };
-    result = {blend(field.vx), blend(field.vy)};
-    return true;
+    result.x = bilinear(field.vx[i], field.vx[i + 1], field.vx[i + field.width], field.vx[i + field.width + 1], tx, ty);
+    result.y = bilinear(field.vy[i], field.vy[i + 1], field.vy[i + field.width], field.vy[i + field.width + 1], tx, ty);
+    return std::isfinite(result.x) && std::isfinite(result.y);
 }
 
+// [/snippet bilinear]
+
+// [snippet midpoint]
 inline bool midpointStep(const Field& field, Vec2 p, double step, Vec2& result) {
     if (!std::isfinite(step) || step <= 0 || step > 0.05) {
         return false;
@@ -43,9 +55,15 @@ inline bool midpointStep(const Field& field, Vec2 p, double step, Vec2& result) 
     return inside(result);
 }
 
+// [/snippet midpoint]
+
 struct Particle {
     Vec2 position;
     double age = 0;
+    // Ring buffer: chỉ giữ 24 vị trí, không nối đường qua lần gieo lại.
+    std::array<Vec2, 24> trail{};
+    int trailHead = 0;
+    int trailSize = 0;
 };
 
 inline Vec2 seedParticle(int index) {
@@ -60,6 +78,7 @@ inline std::vector<Particle> makeParticles() {
     return particles;
 }
 
+// [snippet advance-tracers]
 inline void advanceParticles(const Field& field, std::vector<Particle>& particles) {
     for (std::size_t i = 0; i < particles.size(); ++i) {
         auto& particle = particles[i];
@@ -70,11 +89,18 @@ inline void advanceParticles(const Field& field, std::vector<Particle>& particle
         if (!accepted || particle.age >= 8) {
             particle.position = seedParticle(static_cast<int>(i));
             particle.age = 0;
+            particle.trailHead = 0;
+            particle.trailSize = 0;
         } else {
+            particle.trail[particle.trailHead] = particle.position;
+            particle.trailHead = (particle.trailHead + 1) % 24;
+            particle.trailSize = std::min(24, particle.trailSize + 1);
             particle.position = next;
         }
     }
 }
+
+// [/snippet advance-tracers]
 
 struct StepPlan {
     int steps = 0;
@@ -82,6 +108,7 @@ struct StepPlan {
     double dropped = 0;
 };
 
+// [snippet clock]
 inline StepPlan planSteps(double accumulator, double elapsed) {
     if (!std::isfinite(accumulator) || accumulator < 0 || accumulator >= dt) {
         accumulator = 0;
@@ -98,5 +125,7 @@ inline StepPlan planSteps(double accumulator, double elapsed) {
     plan.dropped = elapsed - accepted + (due - plan.steps) * dt;
     return plan;
 }
+
+// [/snippet clock]
 #endif
 } // namespace wind

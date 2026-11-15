@@ -2,7 +2,7 @@ import type { PublishedProjectEditorial } from "../../types";
 const project = {
   summary:
     "Tự dựng một bản đồ vector 2D, đọc gradient từ trường scalar và đo divergence/curl ngay trên lưới. Bạn sẽ đối chiếu với trường có đáp án biết trước, thêm hạt đánh dấu và đặt một xoáy cục bộ bằng chuột.",
-  duration: "12–15 giờ",
+  duration: "Khoảng 15 giờ: 4 giờ đọc, 8 giờ tự viết và 3 giờ thử nghiệm; chưa tính cài đặt/build",
   prerequisites: [
     "Project 01–05 — window, renderer, input, primitive 2D và đổi hệ tọa độ",
     "Project 06–09 — vector 2D, độ dài, phép xoay và hệ tọa độ world",
@@ -22,19 +22,22 @@ const project = {
     mission:
       "Tự xây dựng một chương trình C++/SDL3 hiển thị trường vector 2D. Người dùng chọn gió đều, trường tỏa/hút, xoay hoặc trượt, đọc vector tại một điểm và bật lớp màu cho gradient, divergence, curl.",
     outcome:
-      "Bản đồ trong miền [−2,2] × [−1,5;1,5], lưới 33 × 25 hoặc 65 × 49 nút, inspector, hai trường scalar, 128 hạt đánh dấu và một xoáy Gaussian đặt bằng chuột.",
+      "Một cửa sổ C++ có bản đồ 65×49 nút, inspector và legend đọc ngay trên màn hình. Có hai trường scalar, lớp gradient riêng, 128 tracer kèm vệt đường đi và một xoáy Gaussian đặt bằng chuột. Lưới 33×25 chỉ dùng học; có thể tinh tới 129×97 trên cùng miền.",
     requirements: [
-      "Dùng nút lưới gồm cả hai đầu miền; dx=4/(width−1), dy=3/(height−1). Lưu scalar, vx, vy bằng double.",
-      "Vẽ mũi tên bằng SDL_RenderLine; vector gần 0 được vẽ thành chấm, không chia cho độ dài 0.",
-      "World x sang phải, y lên trên. Chỉ đảo dấu y ở bước đổi sang screen và khi đổi input ngược lại.",
-      "Gradient nhận scalar và trả vector; divergence nhận vector và trả scalar; curl 2D hiển thị thành phần z.",
-      "Sai phân chia đúng dx/dy; mép dùng ba điểm trong miền, không wrap hoặc lặp giá trị tùy tiện.",
+      "Mở ngay bản đồ 65×49 nút trong miền [−2,2]×[−1,5;1,5], có mũi tên, trục và inspector đọc được cả các nút mép.",
+      "Chọn gió đều, tỏa, hút, quay, trượt; xem scalar Bowl/Hill và các lớp Gradient, Divergence, Curl với legend rõ ràng.",
+      "World x sang phải, y lên trên; resize không đổi miền, hướng gió hoặc vị trí world của dữ liệu.",
+      "Chọn lớp Gradient chỉ đổi hình đang xem, không ghi đè vận tốc. Chỉ preset vận tốc Gradient mới gán vx/vy từ scalar; tracer luôn đọc vx/vy.",
       "Màu cố định −2 đến 2, inspector vẫn đọc số thật khi màu bão hòa. Giới hạn chiều dài mũi tên không sửa vận tốc.",
-      "Hạt dùng nội suy bilinear và midpoint RK2 với dt=1/60; pause, reset, từng bước và tối đa tám bước mỗi frame.",
-      "Kéo tâm xoáy phải dựng lại trường nền rồi cộng xoáy một lần. Đổi trường/lưới dừng và gieo lại hạt.",
+      "Thả 128 tracer đi theo dữ liệu gió đang xem; có vệt ngắn, bật/tắt, pause, tiến một bước và reset. Điều khiển vẫn dùng được khi Pause.",
+      "Chuột hoặc mũi tên đọc nút; chế độ sửa cho kéo tâm xoáy, Enter đặt bằng bàn phím. Đặt lại cùng tâm phải cho cùng trường, không mạnh thêm theo số event.",
+      "Đổi overlay không reset hạt; đổi trường/lưới bắt đầu thí nghiệm mới. Có xem sạch và nút kiểm chứng độc lập với thí nghiệm đang xem.",
       "Có kiểm chứng hữu hạn trên dữ liệu riêng, source đầy đủ sau mỗi bài và ZIP chạy độc lập.",
     ],
     constraints: [
+      "Tự viết field storage và các toán tử số; không dùng engine để thay phần cốt lõi. Lời giải dùng double, node-centered và dx=4/(width−1), dy=3/(height−1).",
+      "Bản hướng dẫn chọn sai phân trung tâm trong miền, ba điểm một phía ở mép; bilinear và midpoint RK2 cho tracer. Các lựa chọn này được giải thích trong bài, không phải dữ liệu đạo hàm gán sẵn cho preset.",
+      "Lời giải dùng dt=1/60, tối đa tám bước/frame và vệt cố định 24 vị trí. Các giới hạn này không được làm biến dạng dữ liệu vận tốc để che lỗi.",
       "Đây là công cụ quan sát trường được cho trước; chưa giải phương trình Navier–Stokes hoặc pressure projection.",
       "Gradient chỉ trở thành velocity khi chọn preset đó; phi không tự điều khiển mọi trường mẫu.",
       "Các hạt là tracer: ra khỏi miền hoặc quá tám giây được gieo lại. Không suy ra bảo toàn khối lượng từ mật độ chấm.",
@@ -50,6 +53,7 @@ const project = {
       "Bilinear khớp vector tuyến tính tại vị trí giữa nút và nhận đúng hai đầu miền; điểm ngoài miền bị từ chối.",
       "Hạt trong gió đều đi được v*dt sau một bước; lịch 15/30/120 FPS tạo cùng 120 bước trong hai giây khi không bỏ thời gian.",
       "Starter, chín checkpoint và final build được; tests trả mã lỗi đúng trong Debug và Release.",
+      "Bản cuối mở ngay ở 65×49 = 3.185 nút thật; lấy thưa còn 221 glyph không được làm giảm dữ liệu của phép đo hoặc nội suy.",
     ],
   },
   lessons: [

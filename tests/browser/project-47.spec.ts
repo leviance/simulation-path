@@ -186,7 +186,7 @@ test("heat nine lesson routes, dark navigation and scoped progress migration mat
         JSON.stringify({
           version: 2,
           completedLessonIds: ["p46-l01", "p47-l07", "p48-l01"],
-          projectContentVersions: { p46: 2 },
+          projectContentVersions: { p46: 2, p48: 2 },
         }),
       );
   }, key);

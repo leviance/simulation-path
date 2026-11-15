@@ -8,6 +8,10 @@ Mũi tên cho biết vector ở các nút. Một hạt nằm giữa bốn nút t
 
 Hạt chỉ đọc trường đã tạo. Trong project này, nó không tác động ngược lên gió, không mang khối lượng và không va chạm với hạt khác.
 
+Từ checkpoint này, lưới mặc định tăng lên 65×49. Tất cả 3.185 mẫu vẫn tham gia nội suy và phép đo; chỉ hình mũi tên được lấy thưa còn 17×13 = 221 glyph. Đừng giảm lưới dữ liệu chỉ để hình bớt rối.
+
+Trong `startingField()` của `workshop.hpp`, đổi giá trị trả về thành `Field(65, 49)`; constructor của `Workshop` vẫn gọi `populate` như trước. Không cần đổi miền world hoặc các hàm đạo hàm.
+
 ## Hiểu ý tưởng trước khi viết code
 
 Giả sử vị trí nằm trong một ô có bốn nút góc. Với tx/ty là phần vị trí trong ô, từ 0 đến 1, nội suy theo x ở hàng dưới/trên rồi nội suy theo y:
@@ -32,6 +36,8 @@ N tiến đúng một bước, Space chạy/dừng. Đổi FPS hiển thị đ�
 
 `sampleVelocity` từ chối điểm ngoài miền hoặc không hữu hạn trước khi tính index. Chuyển world thành chỉ số liên tục rồi chọn góc dưới trái:
 
+{/* snippet include/particles.hpp#bilinear-cell */}
+
 ```cpp title="include/particles.hpp — chọn ô nội suy"
 const double gx = (p.x + 2) / field.dx;
 const double gy = (p.y + 1.5) / field.dy;
@@ -41,51 +47,87 @@ const double tx = gx - x;
 const double ty = gy - y;
 ```
 
-Tại cạnh phải, gx có thể bằng width−1. Ta chọn ô cuối với x=width−2 và tx=1; không truy cập một ô nằm ngoài mảng. Hàm blend áp dụng cùng trọng số cho vx và vy:
+Tại cạnh phải, gx có thể bằng width−1. Ta chọn ô cuối với x=width−2 và tx=1; không truy cập một ô nằm ngoài mảng. Hàm `bilinear` dưới đây tính một thành phần. `sampleVelocity` gọi nó hai lần với cùng tx/ty, một lần cho vx và một lần cho vy:
+
+{/* snippet include/particles.hpp#bilinear-component */}
 
 ```cpp title="include/particles.hpp — blend một thành phần vector"
-const double bottom = (1 - tx) * values[i] + tx * values[i + 1];
-const double top = (1 - tx) * values[i + field.width] + tx * values[i + field.width + 1];
-return (1 - ty) * bottom + ty * top;
+inline double bilinear(double bottomLeft, double bottomRight, double topLeft, double topRight, double tx, double ty) {
+    const double bottom = (1 - tx) * bottomLeft + tx * bottomRight;
+    const double top = (1 - tx) * topLeft + tx * topRight;
+    return (1 - ty) * bottom + ty * top;
+}
 ```
 
 ### Bước 2 — Lấy vận tốc tại điểm giữa
 
 `midpointStep` kiểm step dương, hữu hạn và không vượt 0.05. Sau vận tốc first tại vị trí đầu, nó tính điểm giữa:
 
+{/* snippet include/particles.hpp#midpoint */}
+
 ```cpp title="include/particles.hpp — bước midpoint RK2"
-const Vec2 middle{p.x + 0.5 * step * first.x, p.y + 0.5 * step * first.y};
-Vec2 second;
-if (!sampleVelocity(field, middle, second)) {
-    return false;
+inline bool midpointStep(const Field& field, Vec2 p, double step, Vec2& result) {
+    if (!std::isfinite(step) || step <= 0 || step > 0.05) {
+        return false;
+    }
+    Vec2 first;
+    if (!sampleVelocity(field, p, first)) {
+        return false;
+    }
+    const Vec2 middle{p.x + 0.5 * step * first.x, p.y + 0.5 * step * first.y};
+    Vec2 second;
+    if (!sampleVelocity(field, middle, second)) {
+        return false;
+    }
+    result = {p.x + step * second.x, p.y + step * second.y};
+    return inside(result);
 }
-result = {p.x + step * second.x, p.y + step * second.y};
-return inside(result);
 ```
 
 Vị trí cuối phải được cộng từ p ban đầu, không từ middle. Nếu điểm giữa hoặc cuối ra khỏi miền, bước bị từ chối và `advanceParticles` gieo lại hạt bằng seed xác định từ index. Không clamp hạt vào mép rồi để nó bám tường.
 
 ### Bước 3 — Đưa fixed timestep vào vòng lặp
 
-Main giữ accumulator, tick và thời gian bỏ qua. `planSteps` nhận tối đa 0.25 giây/frame, thực hiện tối đa tám bước; số bước dư được bỏ và báo dropped. Vòng chạy chỉ gọi đúng số bước đã được duyệt:
+`Workshop` giữ accumulator, tick và thời gian bỏ qua; main chỉ gọi `app.advance(elapsed)` sau input. `planSteps` nhận tối đa 0.25 giây/frame, thực hiện tối đa tám bước; số bước dư được bỏ và báo dropped. Vòng chạy chỉ gọi đúng số bước đã được duyệt:
 
-```cpp title="src/main.cpp — tiến các tick đã được lên lịch"
-const auto plan = wind::planSteps(accumulator, elapsed);
-accumulator = plan.remainder;
-dropped += plan.dropped;
-for (int step = 0; step < plan.steps; ++step) {
-    wind::advanceParticles(field, particles);
+{/* snippet include/workshop.hpp#advance-workshop */}
+
+```cpp title="include/workshop.hpp — tiến các tick đã được lên lịch"
+void step() {
+    if (!tracers) {
+        return;
+    }
+    advanceParticles(field, particles);
+    visitedLastStep = particles.size();
     ++tick;
+}
+
+void advance(double elapsed) {
+    if (paused || !tracers) {
+        return;
+    }
+    const auto plan = planSteps(accumulator, elapsed);
+    accumulator = plan.remainder;
+    dropped += plan.dropped;
+    for (int i = 0; i < plan.steps; ++i) {
+        step();
+    }
 }
 ```
 
 N dừng và gọi một bước; Space chạy/dừng và xóa accumulator. Mất focus cũng dừng. Hạt không chạy bù toàn bộ khoảng thời gian ứng dụng bị treo hoặc nằm nền.
 
+T bật/tắt tracer và dừng thời gian của chúng; bật lại không tự chạy. Mỗi tracer giữ ring buffer 24 vị trí trước đó để vẽ vệt khoảng 0,4 giây mô hình. Khi gieo lại, xóa vệt để không nối ngang từ mép về seed. Vệt là lịch sử đã tính, không phải một streamline được suy ra trước. Trong C++, F1 bật xem sạch; trên Canvas, dùng ô “Xem sạch”. Cả hai chỉ ẩn probe/debug, không che điều khiển.
+
+Bảng số tách lượng tracer được cấp phát, số đã xử lý ở bước mô hình gần nhất và số đang vẽ. Khi Pause, bước gần nhất vẫn có thể đã xử lý 128 hạt; điều đó không có nghĩa mỗi frame đang tiếp tục cập nhật chúng. Reset đưa số đếm bước gần nhất về 0.
+
 ## Ghép các phần lại
 
-Build `project_48_checkpoint_7`. Main xử lý input, thay trường nếu cần, tiến hạt, vẽ bản đồ rồi vẽ marker vàng. Field không thay đổi trong `advanceParticles`. Canvas dùng cùng công thức, seed và thứ tự cập nhật.
+Build `project_48_checkpoint_7`. Main gọi `handleInput`, `app.advance` rồi `drawWorkshop`: xử lý input, tiến hạt, vẽ bản đồ và tracer. Field không thay đổi trong `advanceParticles`. Canvas dùng cùng công thức, seed và thứ tự cập nhật.
 
 Trong Uniform, một hạt chưa bị gieo lại đi đúng `(1/60,0.25/60)` sau một bước. Trong Rotation, so quỹ đạo một hạt gần gốc với `p(t)=(r*cos(t),r*sin(t))`. Chỉ dùng hạt chưa ra miền/chưa quá tuổi cho phép so này.
+
+Đổi L giữa Scalar, Gradient, Divergence và Curl trong khi hạt chạy: vị trí và tick phải tiếp tục, không gieo lại. Dữ liệu vx/vy không phụ thuộc lớp đang vẽ. Nếu đổi preset hoặc đặt lại tâm xoáy thì field đổi thật; chương trình chủ động dừng, gieo lại hạt và đưa tick về 0 để bắt đầu thí nghiệm mới.
 
 ## Thử làm sai để hiểu đúng
 
@@ -98,4 +140,4 @@ Bilinear nhận hai góc miền và cho đúng vector affine tại điểm khôn
 
 ## Bài tập mở rộng
 
-Thêm một đường trail ngắn cho mỗi hạt, xóa trail khi gieo lại để không nối từ mép sang seed. So lỗi Euler và midpoint sau một giây Rotation bằng đáp án giải tích. Tiếp theo, [đặt một xoáy cục bộ bằng chuột](/projects/wind-map/08-dat-xoay-bang-chuot).
+Vệt đã có bộ đệm vòng 24 vị trí và được xóa khi gieo lại. Hãy thử 12 và 48 vị trí, giữ giới hạn cố định rồi so độ dài vệt với chi phí vẽ. So lỗi Euler và midpoint sau một giây Rotation bằng đáp án giải tích. Tiếp theo, [đặt một xoáy cục bộ bằng chuột](/projects/wind-map/08-dat-xoay-bang-chuot).

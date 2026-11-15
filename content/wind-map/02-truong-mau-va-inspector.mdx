@@ -30,6 +30,8 @@ Chọn trường, click một nút hoặc dùng phím mũi tên, rồi đọc ve
 
 `populate` duyệt các nút, lấy vị trí world rồi tính vector. Với Source và Sink:
 
+{/* snippet include/scenes.hpp#source-sink */}
+
 ```cpp title="include/scenes.hpp — hai trường tỏa và hút"
 if (scene.preset == Preset::Source) {
     v = p;
@@ -40,6 +42,8 @@ if (scene.preset == Preset::Sink) {
 ```
 
 Rotation dùng phép xoay 90° đã học trong Project 06–09. Shear chỉ phụ thuộc y:
+
+{/* snippet include/scenes.hpp#rotation-shear */}
 
 ```cpp title="include/scenes.hpp — trường xoay và trượt"
 if (scene.preset == Preset::Rotation) {
@@ -56,27 +60,39 @@ Ghi v.x/v.y vào hai mảng tại cùng index. Mỗi lần dựng trường ph�
 
 Scene chứa preset, còn Field là các mẫu đã tính. Khi bấm P, tăng preset và dựng lại trường. Trong checkpoint 02, chỉ có năm trường đầu; preset Gradient sẽ được mở ở bài 3.
 
-```cpp title="src/main.cpp — chọn preset kế tiếp"
-scene.preset = static_cast<wind::Preset>((static_cast<int>(scene.preset) + 1) % count);
-changed = true;
+{/* snippet include/input.hpp#next-preset */}
+
+```cpp title="include/input.hpp — chọn preset kế tiếp"
+int count = 5;
+app.scene.preset = static_cast<Preset>((static_cast<int>(app.scene.preset) + 1) % count);
+app.rebuild();
 ```
 
-Main xử lý `changed` trước khi render bằng lời gọi `populate`. Trường ở bài này không phụ thuộc thời gian, nên không cần tính lại mỗi frame.
+`act` gọi `app.rebuild()` ngay sau khi đổi preset; `rebuild` gọi `populate(app.field, app.scene)`. Trường ở bài này không phụ thuộc thời gian, nên không cần tính lại mỗi frame.
+
+`Preset` là enum gồm năm lựa chọn có chỉ số 0–4. Phép đổi sang `int` cho phép tăng chỉ số; `% count` đưa 5 về 0; phép đổi cuối trả lại kiểu `Preset`. Không có vector nào được tính trong dòng đổi lựa chọn này — việc đó vẫn thuộc `populate`.
 
 ### Bước 3 — Đổi input về world rồi chọn nút
 
 `mouseWorld` gọi `SDL_RenderCoordinatesFromWindow` để bỏ ảnh hưởng resize/letterbox, sau đó đảo screen y về world. Chỉ nhận điểm trong miền; sai số làm tròn rất nhỏ sát cạnh được hấp thụ, điểm ngoài bản đồ thực sự bị từ chối. Chọn nút gần nhất:
 
-```cpp title="src/main.cpp — chọn nút từ tọa độ world"
-cursorX = std::clamp(static_cast<int>(std::lround((p.x + 2) / field.dx)), 0, field.width - 1);
-cursorY = std::clamp(static_cast<int>(std::lround((p.y + 1.5) / field.dy)), 0, field.height - 1);
+{/* snippet include/input.hpp#probe-input */}
+
+```cpp title="include/input.hpp — chọn nút từ tọa độ world"
+inline void selectPoint(Workshop& app, Vec2 p, bool place) {
+    app.cursorX = std::clamp(static_cast<int>(std::lround((p.x + 2) / app.field.dx)), 0, app.field.width - 1);
+    app.cursorY = std::clamp(static_cast<int>(std::lround((p.y + 1.5) / app.field.dy)), 0, app.field.height - 1);
+    static_cast<void>(place);
+}
 ```
 
-Clamp ở đây bảo vệ index sau phép làm tròn, không biến click ngoài letterbox thành click trên mép. Phím Up tăng cursorY vì y world hướng lên. Phím I in world và vector ra console, không nhét mọi số vào window title.
+Clamp ở đây bảo vệ index sau phép làm tròn, không biến click ngoài letterbox thành click trên mép. Phím Up tăng cursorY vì y world hướng lên. Panel bên phải đọc world và vector từ `app.field` tại `app.cursorX/Y`; không cần mở terminal để xem số.
+
+Tham số `place` được bộ khung giữ cho thao tác đặt xoáy ở bài 8. Bài này chưa dùng nó; `static_cast<void>(place)` chỉ báo với compiler rằng ta chủ động bỏ qua tham số, không làm thay đổi dữ liệu.
 
 ## Ghép các phần lại
 
-Tạo Scene trước vòng lặp, `populate` một lần lúc đầu và mỗi khi P/R làm thay đổi Scene. Đọc input → cập nhật lựa chọn → dựng trường nếu cần → clear/draw/present. Build `project_48_checkpoint_2`; dùng P, các phím mũi tên và I để đối chiếu Canvas.
+`Workshop` giữ `scene` và `field`; constructor tạo trường lần đầu, P gọi `rebuild`, R tạo lại `Workshop`. Đọc input → cập nhật lựa chọn → dựng trường nếu cần → clear/draw/present. Build `project_48_checkpoint_2`; dùng P và các phím mũi tên, đọc panel bên phải rồi đối chiếu Canvas.
 
 Click chỉ chọn nút, chưa làm thay đổi gió. Cặp số đang đọc là mẫu tại nút gần nhất, chưa phải vận tốc được nội suy ở chính xác vị trí chuột.
 
