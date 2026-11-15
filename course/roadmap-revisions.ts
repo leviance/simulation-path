@@ -253,7 +253,6 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
     previousTitle: "Bể nước bằng hạt: SPH 2D có thể đổ và va vào thành",
     replacement: {
       slug: "sph-water",
-      acceptanceNote: "Bản 5.000 hạt đang được nghiệm thu; kiểm solver, đồ họa và tương tác riêng.",
     },
     summary: "Xây bể nước 5.000 hạt SPH thật, đổ nước, tạo sóng và kéo vật cản.",
     outcome:
