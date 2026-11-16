@@ -22,7 +22,18 @@ class Engine {
     std::uint64_t steps = 0;
     double time = 0, lastDt = 0;
     StepStats lastStats;
+    Diagnostics lastDiagnostics;
+    double enqueueMilliseconds = 0;
+    double commitMilliseconds = 0;
     GLuint statsRoot = 0;
+
+    void startSubmitTimer() {
+        submitted_ = std::chrono::steady_clock::now();
+    }
+
+    void finishSubmitTimer() {
+        enqueueMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - submitted_).count();
+    }
 
     void initialize(lab::GlApi& gl, const std::string& directory) {
         programs.load(gl, directory);
@@ -52,13 +63,19 @@ class Engine {
         ready = false;
         initializing = true;
         lastStats = StepStats{};
+        lastDiagnostics = Diagnostics{};
+        enqueueMilliseconds = 0;
+        commitMilliseconds = 0;
         queue.begin(gl);
+        // [snippet initialize-pass]
         use(gl, programs.initialize, plan, settings, grid);
         bind(gl, 0, storage.positions[0]);
         bind(gl, 1, storage.velocities[0]);
         bind(gl, 2, storage.density);
         bind(gl, 3, storage.acceleration);
         dispatch(gl, plan.count);
+        // [/snippet initialize-pass]
+        queue.mark(gl, "Initialize");
         queue.end(gl);
     }
 
@@ -107,11 +124,19 @@ class Engine {
             throw std::runtime_error("Nonfinite state or >4096 candidates: tick not committed");
         }
         lastDt = chooseDt(storage.plan, lastStats.x, lastStats.y, settings.soundSpeed);
+        gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, storage.diagnostics);
+        gl.GetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(Diagnostics), &lastDiagnostics);
+        if (lastDiagnostics.updated() != storage.plan.count || lastDiagnostics.inspected() != storage.plan.count || lastDiagnostics.invalid() > 0 || lastDiagnostics.leaked() > 0) {
+            throw std::runtime_error("GPU diagnostics failed: count/nonfinite/leakage, tick not committed");
+        }
 #endif
 #if LAB_CHECKPOINT >= 7
+        // [snippet bank-commit]
         current = 1 - current;
         ++steps;
         time += lastDt;
+        // [/snippet bank-commit]
+        commitMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - submitted_).count();
 #endif
         return true;
     }
@@ -121,16 +146,22 @@ class Engine {
             return false;
         }
         validateSettings(settings);
+        startSubmitTimer();
         if (!grid && storage.plan.count > 512) {
             throw std::runtime_error("All-pairs capped at 512");
         }
         queue.begin(gl);
+#if LAB_CHECKPOINT >= 9
+        beginDiagnostics(gl, programs, storage);
+        queue.mark(gl, "Clear diagnostics");
+#endif
 #if LAB_CHECKPOINT >= 8
         if (grid) {
-            buildGrid(gl, programs, storage, current);
+            buildGrid(gl, programs, storage, current, &queue);
         }
 #endif
 #if LAB_CHECKPOINT >= 5
+        // [snippet density-pass]
         use(gl, programs.density, storage.plan, settings, grid);
         bind(gl, 0, storage.positions[current]);
         bind(gl, 1, storage.density);
@@ -138,8 +169,11 @@ class Engine {
         bind(gl, 3, storage.offsets);
         bind(gl, 4, storage.indices);
         dispatch(gl, storage.plan.count);
+        // [/snippet density-pass]
+        queue.mark(gl, "Density / EOS");
 #endif
 #if LAB_CHECKPOINT >= 6
+        // [snippet force-pass]
         use(gl, programs.force, storage.plan, settings, grid);
         bind(gl, 0, storage.positions[current]);
         bind(gl, 1, storage.velocities[current]);
@@ -149,11 +183,15 @@ class Engine {
         bind(gl, 5, storage.offsets);
         bind(gl, 6, storage.indices);
         dispatch(gl, storage.plan.count);
+        queue.mark(gl, "Forces");
+        // [/snippet force-pass]
 #endif
 #if LAB_CHECKPOINT >= 9
         statsRoot = reduceStats(gl, programs, storage, current, settings);
+        queue.mark(gl, "Reduction / dt");
 #endif
 #if LAB_CHECKPOINT >= 7
+        // [snippet integrate-pass]
         use(gl, programs.integrate, storage.plan, settings, grid);
         bind(gl, 0, storage.positions[current]);
         bind(gl, 1, storage.velocities[current]);
@@ -161,9 +199,19 @@ class Engine {
         bind(gl, 3, storage.positions[1 - current]);
         bind(gl, 4, storage.velocities[1 - current]);
         bind(gl, 5, statsRoot);
+#if LAB_CHECKPOINT >= 9
+        bind(gl, 6, storage.diagnostics);
+#endif
         dispatch(gl, storage.plan.count);
+        queue.mark(gl, "Integration");
+        // [/snippet integrate-pass]
+#endif
+#if LAB_CHECKPOINT >= 9
+        finishDiagnostics(gl, programs, storage, 1 - current);
+        queue.mark(gl, "Diagnostics");
 #endif
         queue.end(gl);
+        finishSubmitTimer();
         return true;
     }
 
@@ -172,5 +220,8 @@ class Engine {
         storage.destroy(gl);
         programs.destroy(gl);
     }
+
+    private:
+    std::chrono::steady_clock::time_point submitted_{};
 };
 } // namespace water3

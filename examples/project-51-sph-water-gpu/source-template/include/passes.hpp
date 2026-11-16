@@ -1,4 +1,5 @@
 #pragma once
+#include "queue.hpp"
 #include "storage.hpp"
 
 namespace water3 {
@@ -32,13 +33,17 @@ inline void use(lab::GlApi& gl, GLuint program, const Plan& plan, const Settings
     }
 }
 
+// [snippet dispatch-barrier]
 inline void dispatch(lab::GlApi& gl, std::uint32_t count) {
     gl.DispatchCompute(ceilDivide(count, 256), 1, 1);
     gl.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
+// [/snippet dispatch-barrier]
+
 struct Programs {
     GLuint initialize = 0, density = 0, force = 0, integrate = 0, clear = 0, count = 0, scan = 0, add = 0, cursors = 0, scatter = 0, stats = 0, maximum = 0;
+    GLuint diagnostics = 0;
 
     void load(lab::GlApi& gl, const std::string& directory) {
         initialize = loadProgram(gl, directory, {{GL_COMPUTE_SHADER, "initialize.comp"}});
@@ -62,28 +67,34 @@ struct Programs {
 #if LAB_CHECKPOINT >= 9
         stats = loadProgram(gl, directory, {{GL_COMPUTE_SHADER, "stats.comp"}});
         maximum = loadProgram(gl, directory, {{GL_COMPUTE_SHADER, "max.comp"}});
+        diagnostics = loadProgram(gl, directory, {{GL_COMPUTE_SHADER, "diagnostics.comp"}});
 #endif
     }
 
     void destroy(lab::GlApi& gl) {
-        for (const auto program : {initialize, density, force, integrate, clear, count, scan, add, cursors, scatter, stats, maximum}) {
+        for (const auto program : {initialize, density, force, integrate, clear, count, scan, add, cursors, scatter, stats, maximum, diagnostics}) {
             gl.DeleteProgram(program);
         }
         *this = Programs{};
     }
 };
 #if LAB_CHECKPOINT >= 8
-inline void buildGrid(lab::GlApi& gl, const Programs& programs, Storage& storage, int current) {
+// [snippet build-grid]
+inline void buildGrid(lab::GlApi& gl, const Programs& programs, Storage& storage, int current, Queue* profiler = nullptr) {
     const auto& plan = storage.plan;
     Settings settings;
     use(gl, programs.clear, plan, settings, true);
     gl.Uniform1ui(requireUniform(gl, programs.clear, "uCount"), plan.cells);
     bind(gl, 0, storage.counts);
     dispatch(gl, plan.cells);
+    if (profiler)
+        profiler->mark(gl, "Grid clear");
     use(gl, programs.count, plan, settings, true);
     bind(gl, 0, storage.positions[current]);
     bind(gl, 1, storage.counts);
     dispatch(gl, plan.count);
+    if (profiler)
+        profiler->mark(gl, "Grid count");
     GLuint source = storage.counts;
     for (const auto& level : storage.scan) {
         gl.UseProgram(programs.scan);
@@ -104,6 +115,8 @@ inline void buildGrid(lab::GlApi& gl, const Programs& programs, Storage& storage
         dispatch(gl, level.level.input);
     }
     use(gl, programs.cursors, plan, settings, true);
+    if (profiler)
+        profiler->mark(gl, "Grid scan / add");
     gl.Uniform1ui(requireUniform(gl, programs.cursors, "uCount"), plan.cells);
     bind(gl, 0, storage.offsets);
     bind(gl, 1, storage.cursors);
@@ -113,9 +126,33 @@ inline void buildGrid(lab::GlApi& gl, const Programs& programs, Storage& storage
     bind(gl, 1, storage.cursors);
     bind(gl, 2, storage.indices);
     dispatch(gl, plan.count);
+    if (profiler)
+        profiler->mark(gl, "Grid scatter");
 }
+
+// [/snippet build-grid]
 #endif
 #if LAB_CHECKPOINT >= 9
+inline void beginDiagnostics(lab::GlApi& gl, const Programs& programs, const Storage& storage) {
+    use(gl, programs.diagnostics, storage.plan, {}, true);
+    gl.Uniform1ui(requireUniform(gl, programs.diagnostics, "uCount"), diagnosticWords);
+    gl.Uniform1ui(requireUniform(gl, programs.diagnostics, "uPhase"), 0);
+    bind(gl, 0, storage.positions[0]);
+    bind(gl, 1, storage.density);
+    bind(gl, 2, storage.diagnostics);
+    dispatch(gl, diagnosticWords);
+}
+
+inline void finishDiagnostics(lab::GlApi& gl, const Programs& programs, const Storage& storage, int next) {
+    use(gl, programs.diagnostics, storage.plan, {}, true);
+    gl.Uniform1ui(requireUniform(gl, programs.diagnostics, "uPhase"), 1);
+    bind(gl, 0, storage.positions[next]);
+    bind(gl, 1, storage.density);
+    bind(gl, 2, storage.diagnostics);
+    dispatch(gl, storage.plan.count);
+}
+
+// [snippet reduce-stats]
 inline GLuint reduceStats(lab::GlApi& gl, const Programs& programs, const Storage& storage, int current, const Settings& settings) {
     use(gl, programs.stats, storage.plan, settings, true);
     bind(gl, 0, storage.velocities[current]);
@@ -136,5 +173,7 @@ inline GLuint reduceStats(lab::GlApi& gl, const Programs& programs, const Storag
     }
     return storage.scratch[source];
 }
+
+// [/snippet reduce-stats]
 #endif
 } // namespace water3

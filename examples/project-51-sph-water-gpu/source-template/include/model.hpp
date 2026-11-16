@@ -18,6 +18,7 @@ struct Vec3 {
     double z = 0;
 };
 
+// [snippet gpu-packet]
 struct alignas(16) Float4 {
     float x = 0;
     float y = 0;
@@ -26,6 +27,8 @@ struct alignas(16) Float4 {
 };
 
 static_assert(sizeof(Float4) == 16 && alignof(Float4) == 16);
+
+// [/snippet gpu-packet]
 
 inline Vec3 xyz(Float4 p) {
     return {p.x, p.y, p.z};
@@ -87,10 +90,12 @@ inline Plan makePlan(std::uint32_t side = 8, std::uint32_t count = 0) {
     if (plan.count > side * side * side) {
         throw std::invalid_argument("Invalid particle count");
     }
+    // [snippet physical-plan]
     plan.spacing = 0.4 / side;
     plan.h = 1.3 * plan.spacing;
     plan.support = 2 * plan.h;
     plan.mass = restDensity * plan.spacing * plan.spacing * plan.spacing;
+    // [/snippet physical-plan]
     plan.cellsAxis = static_cast<std::uint32_t>(std::ceil(1 / plan.support));
     plan.cells = plan.cellsAxis * plan.cellsAxis * plan.cellsAxis;
     auto input = plan.cells;
@@ -104,14 +109,19 @@ inline Plan makePlan(std::uint32_t side = 8, std::uint32_t count = 0) {
         plan.levels.push_back({input, groups});
         input = groups;
     } while (input > 1);
-    plan.residentBytes = 100ULL * plan.count + 12ULL * plan.cells + scanBytes + 32ULL * ceilDivide(plan.count, 256);
+    // [snippet memory-plan]
+    plan.residentBytes = 100ULL * plan.count + 12ULL * plan.cells + scanBytes + 32ULL * ceilDivide(plan.count, 256) + 288ULL;
     plan.largestBlock = std::max(16ULL * plan.count, 4ULL * plan.cells);
+    // [/snippet memory-plan]
     return plan;
 }
 #if LAB_CHECKPOINT >= 1
+// [snippet initial-position]
 inline Vec3 initialPosition(const Plan& plan, std::uint32_t i) {
-    return {0.08 + (i % plan.side + 0.5) * plan.spacing, 0.12 + ((i / plan.side) % plan.side + 0.5) * plan.spacing, 0.3 + (i / (plan.side * plan.side) + 0.5) * plan.spacing};
+    return {0.08 + (i % plan.side + 0.5) * plan.spacing, ((i / plan.side) % plan.side + 0.5) * plan.spacing, 0.3 + (i / (plan.side * plan.side) + 0.5) * plan.spacing};
 }
+
+// [/snippet initial-position]
 #endif
 
 struct Settings {
@@ -126,6 +136,7 @@ inline void validateSettings(const Settings& settings) {
     }
 }
 
+// [snippet choose-dt]
 inline double chooseDt(const Plan& plan, double speed, double force, double c) {
     if (!std::isfinite(speed) || !std::isfinite(force) || speed < 0 || force < 0 || !std::isfinite(c) || c < 8 || c > 20) {
         throw std::invalid_argument("Nonfinite timestep input");
@@ -138,4 +149,6 @@ inline double chooseDt(const Plan& plan, double speed, double force, double c) {
     }
     return dt;
 }
+
+// [/snippet choose-dt]
 } // namespace water3

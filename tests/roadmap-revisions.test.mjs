@@ -103,6 +103,16 @@ test("published replacements keep their lessons visible with or without an accep
   assert.equal(replacement.acceptanceNote, undefined);
   assert.ok(!("previous" in replacement));
 
+  const water = roadmap.find(({ id }) => id === "51");
+  assert.equal(roadmapRevisions["51"].replacement.slug, "sph-water-gpu");
+  assert.equal(water.status, "published");
+  assert.equal(water.slug, "sph-water-gpu");
+  assert.equal(water.title, roadmapSeed[50].title);
+  assert.equal(water.lessonCount, 12);
+  assert.equal(water.download, "/downloads/project-51-sph-water-gpu.zip");
+  assert.equal(water.acceptanceNote, undefined);
+  assert.ok(!("previous" in water));
+
   const pending = roadmap.find(({ id }) => id === "41");
   assert.equal(pending.status, "published");
   assert.match(pending.acceptanceNote, /chờ kiểm trực tiếp/);

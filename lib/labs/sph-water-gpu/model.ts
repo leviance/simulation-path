@@ -36,7 +36,7 @@ export function makePlan(side = 8) {
     0,
   );
   const reductionBytes = 32 * Math.ceil(count / 256);
-  const residentBytes = 100 * count + 12 * cells + scanBytes + reductionBytes;
+  const residentBytes = 100 * count + 12 * cells + scanBytes + reductionBytes + 288;
   return {
     side,
     count,
@@ -55,7 +55,7 @@ export type Plan = ReturnType<typeof makePlan>;
 export function initialPosition(plan: Plan, index: number): Vec3 {
   return {
     x: 0.08 + ((index % plan.side) + 0.5) * plan.spacing,
-    y: 0.12 + ((Math.floor(index / plan.side) % plan.side) + 0.5) * plan.spacing,
+    y: ((Math.floor(index / plan.side) % plan.side) + 0.5) * plan.spacing,
     z: 0.3 + (Math.floor(index / plan.side ** 2) + 0.5) * plan.spacing,
   };
 }

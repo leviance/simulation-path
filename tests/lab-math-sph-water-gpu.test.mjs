@@ -5,6 +5,46 @@ import { forceFixture } from "../lib/labs/sph-water-gpu/fixtures.ts";
 const near = (a, b, t = 1e-9) =>
   assert.ok(Number.isFinite(a) && Math.abs(a - b) < t, `${a} != ${b}`);
 
+test("SPH3D perspective has depth-dependent scale, preserves aspect and never edits physics", () => {
+  const camera = { yaw: 0, pitch: 0, zoom: 1 };
+  const point = { x: 0.6, y: 0.4, z: 0.5 };
+  const before = structuredClone(point);
+  const p = w.project(point, camera, 1200, 800);
+  near(p.x - 600, (400 * 2.1445069205095586 * 0.1) / 1.75);
+  near(p.y, 400);
+  const closer = w.project({ ...point, z: 0.8 }, camera, 1200, 800);
+  assert.ok(closer.scale > p.scale);
+  const wide = w.project(point, camera, 1600, 800);
+  near(wide.x - 800, p.x - 600);
+  near(w.project({ x: 0.5, y: 0.5, z: 0.5 }, camera, 1200, 800).y - 400, -(p.x - 600));
+  assert.equal(w.project({ x: 0.5, y: 0.4, z: 3 }, camera, 1200, 800).visible, false);
+  assert.equal(w.project({ x: 0.5, y: 0.4, z: -20 }, camera, 1200, 800).visible, false);
+  assert.deepEqual(point, before);
+});
+
+test("SPH3D camera controls wrap yaw, clamp pitch/zoom and preserve state", () => {
+  const camera = { ...w.defaultCamera };
+  const before = structuredClone(camera);
+  const rotated = w.orbit(camera, 20 * Math.PI + 0.25, 10);
+  near(rotated.yaw, camera.yaw + 0.25);
+  near(rotated.pitch, 1.2);
+  near(w.orbit(camera, 0, -10).pitch, -1.2);
+  near(w.zoomCamera(camera, 1000).zoom, 2);
+  near(w.zoomCamera(camera, 0.00001).zoom, 0.4);
+  assert.deepEqual(camera, before);
+});
+
+test("SPH3D lattice starts against the floor with the same C++/GLSL index convention", () => {
+  const plan = w.makePlan(8);
+  const first = w.initialPosition(plan, 0);
+  near(first.x, 0.08 + plan.spacing / 2);
+  near(first.y, plan.spacing / 2);
+  near(first.z, 0.3 + plan.spacing / 2);
+  near(w.initialPosition(plan, plan.side).y, first.y + plan.spacing);
+  near(w.initialPosition(plan, plan.side ** 2).z, first.z + plan.spacing);
+  near(w.initialPosition(plan, 511).y, 0.4 - plan.spacing / 2);
+});
+
 test("Lesson6 fixtures expose pressure and viscosity without advancing particles", () => {
   const plan = w.makePlan(4);
   const compressed = forceFixture(plan, "compressed");

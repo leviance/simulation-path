@@ -27,32 +27,78 @@ Bấm 20 tick để nhìn displacement rõ hơn, rồi đọc time/dt. Đây là
 
 Reference dùng ba thành phần độc lập:
 
+{/* snippet include/reference.hpp#reference-integration */}
 ```cpp title="include/reference.hpp — semi-implicit Euler"
-velocity.x += dt * acceleration.x;
-velocity.y += dt * acceleration.y;
-velocity.z += dt * acceleration.z;
-position.x += dt * velocity.x;
-position.y += dt * velocity.y;
-position.z += dt * velocity.z;
+inline void integrate(Vec3& position, Vec3& velocity, Vec3 acceleration, double dt, double radius) {
+    velocity.x += dt * acceleration.x;
+    velocity.y += dt * acceleration.y;
+    velocity.z += dt * acceleration.z;
+    position.x += dt * velocity.x;
+    position.y += dt * velocity.y;
+    position.z += dt * velocity.z;
+    collide(position.x, velocity.x, radius);
+    collide(position.y, velocity.y, radius);
+    collide(position.z, velocity.z, radius);
+}
 ```
 
 Không dùng velocity cũ ở ba dòng position; đó là integrator khác. Dt chỉ nhân ở integration, không nhân thêm trong force.
 
 ### Bước 2 — Đọc cũ, ghi mới trên GPU
 
-integrate.comp:
+Viết `main` của `integrate.comp`. Nó đọc current bank và ghi `nextPositions/nextVelocities`; vòng lặp ba trục xử lý đủ sáu mặt hộp:
 
+{/* snippet shaders/integrate.comp#integrate-particles */}
 ```glsl title="shaders/integrate.comp — GLSL bank mới"
-vec3 velocity = velocities[i].xyz + dt * acceleration[i].xyz;
-vec3 position = positions[i].xyz + dt * velocity;
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= uCount)
+        return;
+    float dt = 0.0005;
+    vec3 velocity = velocities[i].xyz + dt * acceleration[i].xyz;
+    vec3 position = positions[i].xyz + dt * velocity;
+    for (int axis = 0; axis < 3; axis++) {
+        float radius = uSpacing / 2.0;
+        if (position[axis] < radius) {
+            position[axis] = radius;
+            if (velocity[axis] < 0.0)
+                velocity[axis] *= -0.1;
+        }
+        if (position[axis] > 1.0 - radius) {
+            position[axis] = 1.0 - radius;
+            if (velocity[axis] > 0.0)
+                velocity[axis] *= -0.1;
+        }
+    }
+    nextPositions[i] = vec4(position, 1.0);
+    nextVelocities[i] = vec4(velocity, 0.0);
+}
 ```
 
-Sau collision, ghi nextPositions/nextVelocities. Engine bind current vào input và 1−current vào output. Không alias hai bank; SSBO barrier không thể chữa race nếu input/output là cùng buffer.
+`radius=spacing/2` là khoảng cách tâm tối thiểu tới thành, không phải bán kính support `2h` hoặc bán kính sphere dùng để vẽ. Collision chỉ phản xạ thành phần vận tốc hướng ra ngoài; hai thành phần tiếp tuyến giữ nguyên. Đây là va chạm giải tích, không bổ sung hạt tường cho tổng SPH.
+
+Engine nối pass vào cuối batch, sau khi lực của **mọi hạt** đã được tính. Đọc binding dưới đây từ trái sang phải: current position/velocity, acceleration, next position/velocity. `statsRoot` chưa được shader checkpoint 7 dùng; nó phục vụ adaptive dt ở Bài 09.
+
+{/* snippet include/engine.hpp#integrate-pass */}
+```cpp title="include/engine.hpp — input cũ và output mới"
+use(gl, programs.integrate, storage.plan, settings, grid);
+bind(gl, 0, storage.positions[current]);
+bind(gl, 1, storage.velocities[current]);
+bind(gl, 2, storage.acceleration);
+bind(gl, 3, storage.positions[1 - current]);
+bind(gl, 4, storage.velocities[1 - current]);
+bind(gl, 5, statsRoot);
+dispatch(gl, storage.plan.count);
+queue.mark(gl, "Integration");
+```
+
+Không alias hai bank; SSBO barrier không thể chữa lỗi khi một hạt ghi đè state mà hạt khác còn đọc.
 
 ### Bước 3 — Commit sau khi batch xong
 
 Trong Engine.poll, chỉ chạy đoạn này sau fence:
 
+{/* snippet include/engine.hpp#bank-commit */}
 ```cpp title="include/engine.hpp — commit state đã hoàn tất"
 current = 1 - current;
 ++steps;
@@ -63,7 +109,7 @@ Nếu bước thất bại, không đổi current. GPU không quyết định ba
 
 ## Ghép các phần lại
 
-Checkpoint 7 dùng dt cố định 0.0005 s và N cho một tick. Khối bắt đầu rơi, các hạt chạm thành bị giữ trong [spacing/2,1−spacing/2]. Workload vẫn≤512; Bài 09 mới chọn dt thích nghi cho scale lớn.
+Checkpoint 7 dùng dt cố định 0.0005 s và N cho một tick. Khối nằm sát đáy; gravity kéo các hàng phía trên xuống, compression tạo pressure và khối dần lan ra. Tâm hạt được giữ trong [spacing/2,1−spacing/2]. Một tick chỉ là nửa mili giây mô hình nên chuyển động ban đầu rất nhỏ: dùng 20 tick trên Canvas và đọc time, không tăng dt để ép hình chạy nhanh. Workload C++ vẫn≤512; Bài 09 mới chọn dt thích nghi cho hệ lớn.
 
 ## Thử làm sai để hiểu đúng
 

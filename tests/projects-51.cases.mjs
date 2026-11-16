@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { workspace, authoredLessons, render, isTokenSubsequence } from "./site-support.mjs";
+import { workspace, authoredLessons, render } from "./site-support.mjs";
+import { isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
+import "./sph-water-gpu-content.test.mjs";
 const directory = path.join(workspace, "examples/project-51-sph-water-gpu");
 test("Project51 GLSL snippets match the shader of their teaching checkpoint", async () => {
   const lessons = (await authoredLessons()).filter((l) => l.project === "sph-water-gpu");
@@ -21,7 +23,7 @@ test("Project51 GLSL snippets match the shader of their teaching checkpoint", as
         path.join(directory, "checkpoints", lesson.file.slice(0, 2), relative),
         "utf8",
       );
-      assert.ok(isTokenSubsequence(snippet, shader), lesson.file + " drifts from " + relative);
+      assert.ok(isContiguousCodeExcerpt(snippet, shader), lesson.file + " drifts from " + relative);
     }
   }
 });
@@ -67,11 +69,11 @@ test("Project51 introduces GPU rendering,SPH,CSR,reduction and scale at the taug
     assert.ok(now.includes(symbol));
     assert.ok(!before.includes(symbol));
   }
-  const main = await readFile(path.join(directory, "checkpoints/10/src/main.cpp"), "utf8");
-  assert.ok(!main.includes("Confirm with Enter"));
+  const early = await readFile(path.join(directory, "checkpoints/10/include/controls.hpp"), "utf8");
+  assert.ok(!early.includes("case Command::Confirm:"));
   assert.match(
-    await readFile(path.join(directory, "final/src/main.cpp"), "utf8"),
-    /Confirm with Enter/,
+    await readFile(path.join(directory, "final/include/controls.hpp"), "utf8"),
+    /case Command::Confirm:[\s\S]*?engine\.reset\(gl, requested\)/,
   );
 });
 test("Project51 documents CPU versus GPU,volume units,bounded work and verification limits", async () => {

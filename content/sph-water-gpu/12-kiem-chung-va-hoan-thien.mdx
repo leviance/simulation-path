@@ -4,11 +4,11 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Một khối xanh chuyển động chưa chứng minh shader đúng. Bài cuối kiểm geometry, kernel, search, force, integration và lifecycle bằng các ca nhỏ có đáp án. Workload lớn chỉ là bước thử tài nguyên tiếp theo, không thay thế các phép kiểm này.
+Một khối xanh chuyển động chưa chứng minh shader đúng. Bài cuối kiểm từng phần bằng ca nhỏ có đáp án, rồi chạy cảnh động đủ 100.000 hạt. Oracle nhỏ kiểm thuật toán; cảnh lớn kiểm triển khai có thực sự cập nhật/vẽ đúng workload, còn phản hồi và cho ra dòng chảy 3D hay không.
 
 ## Hiểu ý tưởng trước khi viết code
 
-CTest thuần không mở window. Nó kiểm normalization, gradient, pair power, timestep, mass và layout. GPU verify mở window hidden cho 512 hạt hoặc 257 hạt để bắt tail, compare buffer với oracleCPU double và kiểm hai tick.
+CTest thuần không mở window. Nó kiểm normalization, gradient, pair power, timestep, mass/layout, camera và phép tổng hợp benchmark. GPU verify tạo GL context cho 512 hoặc 257 hạt, đọc state sau fence rồi so với CPU double qua hai tick. Trước khi thay fixture, nó còn so initialization GPU với lattice CPU và kiểm w/velocity/layout.
 
 Float/GPU atomic sum có thứ tự khác doubleCPU, nên validation.hpp ghi tolerance cụ thể. NaN/Infinity luôn thất bại; không tăng tolerance tới mức che lỗi dấu, sai h hay thiếu self.
 
@@ -22,8 +22,11 @@ Nút Kiểm oracle CPU so CSR với all-pairs trên state đang xem và không �
 
 Hàm closeEnough nằm trong oracle-stats.hpp để cả CTest và GPU validator dùng được. Tên này cũng tránh macro near của Windows:
 
+{/* snippet include/oracle-stats.hpp#close-enough */}
 ```cpp title="include/oracle-stats.hpp — tolerance có kiểm finite"
-return std::isfinite(actual) && std::isfinite(expected) && std::abs(actual - expected) <= absolute + relative * std::abs(expected);
+inline bool closeEnough(double actual, double expected, double absolute = 0.01, double relative = 0.003) {
+    return std::isfinite(actual) && std::isfinite(expected) && std::abs(actual - expected) <= absolute + relative * std::abs(expected);
+}
 ```
 
 Density dùng absolute 0.001/relative 0.0001; pressure 0.2/0.003; acceleration 0.01/0.003. Integration có tolerance riêng nhỏ hơn. Không dùng cùng tolerance tuyệt đối cho mọi đơn vị.
@@ -32,6 +35,7 @@ Density dùng absolute 0.001/relative 0.0001; pressure 0.2/0.003; acceleration 0
 
 Sau fence, đọc counts/offsets/indices của ca nhỏ. Range phải liên tiếp, ID không được lặp:
 
+{/* snippet include/validation.hpp#csr-ownership */}
 ```cpp title="include/validation.hpp — không chỉ kiểm tổng counts"
 const auto id = indices[slot];
 if (id >= plan.count || seen[id] || cellId(plan, xyz(oldPosition[id])) != cell) {
@@ -49,12 +53,14 @@ Trước hết tính vmax từ oldVelocity, amax và rhoMax từ kết quả CPU
 
 Expected position/velocity được tích phân từ state cũ và **dtCPU độc lập**:
 
+{/* snippet include/validation.hpp#oracle-timestep */}
 ```cpp title="include/validation.hpp — timestep từ oracle CPU"
 const auto expected = evaluate(engine.storage.plan, oldPosition, oldVelocity, engine.settings);
 const auto extrema = oracleStats(oldVelocity, expected);
 const double dtCPU = chooseDt(plan, extrema.speed, extrema.acceleration, engine.settings.soundSpeed);
 ```
 
+{/* snippet include/validation.hpp#oracle-integration */}
 ```cpp title="include/validation.hpp — oracle integration"
 auto p = xyz(oldPosition[i]);
 auto v = xyz(oldVelocity[i]);
@@ -69,26 +75,56 @@ Tải ZIP, mở terminal ở thư mục có CMakeLists.txt:
 
 ```bash title="Terminal — build và CTest"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
+cmake --build build --config Debug --parallel 1
 ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
+cmake --build build --config Release --parallel 1
 ctest --test-dir build -C Release --output-on-failure --timeout 20
 ```
 
-Windows/Visual Studio chạy build/Debug/project_51_final.exe. Kiểm GPU bằng từng lượt nhỏ: --verify-gpu, --verify-gpu --tail-case, --verify-acoustic và --verify-force. Hai lượt sau vẫn chỉ dùng 512 hạt. Vận tốc lớn kích hoạt acoustic bound trong pipeline SPH. Riêng --verify-force đưa gia tốc (0,10⁶,0) biết trước vào reduction/integration để kiểm force bound; nó cố ý bỏ qua density/force SPH, không chứng minh công thức lực chất lỏng đúng. Hai lượt lattice/tail vẫn kiểm toàn pipeline ấy. App từ chối fixture nếu bound cần kiểm không thực sự chi phối. Không chạy million-particle benchmark trong bộ test tự động.
+Windows/Visual Studio chạy `build/Release/project_51_final.exe`. Chạy từng lệnh GPU riêng, không mở nhiều lượt cùng lúc:
 
-Mỗi lượt phải được chạy riêng với timeout ngoài process 30 s; không tự thử lại nếu timeout. Generator single-config dùng build directory riêng và CMAKE_BUILD_TYPE. Shader directory đi kèm từng snapshot; không trộn shader checkpoint 8 với executable checkpoint 12.
+```bash title="Terminal — sáu fixture GPU nhỏ"
+build/Release/project_51_final.exe --verify-gpu
+build/Release/project_51_final.exe --verify-gpu --tail-case
+build/Release/project_51_final.exe --verify-acoustic
+build/Release/project_51_final.exe --verify-force
+build/Release/project_51_final.exe --verify-perturbed
+build/Release/project_51_final.exe --verify-scan
+```
 
-N/Space/C/R/Home, drag/wheel và phím 1–4/Enter được giải thích trong README. Final là chương trình đầy đủ, không cần website hay project trước để chạy. OpenGL 4.3 là điều kiện runtime; CTest thuần không cần GPU.
+Mỗi fixture trả lời một câu hỏi khác nhau:
+
+- **Lattice/tail:** toàn pipeline đúng với 512/257 hạt? Đuôi workgroup có được xử lý đúng?
+- **Acoustic:** vận tốc lớn có thật làm acoustic bound nhỏ hơn maxDt?
+- **Prescribed force:** gia tốc biết trước (0,10⁶,0) có làm force bound chi phối? Ca này cố ý bỏ density/force SPH, chỉ kiểm reduction/integration.
+- **Perturbed:** lattice nén cùng vận tốc tương đối có pressure dương và viscosity khác 0? Ca này bắt lỗi lực mà cảnh yên gần 0 có thể bỏ sót.
+- **Scan:** 257 hạt trong 4.096 cell buộc scan qua tám workgroup và hai tầng. Cell không đồng nghĩa số hạt.
+
+App từ chối fixture nếu điều kiện cần kiểm không xuất hiện. Một PASS không thay cho các ca còn lại; không nới tolerance để bỏ qua lỗi dấu, thiếu hàng xóm hoặc dt sai.
+
+Verifier có deadline 15 s, mỗi batch 5 s. Khi tự động hóa, đặt thêm timeout ngoài process khoảng 30 s và dọn process tree; timeout là ca chưa đạt, không tự lặp vô hạn. Generator single-config dùng build directory riêng và `CMAKE_BUILD_TYPE`. Shader đi kèm từng snapshot; không trộn shader checkpoint 8 với executable checkpoint 12.
+
+### Kiểm sản phẩm ở quy mô chuẩn
+
+Mở final không tham số: 110.592 hạt, paused. Bấm Chạy, orbit quanh bể và bật F1 đọc N/tick/time/dt/density/leakage. Với bài chạy hữu hạn, dùng lệnh sau; nếu máy không kịp đạt ticks trước deadline, app báo incomplete, không tự gia hạn hoặc gửi lại job:
+
+```bash title="Terminal — cảnh động 110.592 hạt và benchmark hữu hạn"
+build/Release/project_51_final.exe --side=48 --scale-check --ticks=1200 --seconds=55 --debug
+build/Release/project_51_final.exe --side=48 --benchmark --seconds=25 --debug
+```
+
+Chạy hai lệnh **lần lượt**. Ghi GPU/driver, cấu hình Release, N, warm-up=30, compute samples=8 và render samples=8; giữ median/min/max từng pass. Ghi model time/density/leakage ở bảng khác, không trộn chúng vào profiler. Mốc 512.000/một triệu là mở rộng chưa mặc nhiên được kiểm chứng. Không suy 60 FPS từ thời gian density hoặc force đơn lẻ.
+
+V trong UI chạy oracle perturbed nhỏ ở một engine phụ; nó pause scene nhưng không đổi N/time/state của scene chính. N/Space/C/R/Home, F1/L, drag/wheel và phím 1–5/Enter được giải thích trong README. Final và ZIP là chương trình đầy đủ, không cần website hay project trước để chạy. Phần **Toàn bộ mã nguồn của dự án** cuối bài có đủ file, không chỉ các đoạn đã trích ở trên.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ support filter hoặc guard tail, chạy verify nhỏ. Khôi phục shader rồi chạy lại, không chỉ xem image.
+1. Trong bản thử riêng, đảo dấu gradient hoặc bỏ một cell theo z rồi chạy perturbed/scan. Phép so phải thất bại. Không thử ghi ngoài SSBO hoặc tạo divergent barrier có thể treo driver.
 2. Thay expected force bằng chính GPU buffer đang kiểm. Validator tự so với nó nên mất ý nghĩa; giữ CPU oracle độc lập và thử đảo một dấu để chắc test bắt được.
 
 ## Tự kiểm tra kết quả
 
-CTest Debug/Release qua; verify 257/512 hạt so finite/tolerance/CSR/integration. Ghi GPU/driver của máy đã kiểm, không suy rộng thành mọi GPU. Chạy/dừng/reset/cancel/camera hoạt động, không auto-increase N. Báo rho error thật; PASS toán và dữ liệu không chứng nhận solver nước đã hội tụ.
+CTest Debug/Release qua; sáu fixture GPU so finite/tolerance/CSR/integration và có ca lực không bằng 0. Chạy cảnh động ít nhất 100.000 hạt, kiểm allocated/alive/updated/drawn khớp và leakage/invalid=0. Kiểm riêng chuột/phím, pause/reset/cancel, chọn N, debug và camera; PASS tự động không thay kiểm tương tác. Ghi đúng GPU/driver của máy đã thử, không suy rộng thành mọi GPU. Báo density thấp ở mặt thoáng/sát thành; PASS toán và dữ liệu không chứng nhận solver nước đã hội tụ.
 
 ## Bài tập mở rộng
 

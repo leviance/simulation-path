@@ -1,5 +1,10 @@
+#include "benchmark-data.hpp"
+#include "camera.hpp"
+#include "diagnostics.hpp"
+#include "gpu-error.hpp"
 #include "oracle-stats.hpp"
 #include "reference.hpp"
+#include "ui-layout.hpp"
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -20,6 +25,46 @@ bool near(double actual, double expected, double tolerance = 1e-9) {
 }
 
 int main() {
+    bool fatalGpuError = false;
+    try {
+        throw water3::GpuBatchError("synthetic fence failure - no GPU command submitted");
+    } catch (const water3::GpuBatchError&) {
+        fatalGpuError = true;
+    } catch (const std::exception&) {
+        // UI/reporting errors may be recoverable; GPU failure keeps its own type.
+    }
+    check(fatalGpuError, "GPU failure keeps its fatal exception type");
+
+    const auto ordered = water3::distribution({8, 1, 7, 2, 6, 3, 5, 4});
+    check(near(ordered.minimum, 1) && near(ordered.median, 4.5) && near(ordered.maximum, 8), "benchmark even median and extrema");
+    check(near(water3::distribution({3, 1, 2}).median, 2), "benchmark odd median");
+    for (const auto& samples : {std::vector<double>{}, std::vector<double>{-1}, std::vector<double>{std::numeric_limits<double>::infinity()}}) {
+        bool rejected = false;
+        try {
+            water3::distribution(samples);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        check(rejected, "invalid benchmark samples rejected");
+    }
+    for (const int width : {900, 1280, 1920}) {
+        const water3::Layout layout(width, 820);
+        check(layout.scene.x + layout.scene.width < layout.panel.x, "scene and UI do not overlap");
+        check(layout.cell(118, 2).x + layout.cell(118, 2).width < width, "last button stays inside window");
+        check(!layout.panel.contains(layout.panel.x - 1, layout.panel.y), "panel hit excludes scene side");
+    }
+    // Oracle phối cảnh tính trực tiếp với camera không xoay, không gọi shader để tạo đáp án.
+    const water3::Camera camera{0, 0, 1};
+    const auto center = water3::cameraPoint({0.5, 0.4, 0.5}, camera);
+    check(near(center.x, 0) && near(center.y, 0) && near(center.z, -1.75), "camera eye coordinates");
+    const auto closer = water3::cameraPoint({0.6, 0.4, 0.8}, camera);
+    check(near(closer.x, 0.1) && near(closer.z, -1.45), "camera depth does not change world scale");
+    check(water3::focalLength / -closer.z > water3::focalLength / -center.z, "perspective grows toward camera");
+    water3::Diagnostics histogram;
+    histogram.values[1] = 257;
+    histogram.values[8 + 39] = 257;
+    check(near(histogram.quantile(0.5), 0.9875), "histogram quantile uses documented bin center");
+    check(sizeof(histogram) == 288, "compact GPU readback layout");
     for (const auto side : {4U, 8U, 32U, 48U, 100U}) {
         const auto plan = water3::makePlan(side);
         check(plan.count == side * side * side, "cubic particle count");

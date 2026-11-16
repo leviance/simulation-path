@@ -26,12 +26,15 @@ inline GLuint loadProgram(lab::GlApi& gl, const std::string& directory, std::ini
             std::ostringstream text{};
             text << input.rdbuf();
             std::string source = text.str();
-            const std::string marker = "#include \"common.glsl\"";
-            const auto offset = source.find(marker);
-            if (offset != std::string::npos) {
-                std::ifstream common(directory + "/common.glsl");
+            for (const std::string sharedFile : {"common.glsl", "camera.glsl"}) {
+                const std::string marker = "#include \"" + sharedFile + "\"";
+                const auto offset = source.find(marker);
+                if (offset == std::string::npos) {
+                    continue;
+                }
+                std::ifstream common(directory + "/" + sharedFile);
                 if (!common) {
-                    throw std::runtime_error("Cannot open common.glsl");
+                    throw std::runtime_error("Cannot open " + sharedFile);
                 }
                 std::ostringstream shared;
                 shared << common.rdbuf();

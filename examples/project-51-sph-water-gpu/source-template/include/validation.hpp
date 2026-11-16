@@ -8,9 +8,11 @@ namespace water3 {
 #if LAB_CHECKPOINT >= 12
 inline bool validateGpu(lab::GlApi& gl, const Engine& engine, const std::vector<Float4>& oldPosition, const std::vector<Float4>& oldVelocity) {
     auto plan = engine.storage.plan;
+    // [snippet oracle-timestep]
     const auto expected = evaluate(engine.storage.plan, oldPosition, oldVelocity, engine.settings);
     const auto extrema = oracleStats(oldVelocity, expected);
     const double dtCPU = chooseDt(plan, extrema.speed, extrema.acceleration, engine.settings.soundSpeed);
+    // [/snippet oracle-timestep]
     const auto stats = engine.lastStats;
     if (!matchesOracleStats(stats.x, stats.y, stats.z, stats.w, engine.lastDt, extrema, plan, engine.settings.soundSpeed)) {
         std::cerr << "GPU reduction/timestep differs from independent CPU extrema\n";
@@ -22,8 +24,8 @@ inline bool validateGpu(lab::GlApi& gl, const Engine& engine, const std::vector<
     const auto acceleration = readVector<Float4>(gl, engine.storage.acceleration, engine.storage.plan.count);
     const auto position = readVector<Float4>(gl, engine.storage.positions[engine.current], engine.storage.plan.count);
     const auto velocity = readVector<Float4>(gl, engine.storage.velocities[engine.current], engine.storage.plan.count);
-    const auto counts = readVector<std::uint32_t>(gl, engine.storage.counts, engine.storage.plan.cells);
-    const auto offsets = readVector<std::uint32_t>(gl, engine.storage.offsets, engine.storage.plan.cells);
+    const auto counts = readGridWords(gl, engine.storage.counts, engine.storage.plan);
+    const auto offsets = readGridWords(gl, engine.storage.offsets, engine.storage.plan);
     const auto indices = readVector<std::uint32_t>(gl, engine.storage.indices, engine.storage.plan.count);
 
     // CSR describes the old bank; integration has already produced the new bank.
@@ -37,12 +39,14 @@ inline bool validateGpu(lab::GlApi& gl, const Engine& engine, const std::vector<
         }
         total += counts[cell];
         for (auto slot = offsets[cell]; slot < total; ++slot) {
+            // [snippet csr-ownership]
             const auto id = indices[slot];
             if (id >= plan.count || seen[id] || cellId(plan, xyz(oldPosition[id])) != cell) {
                 std::cerr << "Invalid CSR ownership/permutation\n";
                 return false;
             }
             seen[id] = true;
+            // [/snippet csr-ownership]
         }
     }
     if (total != plan.count) {
@@ -56,9 +60,11 @@ inline bool validateGpu(lab::GlApi& gl, const Engine& engine, const std::vector<
             return false;
         }
 
+        // [snippet oracle-integration]
         auto p = xyz(oldPosition[i]);
         auto v = xyz(oldVelocity[i]);
         integrate(p, v, expected.acceleration[i], dtCPU, engine.storage.plan.spacing / 2);
+        // [/snippet oracle-integration]
         if (!closeEnough(position[i].x, p.x, 2e-6, 1e-5) || !closeEnough(position[i].y, p.y, 2e-6, 1e-5) || !closeEnough(position[i].z, p.z, 2e-6, 1e-5) || !closeEnough(velocity[i].x, v.x, 1e-5, 0.004) || !closeEnough(velocity[i].y, v.y, 1e-5, 0.004) || !closeEnough(velocity[i].z, v.z, 1e-5, 0.004)) {
             std::cerr << "Integration mismatch at " << i << '\n';
             return false;

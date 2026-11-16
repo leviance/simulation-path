@@ -26,14 +26,27 @@ $$
 
 Trong stats.comp:
 
-```glsl title="shaders/stats.comp — GLSL thống kê của một lane"
-vec4 value = vec4(0.0);
-if (i < uCount) {
-    value = vec4(length(velocities[i].xyz), length(acceleration[i].xyz), density[i].x, max(density[i].w, acceleration[i].w));
-    if (bad(value.xyz)) value = vec4(0.0, 0.0, 0.0, 1.0);
+{/* snippet shaders/stats.comp#reduce-lanes */}
+```glsl title="shaders/stats.comp — GLSL thống kê của cả workgroup"
+void main() {
+    // Pad inactive lanes, but every lane must reach every barrier.
+    uint i = gl_GlobalInvocationID.x, lane = gl_LocalInvocationID.x;
+    vec4 value = vec4(0.0);
+    if (i < uCount) {
+        value = vec4(length(velocities[i].xyz), length(acceleration[i].xyz), density[i].x, max(density[i].w, acceleration[i].w));
+        if (bad(value.xyz))
+            value = vec4(0.0, 0.0, 0.0, 1.0);
+    }
+    partial[lane] = value;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride /= 2u) {
+        if (lane < stride)
+            partial[lane] = max(partial[lane], partial[lane + stride]);
+        barrier();
+    }
+    if (lane == 0u)
+        outputValues[gl_WorkGroupID.x] = partial[0];
 }
-partial[lane] = value;
-barrier();
 ```
 
 Inactive lane vẫn đến mọi barrier. Return trước barrier ở ca 257 hạt có thể làm workgroup cuối sai hoặc treo. Shared partial có 256 vec4, cần 4096 byte.
@@ -42,25 +55,37 @@ Inactive lane vẫn đến mọi barrier. Return trước barrier ở ca 257 h�
 
 Host ping-pong hai scratch buffers, mỗi vòng giảm count khoảng 256 lần:
 
+{/* snippet include/passes.hpp#reduce-stats */}
 ```cpp title="include/passes.hpp — max hierarchy"
-while (count > 1) {
-    gl.UseProgram(programs.maximum);
-    gl.Uniform1ui(requireUniform(gl, programs.maximum, "uCount"), count);
-    bind(gl, 0, storage.scratch[source]);
-    bind(gl, 1, storage.scratch[1 - source]);
-    dispatch(gl, count);
-    count = ceilDivide(count, 256);
-    source = 1 - source;
+inline GLuint reduceStats(lab::GlApi& gl, const Programs& programs, const Storage& storage, int current, const Settings& settings) {
+    use(gl, programs.stats, storage.plan, settings, true);
+    bind(gl, 0, storage.velocities[current]);
+    bind(gl, 1, storage.density);
+    bind(gl, 2, storage.acceleration);
+    bind(gl, 3, storage.scratch[0]);
+    dispatch(gl, storage.plan.count);
+    auto count = ceilDivide(storage.plan.count, 256);
+    int source = 0;
+    while (count > 1) {
+        gl.UseProgram(programs.maximum);
+        gl.Uniform1ui(requireUniform(gl, programs.maximum, "uCount"), count);
+        bind(gl, 0, storage.scratch[source]);
+        bind(gl, 1, storage.scratch[1 - source]);
+        dispatch(gl, count);
+        count = ceilDivide(count, 256);
+        source = 1 - source;
+    }
+    return storage.scratch[source];
 }
-return storage.scratch[source];
 ```
 
-Không readback block sums rồi để CPU tính max. Root buffer được bind cho integration; sau fence host chỉ đọc 16 byte để cập nhật time/diagnostics.
+Không readback block sums rồi để CPU tính max. Với 110.592 hạt, pass đầu tạo 432 record; hai lượt max còn lại thu 432→2→1. `source` chỉ ra scratch đang chứa kết quả, không mặc định root luôn ở scratch[0]. Root buffer được bind cho integration. Sau fence, host đọc record extrema 16 byte và bảng diagnostics cố định 288 byte; không kéo mảng hạt về.
 
 ### Bước 3 — Chọn dt trước khi integrate
 
 Trong integrate.comp:
 
+{/* snippet shaders/integrate.comp#adaptive-dt */}
 ```glsl title="shaders/integrate.comp — GLSL dt của force hiện tại"
 dt = min(dt, min(0.25 * uH / (uC + stats[0].x), 0.25 * sqrt(uH / max(stats[0].y, 1e-12))));
 if (stats[0].w > 0.0 || dt < 1e-6) {
@@ -74,7 +99,9 @@ Force→reduction→integration có SSBO barrier giữa các pass. Không dùng 
 
 ## Ghép các phần lại
 
-Checkpoint 9 N dùng adaptive dt. CPU chooseDt tính lại cùng bound từ root record sau fence để ghi simulated time. Sai khác float/double nhỏ không được biến thành kiểm bitwise.
+Checkpoint 9: N gửi grid→density→force→reduction→integration→diagnostics. Không đổi thứ tự force và reduction: amax phải thuộc lực **vừa tính**, không phải frame trước. CPU `chooseDt` tính lại cùng bound từ root record sau fence để ghi simulated time; shader tự chọn dt trên GPU trước integration. Sai khác float/double nhỏ không được biến thành kiểm bitwise.
+
+Bảng debug tách hai thời điểm: density là đầu tick cuối, còn leakage là sau integration. Histogram có 64 bin trên rho/rho0 trong [0,1,6]; median/p95 hiển thị tâm bin nên chỉ là xấp xỉ. Đừng trình bày chúng như percentile chính xác của mảng density. Bất kỳ NaN, leakage hoặc count cập nhật sai đều làm host từ chối commit bank mới.
 
 ## Thử làm sai để hiểu đúng
 

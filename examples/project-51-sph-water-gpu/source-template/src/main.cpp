@@ -1,46 +1,25 @@
 #ifndef LAB_CHECKPOINT
 #define LAB_CHECKPOINT 12
 #endif
-#include "engine.hpp"
-#include "force-verification.hpp"
-#include "validation.hpp"
-#include "view.hpp"
+#include "capture.hpp"
+#include "controls.hpp"
+#include "run-options.hpp"
+#include "run-report.hpp"
 #include <SDL3/SDL_main.h>
-#include <chrono>
 #include <cstdlib>
 #include <iostream>
-#include <sstream>
-#include <string_view>
 
 int main(int argc, char** argv) {
     using namespace water3;
-    bool verify = false, tail = false;
-#if LAB_CHECKPOINT >= 12
-    VerifyCase verifyCase = VerifyCase::lattice;
-#endif
-    for (int i = 1; i < argc; ++i) {
-#if LAB_CHECKPOINT >= 12
-        const std::string_view argument = argv[i];
-        if (argument == "--verify-gpu") {
-            verify = true;
-        } else if (argument == "--tail-case") {
-            tail = true;
-        } else if (argument == "--verify-acoustic") {
-            verify = true;
-            verifyCase = VerifyCase::acoustic;
-        } else if (argument == "--verify-force") {
-            verify = true;
-            verifyCase = VerifyCase::force;
-        } else {
-            std::cerr << "Use --verify-gpu [--tail-case], --verify-acoustic or --verify-force. Large runs require interactive confirmation.\n";
-            return EXIT_FAILURE;
-        }
-#else
-        (void)argv;
-#endif
+    RunOptions options;
+    try {
+        options = runOptions(argc, argv);
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return EXIT_FAILURE;
     }
 
-    // Khởi tạo SDL và OpenGL, không tạo SDL_Renderer trong cùng cửa sổ.
+    // SDL sở hữu window/context. Không tạo SDL_Renderer trong GL window.
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << SDL_GetError() << '\n';
         return EXIT_FAILURE;
@@ -49,23 +28,20 @@ int main(int argc, char** argv) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-    if (verify) {
+    if (options.verify || options.hidden)
         flags |= SDL_WINDOW_HIDDEN;
-    }
-    SDL_Window* window = SDL_CreateWindow("Project51 - SPH3D GPU", 1000, 760, flags);
+    SDL_Window* window = SDL_CreateWindow("Project 51 - SPH3D Water Tank", 1280, 820, flags);
     SDL_GLContext context = nullptr;
-    if (window) {
+    if (window)
         context = SDL_GL_CreateContext(window);
-    }
     if (!context) {
-        std::cerr << "OpenGL4.3 required: " << SDL_GetError() << '\n';
-        if (window) {
+        std::cerr << "OpenGL 4.3 required: " << SDL_GetError() << '\n';
+        if (window)
             SDL_DestroyWindow(window);
-        }
         SDL_Quit();
         return EXIT_FAILURE;
     }
-
+    SDL_SetWindowMinimumSize(window, 900, 640);
     lab::GlApi gl;
     if (!gl.load()) {
         std::cerr << gl.missingFunction << '\n';
@@ -75,27 +51,40 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     SDL_GL_SetSwapInterval(0);
-    std::cout << "GPU: " << reinterpret_cast<const char*>(gl.GetString(GL_RENDERER)) << "\nN compute/step | Space run (10) | C cancel future ticks | R reset | Home camera | drag orbit | wheel zoom\n";
+    std::cout << "OpenGL: " << reinterpret_cast<const char*>(gl.GetString(GL_VERSION)) << "\nGPU: " << reinterpret_cast<const char*>(gl.GetString(GL_RENDERER)) << '\n';
 
     Engine engine;
     View view;
+    Overlay overlay;
+    Panel panel;
+    Controls controls;
     Plan plan = makePlan(4);
 #if LAB_CHECKPOINT >= 2
     plan = makePlan();
 #endif
-    if (tail) {
-        plan = makePlan(8, 257);
-    }
-    bool running = true, playing = false, dragging = false, failed = false;
-    [[maybe_unused]] bool measuring = false;
-    [[maybe_unused]] std::uint64_t measuredSteps = 0;
-    [[maybe_unused]] double measuredMs = 0;
-    [[maybe_unused]] std::uint32_t armedSide = 0;
-#if LAB_CHECKPOINT >= 12
-    std::vector<Float4> oldPosition, oldVelocity;
-    std::uint64_t checkedSteps = 0;
-    const auto verificationStart = std::chrono::steady_clock::now();
+#if LAB_CHECKPOINT >= 11
+    // Bản chuẩn mở ở mốc >=100k nhưng vẫn paused; mốc lớn hơn cần xác nhận.
+    if (!options.verify)
+        plan = makePlan(48);
 #endif
+    if (options.tail)
+        plan = makePlan(8, 257);
+    if (options.side)
+        plan = makePlan(options.side);
+#if LAB_CHECKPOINT >= 12
+    if (options.fixture == VerifyCase::scan)
+        plan = makePlan(16, 257);
+    if (options.verify)
+        std::cout << "ORACLE cells=" << plan.cells << " scan_layers=" << plan.levels.size() << " first_scan_groups=" << plan.levels.front().groups << '\n';
+    OracleRun oracle;
+    oracle.start(options.fixture);
+#endif
+    controls.ui.playing = options.ticks > 0;
+    if (controls.ui.playing)
+        controls.ui.message = "RUNNING - MODEL TIME IS NOT WALL TIME";
+    controls.ui.debug = options.debug;
+    bool running = true, dragging = false, minimized = false, failed = false, benchPrinted = false;
+    const auto started = std::chrono::steady_clock::now();
 
     try {
 #if LAB_CHECKPOINT >= 2
@@ -105,222 +94,156 @@ int main(int argc, char** argv) {
 #if LAB_CHECKPOINT >= 3
         view.load(gl, COURSE_SHADER_DIRECTORY);
 #endif
-        while (running && !failed) {
+        overlay.load(gl, COURSE_SHADER_DIRECTORY);
+        while (running) {
+            const bool expired = options.seconds > 0 && std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() >= options.seconds;
+            if (expired && options.ticks > engine.steps)
+                throw std::runtime_error("Finite run did not reach its requested tick count");
+            if (expired && options.benchmark && controls.benchmark.phase != BenchmarkPhase::Done)
+                throw std::runtime_error("Finite benchmark incomplete");
+#if LAB_CHECKPOINT >= 2
+            // Cập nhật fence trước khi dựng hit boxes để UI không dùng trạng thái busy cũ.
+            const bool completed = engine.poll(gl);
+            const auto benchmarkBefore = controls.benchmark.phase;
+            controls.benchmark.completedStep(engine, view, completed);
+            if (controls.benchmark.phase != benchmarkBefore && controls.benchmark.phase == BenchmarkPhase::Cancelled)
+                controls.ui.message = controls.benchmark.message;
+            if (options.benchmark && controls.benchmark.phase == BenchmarkPhase::Cancelled)
+                throw std::runtime_error(controls.benchmark.message);
+#endif
+            int logicalWidth = 1, logicalHeight = 1, pixelWidth = 1, pixelHeight = 1;
+            SDL_GetWindowSize(window, &logicalWidth, &logicalHeight);
+            SDL_GetWindowSizeInPixels(window, &pixelWidth, &pixelHeight);
+            const Layout layout(logicalWidth, logicalHeight);
+            panel.prepare(layout, controls.ui, plan, engine, controls.benchmark, controls.referenceActive());
             SDL_Event event{};
             while (SDL_PollEvent(&event)) {
-                if (event.type == SDL_EVENT_QUIT) {
+                if (event.type == SDL_EVENT_QUIT)
                     running = false;
-                }
                 if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
-                    if (event.key.key == SDLK_ESCAPE) {
+                    if (event.key.key == SDLK_ESCAPE)
                         running = false;
+                    controls.command(keyboardCommand(event.key.key), gl, engine, view, plan);
+                    if (event.key.key == SDLK_PAGEDOWN)
+                        controls.ui.scroll += 120;
+                    if (event.key.key == SDLK_PAGEUP)
+                        controls.ui.scroll -= 120;
+                    if (!controls.benchmark.active()) {
+                        if (event.key.key == SDLK_LEFT)
+                            view.camera.yaw -= 0.1F;
+                        if (event.key.key == SDLK_RIGHT)
+                            view.camera.yaw += 0.1F;
+                        if (event.key.key == SDLK_UP)
+                            view.camera.pitch = std::clamp(view.camera.pitch + 0.1F, -1.2F, 1.2F);
+                        if (event.key.key == SDLK_DOWN)
+                            view.camera.pitch = std::clamp(view.camera.pitch - 0.1F, -1.2F, 1.2F);
                     }
-                    if (event.key.key == SDLK_HOME) {
-                        view.camera = Camera{};
-                    }
-                    if (event.key.key == SDLK_LEFT) {
-                        view.camera.yaw -= 0.1F;
-                    }
-                    if (event.key.key == SDLK_RIGHT) {
-                        view.camera.yaw += 0.1F;
-                    }
-                    if (event.key.key == SDLK_UP) {
-                        view.camera.pitch = std::clamp(view.camera.pitch + 0.1F, -1.2F, 1.2F);
-                    }
-                    if (event.key.key == SDLK_DOWN) {
-                        view.camera.pitch = std::clamp(view.camera.pitch - 0.1F, -1.2F, 1.2F);
-                    }
-                    if (event.key.key == SDLK_C) {
-                        playing = false;
-                        measuring = false;
-                        armedSide = 0;
-                    }
-#if LAB_CHECKPOINT >= 2
-                    if (event.key.key == SDLK_R && !engine.queue.pending()) {
-                        playing = false;
-                        measuring = false;
-                        armedSide = 0;
-                        engine.reset(gl, plan);
-                    }
-#endif
-#if LAB_CHECKPOINT >= 5
-                    if (event.key.key == SDLK_N) {
-                        playing = false;
-                        engine.submit(gl);
-                    }
-#endif
-#if LAB_CHECKPOINT >= 6
-                    if (!engine.queue.pending() && event.key.key == SDLK_Q) {
-                        playing = false;
-                        engine.settings.alpha += 0.15;
-                        if (engine.settings.alpha > 0.3) {
-                            engine.settings.alpha = 0;
-                        }
-                    }
-                    if (!engine.queue.pending() && event.key.key == SDLK_F) {
-                        playing = false;
-                        if (engine.settings.soundSpeed == 8) {
-                            engine.settings.soundSpeed = 12;
-                        } else if (engine.settings.soundSpeed == 12) {
-                            engine.settings.soundSpeed = 20;
-                        } else {
-                            engine.settings.soundSpeed = 8;
-                        }
-                    }
-#endif
-#if LAB_CHECKPOINT >= 8
-                    if (event.key.key == SDLK_G && !engine.queue.pending() && plan.count <= 512) {
-                        playing = false;
-                        engine.grid = !engine.grid;
-                    }
-#endif
-#if LAB_CHECKPOINT >= 10
-                    if (event.key.key == SDLK_SPACE) {
-                        playing = !playing;
-                        armedSide = 0;
-                    }
-                    if (event.key.key == SDLK_B && !engine.queue.pending()) {
-                        playing = false;
-                        measuring = true;
-                        measuredSteps = 0;
-                        measuredMs = 0;
-                    }
-#endif
-#if LAB_CHECKPOINT >= 11
-                    if (event.key.key >= SDLK_1 && event.key.key <= SDLK_4) {
-                        constexpr std::array sides{8U, 32U, 48U, 100U};
-                        armedSide = sides[event.key.key - SDLK_1];
-                        playing = false;
-                        measuring = false;
-                        const auto requested = makePlan(armedSide);
-                        std::cout << "Confirm with Enter: N=" << requested.count << " residentMiB=" << requested.residentBytes / (1024.0 * 1024) << ". C cancels.\n";
-                    }
-                    if (event.key.key == SDLK_RETURN && armedSide && !engine.queue.pending()) {
-                        const auto requested = makePlan(armedSide);
-                        armedSide = 0;
-                        try {
-                            engine.reset(gl, requested);
-                            plan = requested;
-                            engine.grid = true;
-                        } catch (const std::exception& error) {
-                            std::cerr << error.what() << '\n';
-                        }
-                    }
-#endif
                 }
                 if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
-                    dragging = true;
-                    SDL_CaptureMouse(true);
+                    controls.command(panel.hit(event.button.x, event.button.y), gl, engine, view, plan);
+                    if (layout.scene.contains(event.button.x, event.button.y) && !controls.benchmark.active()) {
+                        dragging = true;
+                        SDL_CaptureMouse(true);
+                    }
                 }
-                if (event.type == SDL_EVENT_MOUSE_MOTION && dragging) {
+                if (event.type == SDL_EVENT_MOUSE_MOTION && dragging && !controls.benchmark.active()) {
                     view.camera.yaw += event.motion.xrel * 0.005F;
                     view.camera.pitch = std::clamp(view.camera.pitch - event.motion.yrel * 0.005F, -1.2F, 1.2F);
                 }
                 if (event.type == SDL_EVENT_MOUSE_WHEEL) {
-                    view.camera.zoom = std::clamp(view.camera.zoom * std::exp(event.wheel.y * 0.1F), 0.4F, 3.0F);
+                    float x = 0, y = 0;
+                    SDL_GetMouseState(&x, &y);
+                    if (layout.panel.contains(x, y))
+                        controls.ui.scroll -= event.wheel.y * 30;
+                    else if (!controls.benchmark.active())
+                        view.camera.zoom = std::clamp(view.camera.zoom * std::exp(event.wheel.y * 0.1F), 0.4F, 3.0F);
                 }
                 if (event.type == SDL_EVENT_MOUSE_BUTTON_UP || event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_MINIMIZED) {
                     dragging = false;
                     SDL_CaptureMouse(false);
                 }
-                if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_MINIMIZED) {
-                    playing = false;
-                    measuring = false;
-                    armedSide = 0;
-                }
+                if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_MINIMIZED)
+                    controls.pause();
+                if (event.type == SDL_EVENT_WINDOW_MINIMIZED)
+                    minimized = true;
+                if (event.type == SDL_EVENT_WINDOW_RESTORED)
+                    minimized = false;
             }
-            if (!running) {
+            if (!running)
                 break;
-            }
 #if LAB_CHECKPOINT >= 2
-            const bool completed = engine.poll(gl);
-#if LAB_CHECKPOINT >= 10
-            if (completed && measuring && engine.steps > 0) {
-                ++measuredSteps;
-                measuredMs += engine.queue.milliseconds;
-                if (measuredSteps == 8) {
-                    measuring = false;
-                    std::cout << "8 ticks GPU mean ms=" << measuredMs / 8 << " simulated s=" << engine.time << '\n';
-                }
-            }
-#else
-            (void)completed;
+            controls.serviceRequests(gl, engine, plan);
 #endif
+            controls.serviceReference(gl);
 #if LAB_CHECKPOINT >= 12
-            if (verify) {
-                if (std::chrono::steady_clock::now() - verificationStart > std::chrono::seconds(15)) {
-                    throw std::runtime_error("GPU verification total timeout");
-                }
-                if (engine.ready && !engine.queue.pending()) {
-                    if (engine.steps > checkedSteps) {
-                        bool valid = false;
-                        if (verifyCase == VerifyCase::force) {
-                            valid = validateForceFixture(gl, engine, oldPosition, oldVelocity);
-                        } else {
-                            valid = validateGpu(gl, engine, oldPosition, oldVelocity);
-                        }
-                        if (!valid) {
-                            failed = true;
-                        }
-                        checkedSteps = engine.steps;
-                    }
-                    if (checkedSteps == 2) {
-                        running = false;
-                    } else if (!failed) {
-                        oldPosition = readVector<Float4>(gl, engine.storage.positions[engine.current], plan.count);
-                        oldVelocity = readVector<Float4>(gl, engine.storage.velocities[engine.current], plan.count);
-                        if (checkedSteps == 0 && verifyCase == VerifyCase::acoustic) {
-                            prepareVerifyCase(verifyCase, oldPosition, oldVelocity);
-                            const auto expected = evaluate(plan, oldPosition, oldVelocity, engine.settings);
-                            const auto extrema = oracleStats(oldVelocity, expected);
-                            const double acoustic = 0.25 * plan.h / (engine.settings.soundSpeed + extrema.speed);
-                            const double forceBound = 0.25 * std::sqrt(plan.h / std::max(extrema.acceleration, 1e-12));
-                            if (!(acoustic < std::min(maxDt, forceBound))) {
-                                throw std::runtime_error("Requested timestep bound is not active in the fixture");
-                            }
-                            gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, engine.storage.positions[engine.current]);
-                            gl.BufferSubData(GL_SHADER_STORAGE_BUFFER, 0, oldPosition.size() * sizeof(Float4), oldPosition.data());
-                            gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, engine.storage.velocities[engine.current]);
-                            gl.BufferSubData(GL_SHADER_STORAGE_BUFFER, 0, oldVelocity.size() * sizeof(Float4), oldVelocity.data());
-                            gl.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-                        }
-                        if (verifyCase == VerifyCase::force) {
-                            submitForceFixture(gl, engine);
-                        } else {
-                            engine.submit(gl);
-                        }
-                    }
-                }
-            }
+            if (options.verify && oracle.service(gl, engine))
+                running = false;
+            if (options.benchmark && controls.benchmark.phase == BenchmarkPhase::Idle && engine.ready && !engine.queue.pending())
+                controls.command(Command::Benchmark, gl, engine, view, plan);
 #endif
-            // Do not enqueue rendering behind a pending long GPU batch.
-            if (engine.queue.pending()) {
+            // [snippet pending-gate]
+            if (engine.queue.pending() || controls.referencePending()) {
+                if (expired)
+                    throw std::runtime_error("Finite run expired with GPU work pending");
                 SDL_Delay(1);
                 continue;
             }
-#endif
-            int width = 1, height = 1;
-            SDL_GetWindowSizeInPixels(window, &width, &height);
-            gl.Viewport(0, 0, width, height);
-            gl.ClearColor(0.04F, 0.06F, 0.12F, 1);
+            // [/snippet pending-gate]
+            if (minimized) {
+                SDL_Delay(16);
+                continue;
+            }
+
+            // Scene dùng pixel framebuffer, UI và input dùng logical coordinates.
+            gl.Viewport(0, 0, pixelWidth, pixelHeight);
+            gl.ClearColor(0.025F, 0.04F, 0.065F, 1);
             gl.Clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            const float scaleX = static_cast<float>(pixelWidth) / std::max(1, logicalWidth);
+            const float scaleY = static_cast<float>(pixelHeight) / std::max(1, logicalHeight);
+            const int width = std::max(1, static_cast<int>(layout.scene.width * scaleX));
+            const int height = std::max(1, static_cast<int>(layout.scene.height * scaleY));
+            const int sceneX = static_cast<int>(layout.scene.x * scaleX);
+            const int sceneY = static_cast<int>((logicalHeight - layout.scene.y - layout.scene.height) * scaleY);
+            gl.Viewport(sceneX, sceneY, width, height);
+            // [snippet render-call]
 #if LAB_CHECKPOINT >= 3
             view.draw(gl, engine.storage, engine.current, width, height);
 #elif LAB_CHECKPOINT >= 1
             view.drawn = 64;
-            drawPreview(gl, view.camera, width, height);
+            drawPreview(gl, view.camera, width, height, sceneX, sceneY);
 #endif
+            // [/snippet render-call]
+            controls.benchmark.completedRender(view);
+            if (controls.benchmark.phase == BenchmarkPhase::Done && !benchPrinted) {
+                controls.benchmark.print(engine);
+                benchPrinted = true;
+                controls.ui.message = controls.benchmark.message;
+            }
+            if (controls.benchmark.active())
+                benchPrinted = false;
+            const bool target = options.ticks > 0 && engine.steps >= options.ticks;
+            if (target) {
+                controls.ui.playing = false;
+                controls.ui.message = "FINITE RUN COMPLETE";
+            }
+            panel.prepare(layout, controls.ui, plan, engine, controls.benchmark, controls.referenceActive());
+            panel.draw(overlay, layout, controls.ui, plan, engine, view, controls.benchmark, controls.referenceActive(), logicalWidth, logicalHeight);
+            gl.Viewport(0, 0, pixelWidth, pixelHeight);
+            overlay.draw(gl);
+            const bool benchmarkDone = options.benchmark && controls.benchmark.phase == BenchmarkPhase::Done;
+            if (target || benchmarkDone || (expired && options.ticks == 0)) {
+                if (!options.capture.empty())
+                    captureFrame(gl, pixelWidth, pixelHeight, options.capture);
+                reportRun(plan, engine, view);
+                controls.pause();
+                running = false;
+            }
             SDL_GL_SwapWindow(window);
-            std::ostringstream title;
-            title << "SPH3D | N=" << plan.count << " drawn=" << view.drawn << " ticks=" << engine.steps << " t=" << engine.time << " dt=" << engine.lastDt << " GPUms=" << engine.queue.milliseconds << " rhoMax(before tick)=" << engine.lastStats.z << " paused=" << !playing;
-            if (armedSide) {
-                title << " CONFIRM ENTER N=" << makePlan(armedSide).count;
-            }
-            SDL_SetWindowTitle(window, title.str().c_str());
 #if LAB_CHECKPOINT >= 10
-            if ((playing || measuring) && !verify && !engine.queue.pending()) {
+            // [snippet submit-loop]
+            if (running && controls.wantsStep() && !options.verify && !engine.queue.pending())
                 engine.submit(gl);
-            }
+                // [/snippet submit-loop]
 #endif
             SDL_Delay(16);
         }
@@ -329,15 +252,16 @@ int main(int argc, char** argv) {
         failed = true;
     }
 
-    // Giải phóng mọi GL object trước context, rồi đóng SDL window.
+    // GL object luôn được hủy khi context còn sống.
     SDL_CaptureMouse(false);
+    controls.destroy(gl);
+    overlay.destroy(gl);
     view.destroy(gl);
     engine.destroy(gl);
     SDL_GL_DestroyContext(context);
     SDL_DestroyWindow(window);
     SDL_Quit();
-    if (failed) {
+    if (failed)
         return EXIT_FAILURE;
-    }
     return EXIT_SUCCESS;
 }

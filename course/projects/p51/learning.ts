@@ -4,7 +4,7 @@ const data = {
     "p51-l01": {
       focus: "Vẽ 64 hạt CPU trong hộp 3D, orbit và resize.",
       expected: "Nhìn khối hạt từ nhiều hướng trước khi viết solver",
-      files: ["include/model.hpp", "include/view.hpp", "src/main.cpp"],
+      files: ["include/model.hpp", "include/camera.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
           title: "Dựng vị trí theo ba chỉ số",
@@ -14,7 +14,7 @@ const data = {
         {
           title: "Đổi world sang camera",
           explanation:
-            "Dịch tâm hộp về gốc, xoay yaw/pitch rồi chiếu orthographic; không sửa position.",
+            "Đổi world sang eye space, xoay yaw/pitch và chia theo -z cho perspective; camera không sửa position.",
         },
         {
           title: "Vẽ preview nhỏ và xử lý input",
@@ -46,9 +46,14 @@ const data = {
       ],
     },
     "p51-l03": {
-      focus: "Vertex shader đọc SSBO, depth test và camera orbit.",
-      expected: "Vẽ trực tiếp từ position buffer",
-      files: ["include/view.hpp", "shaders/particle.vert", "shaders/particle.frag"],
+      focus: "Perspective, sphere impostor có normal/depth và vertex shader đọc SSBO.",
+      expected: "Vẽ hạt có chiều sâu trực tiếp từ GPU",
+      files: [
+        "include/view.hpp",
+        "shaders/camera.glsl",
+        "shaders/particle.vert",
+        "shaders/particle.frag",
+      ],
       steps: [
         {
           title: "Đọc đúng bank hiện tại",
@@ -61,8 +66,9 @@ const data = {
             "Yaw/pitch/zoom nằm trong view; depth test xử lý che khuất, resize giữ world.",
         },
         {
-          title: "Tách số hạt vẽ khỏi số hạt mô phỏng",
-          explanation: "Stride giới hạn 100.000 point sprites, không giảm N trong density/force.",
+          title: "Vẽ thể tích thay vì đĩa phẳng",
+          explanation:
+            "Tia camera cắt sphere, normal dùng cho shading và gl_FragDepth dùng độ sâu mặt cầu. uStride=1 vẽ toàn N, không giảm workload ngầm.",
         },
       ],
     },
@@ -107,7 +113,8 @@ const data = {
         },
         {
           title: "Đọc density sau batch hoàn tất",
-          explanation: "N chỉ tính density; barrier cho GPU consumer, fence mới cho phép CPU kiểm.",
+          explanation:
+            "N chỉ tính density; barrier cho GPU consumer, fence mới cho phép CPU kiểm. L chuyển water/density để quan sát, position chưa đổi.",
         },
       ],
     },
@@ -214,24 +221,32 @@ const data = {
     "p51-l10": {
       focus: "Một batch pending, poll không chặn, pause và benchmark hữu hạn.",
       expected: "Giữ ứng dụng phản hồi khi GPU đang tính",
-      files: ["include/queue.hpp", "src/main.cpp"],
+      files: [
+        "include/queue.hpp",
+        "include/gpu-error.hpp",
+        "include/benchmark.hpp",
+        "include/controls.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
           title: "Poll fence thay vì chờ đồng bộ",
-          explanation: "Timeout 0 là poll trạng thái; pending batch giữ quyền xử lý SDL input.",
+          explanation:
+            "Timeout 0 là poll trạng thái. Lỗi fence/deadline mang kiểu GpuBatchError, đi qua UI/oracle tới main để dừng mọi submit, không bị biến thành lỗi nút bấm có thể bỏ qua.",
         },
         {
           title: "Dừng submit khi pause/mất focus",
           explanation: "Pause/blur/cancel ngăn work tương lai, không preempt GPU command đã gửi.",
         },
         {
-          title: "Đo tám tick và báo simulated time",
-          explanation: "B chạy đúng 8 tick; GPU batch time và simulated seconds được báo riêng.",
+          title: "Warm-up, đo rồi dừng",
+          explanation:
+            "B reset cùng N, warm-up 30 tick, lấy 8 compute và 8 frozen-render samples; báo median/min/max. GPU pass, CPU enqueue, commit và model time có nhãn riêng.",
         },
       ],
     },
     "p51-l11": {
-      focus: "32³, 48³, 100³; memory plan và xác nhận workload.",
+      focus: "48³ là mốc chuẩn, 80³/100³ nâng cao; kiểm tài nguyên trước allocation.",
       expected: "Tăng số hạt sau khi kiểm tra tài nguyên",
       files: ["include/model.hpp", "include/storage.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
@@ -247,7 +262,7 @@ const data = {
         {
           title: "Xác nhận rồi mới cấp phát workload lớn",
           explanation:
-            "Phím 1–4 chỉ arm, Enter mới allocate; không auto-run và physics không dùng draw cap.",
+            "Final mở paused ở 110.592; phím 1–5 chỉ chọn, Enter mới allocate. Vẽ toàn N, không draw cap/stride ngầm; 512k/1M chưa mặc nhiên được nghiệm thu.",
         },
       ],
     },
@@ -264,7 +279,7 @@ const data = {
         {
           title: "So buffer trước/sau với CPU oracle",
           explanation:
-            "Verify 257/512 hạt kiểm CSR permutation/ownership, density/force và integration hai tick.",
+            "Sáu fixture kiểm initialization, tail, pressure/viscosity khác 0, scan nhiều tầng, extrema/dt CPU độc lập và integration hai tick.",
         },
         {
           title: "Chạy tests nhỏ trước workload lớn",

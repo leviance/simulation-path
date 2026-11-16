@@ -1,13 +1,13 @@
 import type { PublishedProjectEditorial } from "../../types";
 const data = {
   summary:
-    "Từ khối 64 hạt nhìn được bằng camera orbit đến WCSPH 3D chạy bằng compute shader. Giữ state trên GPU, dựng CSR grid, chọn timestep từ reduction rồi kiểm bằng CPU oracle nhỏ trước khi tăng tới một triệu hạt.",
-  duration: "20–26 giờ",
+    "Tự xây bể nước SPH 3D bằng compute shader: camera perspective, hạt có depth/shading, CSR grid và profiler từng pass. Bắt đầu với hệ nhỏ có CPU oracle, rồi chạy ít nhất 100.000 hạt thật; 500.000/một triệu là các mốc mở rộng theo phần cứng.",
+  duration: "Khoảng 26 giờ: 7 giờ đọc, 15 giờ tự viết, 4 giờ thử/kiểm; chưa tính setup và build",
   prerequisites: [
     "Project 11–15 — đổi tọa độ 3D, camera và projection",
     "Project 33–38 — SDL 3/OpenGL, shader, SSBO và compute dispatch",
-    "Project 39, 40 — reduction, prefix sum và CSR grid trên GPU",
-    "Project 45 — buffer banks, fence và giới hạn workload",
+    "Project 37/39 — reduction, prefix sum và cách tổ chức nhiều pass; CSR được giải thích lại trong bài",
+    "Tìm hàng xóm bằng grid (28 hoặc 50); bài này mở rộng indexing và stencil sang 3D",
     "Project 50 — kernel, density, pressure và artificial viscosity của SPH",
   ],
   objectives: [
@@ -25,9 +25,9 @@ const data = {
     mission:
       "Tự xây mô phỏng SPH 3D bằng C++20/SDL 3/OpenGL. Một khối hạt trong hộp phải rơi, lan ra và chạm sáu thành. Người dùng xoay camera, chạy từng tick, đo solver và tăng số hạt có kiểm soát.",
     outcome:
-      "Khối nước bằng hạt, camera orbit, màu density, tick/simulated time/GPU timer, memory plan và đường kiểm chứng CPU↔GPU nhỏ. Có thể chọn 110.592 hoặc 1.000.000 hạt nếu GPU đủ tài nguyên, không cam kết FPS.",
+      "Bể nước 3D nhìn được từ nhiều phía, ít nhất 100.000 hạt thật ở mốc chuẩn, controls và số đo trong ứng dụng. Có profiler từng pass, thống kê density/leakage và kiểm CPU↔GPU nhỏ. Không cam kết FPS; mốc 500.000/một triệu cần kiểm riêng theo phần cứng.",
     requirements: [
-      "OpenGL 4.3 core/GLSL 430; world [0,1]³, y lên; mở paused ở 8³=512 hạt. Bài đầu dùng preview CPU 4³=64 hạt.",
+      "OpenGL 4.3 core/GLSL 430; world [0,1]³, y lên. Final mở paused ở 48³=110.592 hạt; Bài 02–10 dùng 512, Bài 01 preview CPU 64.",
       "Khối ban đầu cạnh 0.4 m; spacing=0.4/side, h=1.3*spacing, support=2 h, rho0=1000 kg/m³; mass=rho0*spacing³. Tổng mass 64 kg ở các preset đầy đủ.",
       "GPU position/velocity là vec4 trong std430, mỗi record 16 byte; hai bank state; density/pressure và acceleration là buffer riêng.",
       "Cubic spline 3D có hệ số 1/(πh³), gradient 0 khi r=0 hoặc r≥2 h. Density có self.",
@@ -36,13 +36,13 @@ const data = {
       "Nếu một hạt phải duyệt hơn 4096 ứng viên, flag lỗi và không commit tick; không cắt danh sách rồi coi như solver hợp lệ.",
       "Reduction lấy vmax/amax/rhoMax/cờ lỗi tới record 16 byte; dt=min(0.0005,0.25 h/(c+vmax),0.25 sqrt(h/amax)); dt dưới 1e−6 dừng.",
       "Chỉ một batch đang pending, poll ClientWaitSync timeout 0, timeout batch 5 s; pause/blur không submit tick mới. Không dùng glFinish hoặc chờ GPU trong vòng lặp bận.",
-      "Các mức 8³/32³/48³/100³ phải qua memory/GL limits và xác nhận Enter; budget 192 MiB. Draw cap 100.000 hạt bằng stride, physics vẫn xử lý toàn N.",
-      "GPU verify chỉ chạy 257/512 hạt, có timeout 15 s trong app và timeout ngoài process; benchmark chỉ tám tick.",
+      "Các workload phải qua memory/GL limits và xác nhận chủ động; budget buffer 192 MiB. Mốc chuẩn 48³=110.592 vượt yêu cầu 100.000; không dùng hệ 512 hạt để thay nghiệm thu. Vẽ toàn N, không có draw cap/stride ngầm.",
+      "GPU verify chỉ chạy 257/512 hạt: lattice, tail, acoustic, prescribed-force, perturbed và scan nhiều workgroup; deadline 15 s. Benchmark hữu hạn gồm 30 warm-up, 8 tick compute và 8 frame render state cố định, báo median/min/max.",
     ],
     constraints: [
       "Đây là WCSPH giảng dạy, không phải nước không nén được chính xác hay một engine chất lưu hoàn chỉnh.",
       "Boundary dùng collision giải tích, không có wall samples SPH/hydrostatic correction, nên density sát thành/mặt thoáng bị thiếu support. Báo sai số thật, không gọi nó là mô hình nước đã hội tụ.",
-      "Chỉ vẽ point sprites, chưa có surface reconstruction, lighting mặt nước, surface tension hoặc solid hai chiều.",
+      "Sphere impostor có perspective, normal, shading và gl_FragDepth theo mặt cầu. Đây không phải surface reconstruction liên tục, quang học nước chính xác, surface tension hoặc solid hai chiều.",
       "Một triệu hạt là lựa chọn workload, không phải lời hứa 60 FPS hoặc đã chạy kiểm chứng triệu hạt trên mọi GPU.",
       "Canvas 2D chạy oracle CPU nhỏ tối đa 216 hạt, không WebGL/WebGPU/WASM. Nó dạy công thức và kế hoạch tài nguyên, không giả làm GPU benchmark.",
       "OpenGL 4.3 không được hỗ trợ bởi driver OpenGL tích hợp trên macOS; dùng môi trường có driver phù hợp. CTest thuần không cần GPU/window.",
@@ -54,7 +54,8 @@ const data = {
       "Pair pressure force đối nhau và viscosity power không dương; GPU density/pressure/acceleration khớp oracle với tolerance được ghi trong validation.hpp.",
       "State mới khớp semi-implicit Euler/collision từ state cũ; không swap trước fence.",
       "Acoustic và force timestep có ca chủ động nhỏ hơn maxDt; NaN/Infinity và dt quá nhỏ bị từ chối.",
-      "GPU verify 257/512 hạt kiểm tail, permutation CSR và hai tick. CTest chạy cả Debug/Release.",
+      "GPU verify 257/512 hạt kiểm tail, permutation CSR, pressure/viscosity khác 0, scan nhiều workgroup và hai tick. CTest chạy cả Debug/Release.",
+      "Cảnh dam-break 110.592 hạt có allocated/alive/updated/drawn khớp; density/dt/leakage và profiler từng pass được ghi riêng. UI sạch/debug, camera và benchmark có điểm dừng.",
       "Chạy/dừng/cancel/reset, camera và blur hoạt động; không tự tăng N, benchmark không chạy vô hạn.",
       "Starter,12 checkpoint,final,tests và shader nằm trong ZIP độc lập; chỉ authored source được đưa vào Git.",
     ],
@@ -81,8 +82,8 @@ const data = {
     {
       id: "p51-l03",
       slug: "03-ve-truc-tiep-tu-gpu",
-      title: "Vẽ trực tiếp từ position buffer",
-      summary: "Vertex shader đọc SSBO, depth test và camera orbit.",
+      title: "Vẽ hạt có chiều sâu trực tiếp từ GPU",
+      summary: "Vertex shader đọc SSBO; perspective, sphere impostor và depth của mặt cầu.",
       order: 3,
       estimatedMinutes: 90,
       demoId: "sph-water-gpu",
@@ -154,7 +155,7 @@ const data = {
       id: "p51-l11",
       slug: "11-tang-quy-mo",
       title: "Tăng số hạt sau khi kiểm tra tài nguyên",
-      summary: "32³, 48³, 100³; memory plan và xác nhận workload.",
+      summary: "Mốc chuẩn 48³; 80³/100³ nâng cao, memory plan và xác nhận workload.",
       order: 11,
       estimatedMinutes: 100,
       demoId: "sph-water-gpu",

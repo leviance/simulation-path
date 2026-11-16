@@ -9,7 +9,9 @@ namespace water3 {
 // Initialization already supplied rho=1000; acceleration is prescribed test input.
 inline void submitForceFixture(lab::GlApi& gl, Engine& engine) {
     std::vector<Float4> acceleration(engine.storage.plan.count, Float4{0, 1e6F, 0, 0});
+    engine.startSubmitTimer();
     engine.queue.begin(gl);
+    beginDiagnostics(gl, engine.programs, engine.storage);
     gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, engine.storage.acceleration);
     gl.BufferSubData(GL_SHADER_STORAGE_BUFFER, 0, acceleration.size() * sizeof(Float4), acceleration.data());
     engine.statsRoot = reduceStats(gl, engine.programs, engine.storage, engine.current, engine.settings);
@@ -21,8 +23,11 @@ inline void submitForceFixture(lab::GlApi& gl, Engine& engine) {
     bind(gl, 3, engine.storage.positions[1 - engine.current]);
     bind(gl, 4, engine.storage.velocities[1 - engine.current]);
     bind(gl, 5, engine.statsRoot);
+    bind(gl, 6, engine.storage.diagnostics);
     dispatch(gl, engine.storage.plan.count);
+    finishDiagnostics(gl, engine.programs, engine.storage, 1 - engine.current);
     engine.queue.end(gl);
+    engine.finishSubmitTimer();
 }
 
 inline bool validateForceFixture(lab::GlApi& gl, const Engine& engine, const std::vector<Float4>& oldPosition, const std::vector<Float4>& oldVelocity) {

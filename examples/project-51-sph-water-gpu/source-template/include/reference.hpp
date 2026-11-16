@@ -34,11 +34,13 @@ inline Reference evaluate(const Plan& plan, const std::vector<Float4>& positions
         if (!finite(xyz(p))) {
             throw std::invalid_argument("Nonfinite position");
         }
+        // [snippet reference-density]
         double rho = 0;
         for (const auto other : positions) {
             rho += plan.mass * kernel(length(subtract(xyz(p), xyz(other))), plan.h);
         }
         report.density.push_back(rho);
+        // [/snippet reference-density]
         double pressure = 0;
 #if LAB_CHECKPOINT >= 6
         pressure = std::max(0.0, settings.soundSpeed * settings.soundSpeed * (rho - restDensity));
@@ -69,6 +71,7 @@ inline Reference evaluate(const Plan& plan, const std::vector<Float4>& positions
 }
 #endif
 #if LAB_CHECKPOINT >= 7
+// [snippet boundary-collision]
 inline void collide(double& position, double& velocity, double radius) {
     if (position < radius) {
         position = radius;
@@ -84,6 +87,9 @@ inline void collide(double& position, double& velocity, double radius) {
     }
 }
 
+// [/snippet boundary-collision]
+
+// [snippet reference-integration]
 inline void integrate(Vec3& position, Vec3& velocity, Vec3 acceleration, double dt, double radius) {
     velocity.x += dt * acceleration.x;
     velocity.y += dt * acceleration.y;
@@ -95,5 +101,7 @@ inline void integrate(Vec3& position, Vec3& velocity, Vec3 acceleration, double 
     collide(position.y, velocity.y, radius);
     collide(position.z, velocity.z, radius);
 }
+
+// [/snippet reference-integration]
 #endif
 } // namespace water3

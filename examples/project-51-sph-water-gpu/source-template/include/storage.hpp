@@ -1,4 +1,5 @@
 #pragma once
+#include "diagnostics.hpp"
 #include "model.hpp"
 #include "program.hpp"
 #include <string>
@@ -21,6 +22,7 @@ inline GLuint allocate(lab::GlApi& gl, std::uint64_t bytes) {
     return buffer;
 }
 
+// [snippet check-limits]
 inline void checkLimits(lab::GlApi& gl, const Plan& plan) {
     GLint64 block = 0;
     GLint bindings = 0, computeBlocks = 0, vertexBlocks = 0, invocations = 0, groupSize = 0, groupCount = 0, shared = 0;
@@ -33,10 +35,12 @@ inline void checkLimits(lab::GlApi& gl, const Plan& plan) {
     gl.GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 0, &groupCount);
     gl.GetIntegerv(GL_MAX_COMPUTE_SHARED_MEMORY_SIZE, &shared);
     const auto groups = ceilDivide(std::max(plan.count, plan.cells), 256);
-    if (block <= 0 || plan.largestBlock > static_cast<std::uint64_t>(block) || bindings < 7 || computeBlocks < 7 || vertexBlocks < 2 || invocations < 256 || groupSize < 256 || groupCount < static_cast<GLint>(groups) || shared < 4096 || plan.residentBytes > 192ULL * 1024 * 1024) {
+    if (block <= 0 || plan.largestBlock > static_cast<std::uint64_t>(block) || bindings < 7 || computeBlocks < 7 || vertexBlocks < 3 || invocations < 256 || groupSize < 256 || groupCount < static_cast<GLint>(groups) || shared < 4096 || plan.residentBytes > 192ULL * 1024 * 1024) {
         throw std::runtime_error("Workload exceeds GPU limits or 192 MiB teaching budget");
     }
 }
+
+// [/snippet check-limits]
 
 struct ScanBuffers {
     GLuint output = 0;
@@ -50,6 +54,7 @@ struct Storage {
     std::array<GLuint, 2> positions{};
     std::array<GLuint, 2> velocities{};
     GLuint density = 0, acceleration = 0, counts = 0, offsets = 0, cursors = 0, indices = 0;
+    GLuint diagnostics = 0;
     std::array<GLuint, 2> scratch{};
     std::vector<ScanBuffers> scan;
 
@@ -57,8 +62,8 @@ struct Storage {
         gl.DeleteBuffers(2, positions.data());
         gl.DeleteBuffers(2, velocities.data());
         gl.DeleteBuffers(2, scratch.data());
-        const GLuint buffers[] = {density, acceleration, counts, offsets, cursors, indices};
-        gl.DeleteBuffers(6, buffers);
+        const GLuint buffers[] = {density, acceleration, counts, offsets, cursors, indices, diagnostics};
+        gl.DeleteBuffers(7, buffers);
         for (const auto& level : scan) {
             if (level.ownsOutput) {
                 gl.DeleteBuffers(1, &level.output);
@@ -72,6 +77,7 @@ struct Storage {
         checkLimits(gl, requested);
         plan = requested;
         try {
+            // [snippet state-allocation]
             for (auto& buffer : positions) {
                 buffer = allocate(gl, 16ULL * plan.count);
             }
@@ -80,10 +86,12 @@ struct Storage {
             }
             density = allocate(gl, 16ULL * plan.count);
             acceleration = allocate(gl, 16ULL * plan.count);
+            // [/snippet state-allocation]
             counts = allocate(gl, 4ULL * plan.cells);
             offsets = allocate(gl, 4ULL * plan.cells);
             cursors = allocate(gl, 4ULL * plan.cells);
             indices = allocate(gl, 4ULL * plan.count);
+            diagnostics = allocate(gl, sizeof(Diagnostics));
             for (auto& buffer : scratch) {
                 buffer = allocate(gl, 16ULL * ceilDivide(plan.count, 256));
             }
@@ -113,6 +121,16 @@ inline std::vector<Value> readVector(lab::GlApi& gl, GLuint buffer, std::uint32_
     std::vector<Value> result(count);
     gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
     gl.GetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(count * sizeof(Value)), result.data());
+    return result;
+}
+
+// Grid nhiều cell hơn số hạt; không nới guard readback position/velocity lớn.
+inline std::vector<std::uint32_t> readGridWords(lab::GlApi& gl, GLuint buffer, const Plan& plan) {
+    if (plan.count > 512 || plan.cells > 32768)
+        throw std::runtime_error("Grid oracle readback budget exceeded");
+    std::vector<std::uint32_t> result(plan.cells);
+    gl.BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+    gl.GetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(result.size() * sizeof(std::uint32_t)), result.data());
     return result;
 }
 } // namespace water3

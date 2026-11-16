@@ -24,8 +24,14 @@ void main() {
     uint blockBase = gl_WorkGroupID.x * 512u;
     uint first = blockBase + lane;
     uint second = first + 256u;
-    temporary[lane] = first < uint(uElementCount) ? inputValues[first] : 0u;
-    temporary[lane + 256u] = second < uint(uElementCount) ? inputValues[second] : 0u;
+    temporary[lane] = 0u;
+    temporary[lane + 256u] = 0u;
+    if (first < uint(uElementCount)) {
+        temporary[lane] = inputValues[first];
+    }
+    if (second < uint(uElementCount)) {
+        temporary[lane + 256u] = inputValues[second];
+    }
     barrier();
 
     // Upsweep đặt tổng của block ở root.

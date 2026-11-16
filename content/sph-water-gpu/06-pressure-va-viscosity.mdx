@@ -35,6 +35,7 @@ Bài này chưa thêm gravity hay cập nhật position. Các cảnh hai hạt l
 
 Trong density.comp:
 
+{/* snippet shaders/density.comp#pressure-eos */}
 ```glsl title="shaders/density.comp — GLSL EOS"
 pressure = max(0.0, uC * uC * (rho - 1000.0));
 ```
@@ -45,6 +46,7 @@ Thử tính trước: với c=12 và rho=1100, ta có p=12²*(1100−1000)=14400
 
 kernel.hpp dùng cùng thứ tự i−j cho hai vector:
 
+{/* snippet include/kernel.hpp#artificial-viscosity */}
 ```cpp title="include/kernel.hpp — artificial viscosity"
 inline double viscosity(Vec3 d, Vec3 v, double rhoA, double rhoB, double h, double c, double alpha) {
     const double approach = dot(d, v);
@@ -62,9 +64,11 @@ inline double viscosity(Vec3 d, Vec3 v, double rhoA, double rhoB, double h, doub
 
 force.comp gọi pairAcceleration:
 
+{/* snippet shaders/force.comp#pair-acceleration */}
 ```glsl title="shaders/force.comp — GLSL lực pressure và viscosity"
 vec3 pairAcceleration(uint i, uint j) {
-    if (i == j) return vec3(0.0);
+    if (i == j)
+        return vec3(0.0);
     vec3 d = positions[i].xyz - positions[j].xyz;
     float rhoA = density[i].x, rhoB = density[j].x;
     float coefficient = density[i].y / (rhoA * rhoA) + density[j].y / (rhoB * rhoB);
@@ -73,11 +77,31 @@ vec3 pairAcceleration(uint i, uint j) {
 }
 ```
 
-Self giữ trong density nhưng bỏ trong force. Force program chỉ được dispatch sau density barrier; mọi invocation đọc cùng bank position/velocity và density đã hoàn tất.
+Self giữ trong density nhưng bỏ trong force. Hàm `main` của force shader cộng `pairAcceleration(i,j)` cho mọi j, rồi ghi `vec4(a,error)` vào `acceleration[i]`. Nó chưa đổi position hoặc velocity.
+
+### Bước 4 — Nối force pass sau density
+
+Thêm khối này vào `Engine::submit`, ngay sau density pass và barrier. So binding với đầu `force.comp`: position ở 0, velocity ở 1, density ở 2 và acceleration output ở 3. Các binding grid 4–6 sẽ dùng từ Bài 08.
+
+{/* snippet include/engine.hpp#force-pass */}
+```cpp title="include/engine.hpp — dispatch force từ cùng state cũ"
+use(gl, programs.force, storage.plan, settings, grid);
+bind(gl, 0, storage.positions[current]);
+bind(gl, 1, storage.velocities[current]);
+bind(gl, 2, storage.density);
+bind(gl, 3, storage.acceleration);
+bind(gl, 4, storage.counts);
+bind(gl, 5, storage.offsets);
+bind(gl, 6, storage.indices);
+dispatch(gl, storage.plan.count);
+queue.mark(gl, "Forces");
+```
+
+Mỗi invocation chỉ ghi acceleration của chính nó; không cộng lực vào acceleration[j] bằng atomic. Đổi lại, cặp i/j được tính hai lần. Cách này dễ kiểm hơn và tránh tranh chấp ghi.
 
 ## Ghép các phần lại
 
-Checkpoint 6: N tính density→pressure→force nhưng chưa đổi position. F chọn c, Q chọn alpha. Canvas hiển thị acceleration của state hiện tại; source có đường oracle nhỏ ở bài cuối.
+Checkpoint 6: N tính density→pressure→force nhưng chưa đổi position. F chọn c, Q chọn alpha; bấm N lại sau khi đổi tham số rồi dùng L xem pressure/speed. Khối lattice đứng yên có thể cho pressure gần 0, vì vậy hãy dùng cảnh nén và hai hạt trên Canvas để thấy rõ hiệu ứng. Bài cuối có fixture `--verify-perturbed` nén lattice và thêm vận tốc tương đối, kiểm pressure/viscosity không bằng 0 trên GPU thật; không dùng một cảnh lực gần 0 làm bằng chứng duy nhất.
 
 ## Thử làm sai để hiểu đúng
 

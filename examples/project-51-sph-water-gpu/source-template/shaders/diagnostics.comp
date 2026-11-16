@@ -1,0 +1,48 @@
+#version 430 core
+#include "common.glsl"
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer Positions {
+    vec4 positions[];
+};
+
+layout(std430, binding = 1) readonly buffer Density {
+    vec4 density[];
+};
+
+layout(std430, binding = 2) buffer Diagnostics {
+    uint counters[];
+};
+
+uniform uint uPhase;
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= uCount)
+        return;
+    if (uPhase == 0u) {
+        counters[id] = 0u;
+        if (id == 4u)
+            counters[id] = floatBitsToUint(3.402823e38);
+        return;
+    }
+    // Counter trên GPU chứng minh tail invocation cũng được xử lý.
+    if (gl_LocalInvocationID.x == 0u) {
+        atomicAdd(counters[1], min(256u, uCount - gl_WorkGroupID.x * 256u));
+    }
+    vec3 p = positions[id].xyz;
+    float rho = density[id].x;
+    if (bad(p) || isnan(rho) || isinf(rho) || rho <= 0.0 || density[id].w > 0.0) {
+        atomicAdd(counters[3], 1u);
+        return;
+    }
+    float radius = uSpacing * 0.5;
+    if (any(lessThan(p, vec3(radius - 1e-7))) || any(greaterThan(p, vec3(1.0 - radius + 1e-7)))) {
+        atomicAdd(counters[2], 1u);
+    }
+    // Bit pattern giữ thứ tự với float dương; không dùng float atomics ngoài core 4.3.
+    atomicMin(counters[4], floatBitsToUint(rho));
+    atomicMax(counters[5], floatBitsToUint(rho));
+    uint bin = uint(clamp(floor((rho / 1000.0) * 64.0 / 1.6), 0.0, 63.0));
+    atomicAdd(counters[8u + bin], 1u);
+}

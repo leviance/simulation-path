@@ -272,6 +272,29 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
     workload:
       "Bản chuẩn 5.000 hạt; 1.000 để học, 10.000 mở rộng. Capacity 12.000, dt≤0,001 s; không hạ dữ liệu để giả FPS.",
   },
+  "51": {
+    previousTitle: "Khối nước 3D trên GPU: SPH hàng trăm nghìn tới hàng triệu hạt",
+    replacement: {
+      slug: "sph-water-gpu",
+    },
+    summary: "Dựng bể nước SPH 3D thật trên GPU, nhìn dòng chảy từ nhiều phía và đo từng pass.",
+    outcome:
+      "Ứng dụng C++/SDL3/OpenGL có sphere impostor với depth/shading, camera perspective, profiler và thống kê mô hình tách riêng.",
+    question:
+      "Làm sao hàng trăm nghìn hạt vừa tạo thành khối nước, vừa được tính lực và vẽ mà không đưa state về CPU mỗi frame?",
+    interactions: [
+      "Orbit/zoom, pause/step/reset và chọn N.",
+      "Chuyển lớp quan sát sạch/density/pressure/speed, xem profiler và kiểm ca chuẩn nhỏ.",
+    ],
+    concepts: [
+      "Kernel SPH 3D, SSBO/std430, density/force/integration và boundary.",
+      "CSR grid, scan/reduction nhiều workgroup, barrier/fence và giới hạn tài nguyên.",
+    ],
+    prerequisites:
+      "SPH 2D ở 50, nền camera và OpenGL/compute; giải thích lại kernel/đơn vị 3D và dữ liệu qua các pass tại chỗ.",
+    workload:
+      "Tối thiểu 100.000 hạt thật; 500.000/một triệu là mở rộng theo phần cứng, không dùng oracle nhỏ để thay mốc nghiệm thu.",
+  },
 };
 
 export const rebuildRevisions = Object.fromEntries(

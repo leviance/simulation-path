@@ -16,8 +16,9 @@ const data = {
       description: "Layout vec4/std430 và initialization shader tạo 512 hạt.",
     },
     "sph3-3": {
-      title: "Vẽ trực tiếp từ position buffer",
-      description: "Vertex shader đọc SSBO, depth test và camera orbit.",
+      title: "Vẽ hạt có chiều sâu trực tiếp từ GPU",
+      description:
+        "Perspective, sphere impostor và depth; Canvas chỉ minh họa phép chiếu trên CPU.",
     },
     "sph3-4": {
       title: "Đổi kernel từ diện tích sang thể tích",
@@ -49,7 +50,7 @@ const data = {
     },
     "sph3-11": {
       title: "Tăng số hạt sau khi kiểm tra tài nguyên",
-      description: "32³, 48³, 100³; memory plan và xác nhận workload.",
+      description: "Dự toán 48³/80³/100³; chỉ bản C++ cấp phát và chạy GPU thật.",
     },
     "sph3-12": {
       title: "Kiểm chứng CPU↔GPU và chạy khối nước hoàn chỉnh",

@@ -1,75 +1,101 @@
 # Project 51 — Khối nước 3D trên GPU
 
-Tự xây WCSPH 3D bằng C++20/SDL 3/OpenGL 4.3, từ preview 64 hạt đến solver giữ state trên GPU. Học từ ca nhỏ có oracle, không bắt đầu bằng benchmark triệu hạt. Dự kiến 20–26 giờ; thử challenge 180–240 phút trước khi xem lời giải.
+Tự xây một bể nước WCSPH 3D bằng C++20/SDL3/OpenGL 4.3. Khối nước cạnh 0,4 m nằm sát đáy rồi lan ra khi chạy; orbit/zoom quanh thể tích, đổi density/pressure/speed view và mở profiler từng pass. Final mở **paused ở 110.592 hạt thật**, vẽ toàn N bằng sphere impostor có normal, perspective và depth mặt cầu. 512.000/một triệu là mốc nâng cao tùy phần cứng, không phải lời hứa FPS hoặc đã nghiệm thu.
 
-## Lộ trình 12 bài
+Giáo trình đi từ preview 64 hạt và oracle 512 hạt tới mốc chuẩn ≥100.000. Dự kiến khoảng 26 giờ, chưa tính setup/build. Thử tự viết 180–240 phút trước khi xem lời giải. Nên biết camera/projection (11–15), SDL3/OpenGL/compute (33–38), reduction/prefix sum (37/39), grid (28) và SPH (50). Không cần cài project trước để build gói này.
 
-1. Khối 64 hạt CPU và camera orbit.
+## Lộ trình và mã đầy đủ
+
+1. Khối 64 điểm CPU, camera perspective, orbit/zoom/resize.
 2. Float4/std430, SSBO và initialization 512 hạt trên GPU.
-3. Vertex shader đọc SSBO, depth test, point sprites.
-4. Kernel chuẩn hóa 3D, mass theo thể tích và gradient.
+3. Vertex shader đọc SSBO, sphere impostor và gl_FragDepth.
+4. Kernel 3D chuẩn hóa, mass theo thể tích, gradient.
 5. Density all-pairs có self, một invocation/hạt.
 6. EOS, pressure và artificial viscosity từ state cũ.
-7. Gravity, integration, sáu thành và ping-pong.
-8. Clear/count→exclusive scan→scatter,27 cell và oracle.
-9. Reduction extrema/error và adaptive dt trên GPU.
-10. Fence/poll không chặn, cancel/pause và benchmark 8 tick.
-11. Memory plan, GPU limits và xác nhận 512/32.768/110.592/1.000.000 hạt.
-12. CTest, GPU verify 257/512 hạt và source hoàn chỉnh.
+7. Gravity, semi-implicit Euler, sáu thành, ping-pong.
+8. GPU clear/count → scan nhiều tầng → scatter, duyệt 27 cell.
+9. GPU reduction extrema/error, adaptive dt và diagnostics.
+10. Fence/poll không chặn, UI pause/reset và benchmark hữu hạn.
+11. Memory/GL limits, xác nhận N và chạy mốc 110.592.
+12. CTest, sáu fixture CPU↔GPU, bản hoàn chỉnh và cách nghiệm thu.
 
-Nên học Project 11–15,33–40,45 và 50 trước. Không cần cài project trước để build ZIP này. source-template là nguồn biên soạn; starter/checkpoints/final được sinh tự động. ZIP chứa mọi header/shader cần thiết, không cần website để chạy.
+`source-template/` là nguồn biên soạn. `starter/`, `checkpoints/01..12/` và `final/` là các snapshot độc lập, không sửa template để học. Chọn đúng target để chạy đúng bài; mỗi target đi kèm bộ shader của nó. `include/` tách model/kernel/reference, storage/passes/engine, queue/profiler, view/camera và UI/controls. Không dùng ImGui, WebView hoặc thư viện SPH để thay lõi thuật toán. ZIP chứa toàn bộ mã, tests và shaders; không cần Node.js hay website để chạy.
 
-## Build/run
+## Build và chạy
 
-Compiler C++20, CMake 3.24+, SDL 3.4.8 khóa checksum qua FetchContent. Windows dùng VS 2022 Desktop development with C++; runtime cần driverOpenGL 4.3/GLSL 430. macOS native OpenGL tối đa 4.1 không phù hợp; CTest thuần vẫn không cần GPU/window.
+CMake 3.24+, compiler C++20, driver OpenGL 4.3/GLSL 430. Windows: Visual Studio 2022 với Desktop development with C++. CMake khóa SDL **3.4.8**/checksum và dùng FetchContent nếu chưa có SDL; cần mạng ở lần configure đầu. Link qua `SDL3::SDL3`. OpenGL của macOS không đạt 4.3; không coi README đa nền tảng là bằng chứng đã kiểm runtime trên Linux/macOS.
 
 ```bash
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
+cmake --build build --config Debug --parallel 1
 ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
+cmake --build build --config Release --parallel 1
 ctest --test-dir build -C Release --output-on-failure --timeout 20
+build/Release/project_51_final.exe
 ```
 
-Windows chạy build/Debug/project_51_final.exe. Với generator single-config, dùng build directory riêng và CMAKE_BUILD_TYPE; executable nằm trực tiếp trong build directory. Shader lấy từ snapshot tương ứng qua COURSE_SHADER_DIRECTORY. Không trộn shader của hai checkpoint.
+Mặc định không bật `BUILD_CHECKPOINTS`: build final và tests. Khi học, ví dụ build `--target project_51_checkpoint_5`, executable nằm cạnh final. Starter target là `project_51_starter`. Với generator single-config, configure bằng `-DCMAKE_BUILD_TYPE=Release` và dùng build directory riêng; executable không có thư mục `Release/`. CTest thuần không cần window/GPU; chương trình tương tác có yêu cầu driver thật.
 
-GPU smoke tests chỉ dùng hệ nhỏ, không chạy benchmark lớn tự động:
+## Điều khiển native
+
+- Kéo chuột trái trong viewport để orbit, wheel để zoom; arrows đổi yaw/pitch, Home đặt lại. Camera không sửa state SPH.
+- Space/nút Run: chạy hoặc pause từ bài 10. N/Step: pause và gửi một tick khi idle (bài 5–6 chỉ density/force, chưa tích phân).
+- R/Reset: pause, đợi batch hiện tại xong rồi reset cùng N và tham số. C/Cancel: dừng work tương lai, hủy lựa chọn N/benchmark/oracle phụ; không preempt command GPU đã gửi.
+- F1/Debug: sạch ↔ số đo. Wheel trong panel hoặc PgUp/PgDn cuộn số đo, không zoom scene.
+- L/View: water/density (từ bài 5), thêm pressure/speed/unlit (từ bài 6).
+- F: sound speed 8/12/20 m/s. Q: alpha 0/0.15/0.3, đổi khi idle.
+- G: grid/all-pairs từ bài 8, all-pairs chỉ cho N≤512.
+- Phím 1–5/nút preset: 512/32.768/110.592/512.000/1.000.000. Chỉ chọn và pause, **Enter/Apply mới cấp phát**; C hủy. Đổi N không tự chạy.
+- B/Bench: reset cùng N, CSR và camera/mode chuẩn; 30 warm-up + 8 compute + 8 frozen-render samples, deadline 20 s. C/blur hủy phần chưa gửi.
+- V/Verify: oracle perturbed 512 hạt ở engine phụ; pause nhưng không đổi N/time/state scene chính.
+- Blur/minimize pause, thả capture và không tự chạy lại. Esc đóng ứng dụng.
+
+## Kiểm đúng trước khi đo nhanh
+
+Chạy từng lệnh riêng, không chồng nhiều job GPU:
 
 ```bash
-build/Debug/project_51_final.exe --verify-gpu
-build/Debug/project_51_final.exe --verify-gpu --tail-case
-build/Debug/project_51_final.exe --verify-acoustic
-build/Debug/project_51_final.exe --verify-force
+build/Release/project_51_final.exe --verify-gpu
+build/Release/project_51_final.exe --verify-gpu --tail-case
+build/Release/project_51_final.exe --verify-acoustic
+build/Release/project_51_final.exe --verify-force
+build/Release/project_51_final.exe --verify-perturbed
+build/Release/project_51_final.exe --verify-scan
 ```
 
-Chạy từng lệnh riêng với hard timeout ngoài process 30 s; không tự chạy lại nếu timeout. Verify có total timeout 15 s trong app, mỗi batch 5 s. Hai fixture mới chỉ dùng 512 hạt. Acoustic dùng vận tốc lớn trong pipeline SPH; force dùng gia tốc (0,10⁶,0) biết trước và chỉ kiểm reduction/integration, cố ý bỏ qua force SPH. Lattice/tail vẫn kiểm toàn pipeline. Chúng không phải benchmark. CPU tự tính extrema và dt trước khi so integration, không dùng GPU dt làm đáp án. Không thể dùng timeout để preempt một GPU command đã gửi hoặc bảo đảm driver không treo. Không tự động gửi triệu hạt khi mở app/test.
+Lattice/tail kiểm toàn pipeline với 512/257 hạt; perturbed dùng lattice nén và relative velocity để pressure/viscosity không bằng 0. Scan dùng 257 hạt, 4.096 cell, tám workgroup ở tầng đầu và hai tầng scan. Acoustic buộc acoustic bound chi phối. Prescribed-force dùng gia tốc biết trước (0,10⁶,0), chỉ kiểm reduction/integration, không chứng minh công thức lực SPH.
 
-## Điều khiển
+Verifier kiểm initialization, CSR ranges/ownership/permutation, density/pressure/acceleration, extrema/dt CPU độc lập và integration qua hai tick. Tolerance theo đơn vị nằm trong `validation.hpp`; nonfinite luôn fail. Deadline verifier 15 s, mỗi batch 5 s; tự động hóa cần thêm process timeout khoảng 30 s và dọn descendants. Không tự lặp một job timeout hoặc coi timeout là PASS. Các ca nhỏ không chứng nhận độ hội tụ của nước hay hiệu năng triệu hạt.
 
-- Drag/orbit, wheel/zoom, arrows/yaw-pitch; Home reset camera. Camera không sửa physics.
-- R reset khi idle; N density/force từ Bài 05, một tick từ Bài 07.
-- F sound speed 8/12/20; Q alpha 0/0.15/0.3, chỉ đổi khi idle.
-- G grid/all-pairs từ Bài 08, chỉ N≤512 được all-pairs.
-- Space run/pause từ Bài 10; C hủy tick/benchmark chưa gửi; B benchmark đúng 8 tick.
-- Phím 1–4 từ Bài 11:512/32.768/110.592/1.000.000 hạt. App dừng, in N/MiB rồi yêu cầu Enter. C hủy. Lựa chọn lớn không tự chạy.
-- Blur/minimize dừng submit, hủy capture. Esc thoát.
+## Kiểm quy mô và profiler
 
-Một batch pending; event loop poll timeout 0. Không enqueue render phía sau batch dài. Title đọc N/drawn/tick/time/dt/GPUms/rhoMax của state trước tick gần nhất. Thời gian mô phỏng không bằng wall-clock: đây là chế độ theo throughput/work budget, không bù thời gian đã bỏ qua.
+```bash
+build/Release/project_51_final.exe --side=48 --scale-check --ticks=1200 --seconds=55 --debug
+build/Release/project_51_final.exe --side=48 --benchmark --seconds=25 --debug
+```
 
-## Mô hình và giới hạn
+Chạy lần lượt. Mỗi lệnh có thời gian hữu hạn; thiếu ticks/mẫu trước deadline là incomplete. `--hidden` chạy không hiện cửa sổ; `--capture=output.bmp` lưu frame cuối khi có `--seconds`. Không tự gửi workload nâng cao. Dù driver vẫn có thể treo trước deadline của CPU, không có busy wait, `glFinish` hoặc queue không giới hạn để làm trầm trọng thêm rủi ro.
 
-World [0,1]³, khối cạnh 0.4 m; spacing=0.4/side, h=1.3*spacing, support 2 h, rho0=1000 kg/m³, m=rho0 spacing³. Preset đầy đủ giữ 64 kg. Cubic spline 3D có 1/(πh³); pressure=max(0,c²(rho−rho0)). Monaghan beta 0, alpha là tiêu tán số, không phải độ nhớt thực.
+Ghi máy/GPU/driver, Release, N và config. Benchmark dùng cùng lattice/tham số, warm-up 30 tick, lấy 8 tick **liên tiếp** (state vẫn tiến), rồi 8 scene renders ở state cuối đóng băng. Báo median/min/max từng GPU pass và toàn compute batch; CPU enqueue và submit→commit là số riêng. Scene render timer không gồm UI/swap; không dùng nghịch đảo pass time làm FPS ứng dụng. Không có phép đo speedup CPU–GPU từ Canvas.
 
-Boundary chỉ collision sáu thành, restitution 0.1, không wall samples/hydrostatic correction. Density sát thành/mặt thoáng bị thiếu support; báo rho thật. Không surface tension, reconstruction mặt nước hoặc tương tác solid hai chiều. Màu dùng density trước integration; không là chứng nhận độ chính xác chất lưu.
+Counters `allocated/alive/updated/drawn` phải khớp N ở ca hợp lệ. Density là đầu tick cuối, leakage/invalid là sau integration; không gộp với profiler. Histogram 64 bin trên rho/rho0∈[0,1.6], median/p95 là tâm bin xấp xỉ. Fixed readback 16+288 byte thay vì tải cả mảng hạt.
 
-CSR không fixed cell capacity. Mỗi hạt quá 4096 ứng viên thì flag lỗi và không commit tick; không dùng force truncated. Reduction chọn dt=min(0.0005,0.25 h/(c+vmax),0.25 sqrt(h/amax)). Nonfinite hoặc dt < 1e−6 dừng/báo lỗi.
+Lỗi fence/deadline là `GpuBatchError`, không phải lỗi thao tác có thể bỏ qua. Cả Controls lẫn oracle phụ phải ném tiếp lỗi này tới main để ứng dụng dừng submit, dọn tài nguyên và thoát thất bại. Chỉ các lỗi kiểm chứng dữ liệu đã hoàn tất mới được hiển thị trong panel rồi trả quyền cho người dùng; không nuốt timeout GPU để tiếp tục chạy scene chính.
 
-Plan tính mọi buffer, kiểm SSBO/workgroup/shared limits và budget 192 MiB, kể cả peak khi chuyển workload. Reset cùng N reuse allocation. Draw dùng stride tối đa 100.000 điểm; physics vẫn toàn N. Một triệu là workload được hỗ trợ có điều kiện, không cam kết 60 FPS hoặc đã kiểm trên mọi GPU.
+## Mô hình, ngân sách và giới hạn
 
-Canvas web là oracleCPU double tối đa 216 hạt, không WebGL/WebGPU/WASM hoặc GPU benchmark. Header GL loader/program/scan trong ZIP dùng scaffold đã học ở các project trước để mỗi ZIP tự build; công thức SPH được chia riêng, không nhân bản kernel trong density/force shader.
+World [0,1]³, y lên. Khối cạnh 0,4 m, x offset .08, đáy y=0, z offset .3. Spacing=.4/side, h=1.3 spacing, support=2h, rho0=1000 kg/m³, m=rho0 spacing³, tổng mass 64 kg cho preset đầy đủ. Kernel cubic 3D có 1/(πh³); pressure=max(0,c²(rho−rho0)) Pa. Monaghan beta=0, alpha là tiêu tán số, không phải độ nhớt thực. Gravity=9.81 m/s²; collision sáu mặt với restitution .1, chỉ phản xạ normal hướng ra.
 
-## Kiểm chứng
+Boundary không có wall samples/hydrostatic correction, nên density sát thành/mặt thoáng thiếu support. Không clamp rho để che lỗi. Không surface tension, surface reconstruction, refraction hoặc solid hai chiều. Bán kính vẽ .65 spacing khác khoảng cách tâm tới thành .5 spacing và support 2h.
 
-CTest giữ checks trong Release, kiểm volume normalization/gradient, mass/layout, pair power, collision và hai bound dt chủ động. GPU verify 257/512 hạt kiểm CSR ranges/ownership/permutation, density/pressure/acceleration và integration hai tick với CPU double. Tolerance ghi trong validation.hpp, nonfinite luôn fail. Bộ kiểm nhỏ không chứng nhận độ hội tụ, hydrostatic correctness hoặc tốc độ của workload triệu hạt.
+CSR không fixed cell capacity. Quá 4096 ứng viên/hạt thì flag lỗi, không commit tick; không cắt lực ngầm. dt=min(.0005,.25h/(c+vmax),.25sqrt(h/max(amax,1e−12))), dưới 1e−6 dừng. Một batch pending, fence poll timeout 0; pause chỉ ngăn submit tương lai, không thu hồi compute đã gửi.
 
-Đối chiếu [PySPH kernels](https://pysph.readthedocs.io/en/main/reference/kernels.html), [SDL GL context](https://wiki.libsdl.org/SDL3/SDL_GL_CreateContext), [Khronos memory barrier](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glMemoryBarrier.xhtml).
+Plan tính các bank, CSR, scan, scratch và diagnostics; kiểm SSBO/workgroups/shared memory và buffer budget 192 MiB, cả peak cũ+mới khi đổi N. Đây không phải phép đo VRAM rảnh hay tổng bộ nhớ driver. Allocation thất bại giữ workload cũ. Vẽ toàn N, không cap/stride ngầm. Model time tiến theo tick, không bù wall-clock; đây không phải realtime lockstep.
+
+Canvas web chỉ chạy CPU double tối đa 216 hạt để học kernel, support, lực và grid; không WebGL/WebGPU/WASM, không giả GPU benchmark. Nâng cao 512k/1M cần tự kiểm và báo phần cứng/kết quả riêng.
+
+## Checklist tương tác
+
+Run/pause/reset/step; drag ra ngoài rồi thả; zoom/Home; chọn N nhưng Cancel không cấp phát; Apply đổi N vẫn paused; F1/L, cuộn profiler; F/Q; G trên hệ nhỏ; Bench hoàn tất/cancel; Verify không đổi scene chính; blur không tự chạy lại; đóng cửa sổ khi job nhỏ đang pending. Kiểm native riêng với Canvas và CTest.
+
+Tham khảo: [PySPH kernels](https://pysph.readthedocs.io/en/main/reference/kernels.html), [SDL GL context](https://wiki.libsdl.org/SDL3/SDL_GL_CreateContext), [Khronos memory barrier](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glMemoryBarrier.xhtml).

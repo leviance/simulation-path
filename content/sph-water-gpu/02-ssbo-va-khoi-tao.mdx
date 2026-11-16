@@ -4,43 +4,48 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Preview đã giúp kiểm world và camera. Nhưng upload một triệu position từ CPU mỗi frame sẽ làm đường truyền dữ liệu thành điểm nghẽn. Ta cần buffer sống trên GPU, và một shader tạo vị trí ngay trong buffer đó.
+Ở bài trước, CPU tạo 64 vị trí để ta kiểm tra camera. Khi bắt đầu tính SPH, ta không muốn mỗi frame lại tải cả khối vị trí từ CPU lên GPU rồi tải kết quả về. Dữ liệu hạt cần ở lại GPU: compute shader cập nhật nó, vertex shader đọc nó để vẽ.
 
-Bài này khởi tạo 512 hạt. Hình vẫn là preview CPU 64 điểm của bài trước; đừng dùng nó để kết luận SSBO đã được vẽ đúng. Bài 03 sẽ nối vertex shader với dữ liệu GPU.
+Bài này làm nửa đầu: cấp phát SSBO và khởi tạo 512 hạt ngay trên GPU. Hình trên màn hình **vẫn là preview CPU 64 điểm**. Điều đó có chủ ý: Bài 03 mới nối phần vẽ với SSBO. Đừng lấy hình preview làm bằng chứng buffer GPU đã đúng.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Một record vec4 trong std430 chiếm 16 byte. CPU dùng Float4 cùng kích thước/alignment; xyz là vector, w dành cho dữ liệu phụ. Hai bank position và velocity cho phép bước sau đọc bank cũ, ghi bank mới mà không tranh chấp.
+SSBO là vùng nhớ shader có thể truy cập theo chỉ số. Ta dùng một `vec4` cho mỗi vị trí và mỗi vận tốc. Trong layout `std430`, mảng `vec4` có stride 16 byte; phía C++ dùng `Float4` với kích thước và alignment tương ứng. Ba thành phần đầu chứa vector; `position.w=1`, `velocity.w=0`.
 
-Plan tính N=side³, spacing=0.4/side và toàn bộ buffer bytes trước allocation. GPU limit không cho biết tổng VRAM đang rảnh, nên allocation vẫn có thể thất bại. Nếu thất bại, báo rõ và giữ state cũ, không giảm N ngầm.
+Ta chuẩn bị hai bank position và hai bank velocity. Hiện chỉ bank 0 được khởi tạo. Đến bài tích phân, solver đọc bank cũ và ghi bank mới, tránh vừa đọc vừa sửa dữ liệu mà invocation khác còn cần.
+
+Đừng nhầm `Vec3` với `Float4`: `Vec3` dùng `double` cho phép tính CPU reference; nó không phải record để upload vào mảng `vec4` của GLSL.
 
 <InteractiveLab demo="sph-water-gpu" mode="sph3-2" />
 
-Canvas vẫn chạy CPU. Nó cho thấy thứ tự index/lớp; không báo đã upload hay dispatch trên GPU của browser. Muốn kiểm SSBO thật, dùng ứng dụng SDL và đường verify ở bài cuối.
+Chọn từng ID rồi quan sát các lớp x/y/z. Canvas chỉ minh họa cách đánh số trên CPU; không chạy compute shader và không kiểm SSBO của máy bạn.
 
 ## Viết code từng bước
 
-### Bước 1 — Khóa layout packet
+### Bước 1 — Thống nhất record giữa C++ và GLSL
 
-Trong model.hpp:
+Thêm record sau vào `model.hpp`. `static_assert` bắt lỗi ngay khi biên dịch, trước khi ta mở cửa sổ.
 
-```cpp title="include/model.hpp — record khớp vec4"
+{/* snippet include/model.hpp#gpu-packet */}
+```cpp title="include/model.hpp — record 16 byte cho GPU"
 struct alignas(16) Float4 {
     float x = 0;
     float y = 0;
     float z = 0;
     float w = 0;
 };
+
 static_assert(sizeof(Float4) == 16 && alignof(Float4) == 16);
 ```
 
-Không dùng Vec3 double làm dữ liệu upload cho vec4 float. Vec3 dành cho oracle toán; Float4 dành cho layout GPU. static_assert bắt lỗi layout trước khi mở window.
+Một bank 512 hạt cần `512*16=8192` byte. Hai bank cho cả position và velocity cần 32.768 byte. Đây mới là state, chưa gồm density, acceleration hoặc grid.
 
-### Bước 2 — Cấp phát hai bank
+### Bước 2 — Cấp phát state, chưa nạp mảng position từ CPU
 
-Storage sở hữu tài nguyên; create kiểm limit rồi cấp phát:
+`Storage::create` gọi `checkLimits` trước, rồi mới chạy khối cấp phát này. `allocate` tạo SSBO và kiểm lỗi `BufferData`; nếu có lỗi, `create` thu hồi các buffer vừa tạo rồi báo lên caller.
 
-```cpp title="include/storage.hpp — hai bank state"
+{/* snippet include/storage.hpp#state-allocation */}
+```cpp title="include/storage.hpp — các buffer state"
 for (auto& buffer : positions) {
     buffer = allocate(gl, 16ULL * plan.count);
 }
@@ -51,37 +56,60 @@ density = allocate(gl, 16ULL * plan.count);
 acceleration = allocate(gl, 16ULL * plan.count);
 ```
 
-Density/acceleration được tính lại từ state cũ, không cần hai bank. Count/offset/cursor và scratch được chuẩn bị sẵn để các checkpoint độc lập có cùng Storage; chưa được dùng làm search ở bài này.
+`density` và `acceleration` không cần hai bank: mỗi bước tính lại chúng từ state cũ. Các buffer CSR/scratch cũng có trong `Storage` để checkpoint tự chạy độc lập; bài này chưa dùng chúng để tìm hàng xóm. Bài 11 sẽ tính đủ ngân sách cho toàn bộ allocation.
 
-### Bước 3 — Khởi tạo tại invocation i
+### Bước 3 — Mỗi invocation tạo đúng một hạt
 
-initialize.comp dùng GLSL 430. Mỗi invocation ghi đúng một record; các invocation đuôi phải return:
+Trong `initialize.comp`, vị trí vẫn theo cách đánh số ở Bài 01. Khối rộng 0,4 m, đặt sát đáy; hàng tâm thấp nhất ở `spacing/2`. Vì vậy sau này bấm Chạy sẽ sớm nhìn thấy khối nước lan ra, thay vì phải chờ nó rơi một quãng dài.
 
-```glsl title="shaders/initialize.comp — GLSL tạo lattice"
-uint i = gl_GlobalInvocationID.x;
-if (i >= uCount) return;
-uvec3 cell = uvec3(i % uSide, (i / uSide) % uSide, i / (uSide * uSide));
-positions[i] = vec4(vec3(0.08, 0.12, 0.3) + (vec3(cell) + 0.5) * uSpacing, 1.0);
-velocities[i] = vec4(0.0);
-density[i] = vec4(1000.0, 0.0, 0.0, 0.0);
-acceleration[i] = vec4(0.0);
+{/* snippet shaders/initialize.comp#initialize-particles */}
+```glsl title="shaders/initialize.comp — khởi tạo lattice trên GPU"
+void main() {
+    // GPU creates exactly uCount particles; no million-element CPU upload.
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= uCount)
+        return;
+    uvec3 cell = uvec3(i % uSide, (i / uSide) % uSide, i / (uSide * uSide));
+    positions[i] = vec4(vec3(0.08, 0.0, 0.3) + (vec3(cell) + 0.5) * uSpacing, 1.0);
+    velocities[i] = vec4(0.0);
+    density[i] = vec4(1000.0, 0.0, 0.0, 0.0);
+    acceleration[i] = vec4(0.0);
+}
 ```
 
-Local size 256 nghĩa 512 hạt dùng hai workgroup. Engine reset bind bank 0, dispatch và đặt fence. Chỉ khi poll cho biết initialization xong mới đặt ready=true. Chưa đọc buffer để vẽ CPU.
+Shader khai báo `local_size_x=256`. Với 512 hạt, host gửi hai workgroup. Guard `i>=uCount` vẫn cần có: ca kiểm 257 hạt ở bài cuối sẽ tạo 255 invocation dư. Không invocation nào trong số đó được đọc hoặc ghi mảng hạt.
+
+### Bước 4 — Nối shader với các buffer vừa cấp phát
+
+Trong `Engine::reset`, `use` chọn program và truyền uniform của `Plan/Settings`. `bind` gắn buffer vào đúng binding ghi trong shader. Các số 0–3 ở hai phía phải khớp nhau.
+
+{/* snippet include/engine.hpp#initialize-pass */}
+```cpp title="include/engine.hpp — gửi initialization pass"
+use(gl, programs.initialize, plan, settings, grid);
+bind(gl, 0, storage.positions[0]);
+bind(gl, 1, storage.velocities[0]);
+bind(gl, 2, storage.density);
+bind(gl, 3, storage.acceleration);
+dispatch(gl, plan.count);
+```
+
+Sau dispatch, `Queue::end` đặt fence. Vòng lặp SDL tiếp tục xử lý sự kiện và gọi `Engine::poll`; chỉ khi initialization hoàn tất mới đặt `ready=true`. Bài 10 sẽ giải thích kỹ fence và việc chờ bất đồng bộ. Lúc này hãy giữ nguyên bộ khung đó: gọi dispatch không có nghĩa CPU được đọc kết quả ngay lập tức.
 
 ## Ghép các phần lại
 
-Build checkpoint 2. Engine không gửi solver khi chưa ready; R chỉ reset khi batch cũ xong. Buffer và shader được hủy trước GL context. Trên máy không có OpenGL 4.3, ứng dụng báo lỗi thay vì giả chạy GPU bằng CPU.
+Build và chạy `project_51_checkpoint_2` theo phần mã đầy đủ cuối bài. `main.cpp` tạo OpenGL context trước, load programs rồi gọi `engine.reset(gl, plan)`. Preview vẫn vẽ bằng CPU. Nút Reset/phím R khởi tạo lại cùng N, không cấp phát thêm mỗi frame; tài nguyên GL được hủy trước khi đóng context.
+
+Nếu máy không có driver OpenGL 4.3, ứng dụng phải báo lỗi. Ta không âm thầm thay compute shader bằng CPU rồi gọi đó là bản GPU.
 
 ## Thử làm sai để hiểu đúng
 
-1. Upload struct gồm ba double nhưng shader đọc vec4. Record từ hạt thứ hai trở đi lệch stride; khôi phục Float4.
-2. Bỏ i>=uCount rồi thử count 257 trong ca cuối. Đuôi workgroup có thể ghi ngoài SSBO; khôi phục guard trước mọi truy cập.
+1. Đổi `Float4` thành ba `double`: layout không còn khớp `vec4`. Kiểm kích thước/stride, khôi phục record trước khi chạy tiếp.
+2. Bỏ guard đuôi **chỉ trong bản thử riêng**. Dự đoán index lớn nhất mà hai workgroup của ca 257 hạt sẽ ghi. Không chạy shader ghi ngoài buffer; phép tính chỉ số đã đủ chỉ ra lỗi. Khôi phục guard.
 
 ## Tự kiểm tra kết quả
 
-Float4 có size/alignment 16. Initialization 512 hạt chỉ chạy một lần khi tạo/reset. Không upload position từng frame, không tự tăng N và không dùng data trước ready.
+`Float4` có size/alignment 16; initialization chỉ chạy lúc tạo/reset. Không upload toàn bộ vị trí mỗi frame, không dùng buffer trước `ready`. Đến Bài 12, phép kiểm `INIT layout/position/velocity PASS` sẽ đọc lại ca nhỏ và so với lattice CPU — đó mới là bằng chứng dữ liệu GPU đúng.
 
 ## Bài tập mở rộng
 
-Tính bytes cho position/velocity hai bank, rồi so với Plan. Tiếp theo [vẽ trực tiếp từ GPU](/projects/sph-water-gpu/03-ve-truc-tiep-tu-gpu).
+Viết ra binding, kiểu record và số byte của từng buffer trong bước 4. Sau đó sang [Bài 03 — vẽ trực tiếp từ GPU](/projects/sph-water-gpu/03-ve-truc-tiep-tu-gpu), nơi ta sẽ nhìn thấy chính 512 vị trí vừa tạo.

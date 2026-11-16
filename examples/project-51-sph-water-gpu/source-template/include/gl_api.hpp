@@ -65,6 +65,10 @@ struct GlApi {
     PFNGLENDQUERYPROC EndQuery{};
     PFNGLGETQUERYOBJECTIVPROC GetQueryObjectiv{};
     PFNGLGETQUERYOBJECTUI64VPROC GetQueryObjectui64v{};
+    PFNGLQUERYCOUNTERPROC QueryCounter{};
+    PFNGLREADPIXELSPROC ReadPixels{};
+    PFNGLENABLEVERTEXATTRIBARRAYPROC EnableVertexAttribArray{};
+    PFNGLVERTEXATTRIBPOINTERPROC VertexAttribPointer{};
 
     std::string missingFunction{};
 
@@ -138,6 +142,10 @@ struct GlApi {
         LOAD_GL_FUNCTION(EndQuery)
         LOAD_GL_FUNCTION(GetQueryObjectiv)
         LOAD_GL_FUNCTION(GetQueryObjectui64v)
+        LOAD_GL_FUNCTION(QueryCounter)
+        LOAD_GL_FUNCTION(ReadPixels)
+        LOAD_GL_FUNCTION(EnableVertexAttribArray)
+        LOAD_GL_FUNCTION(VertexAttribPointer)
 #undef LOAD_GL_FUNCTION
         return true;
     }

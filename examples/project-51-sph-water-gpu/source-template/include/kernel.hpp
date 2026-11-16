@@ -4,6 +4,7 @@
 namespace water3 {
 // The same polynomial as Project50, but normalization is now per volume.
 #if LAB_CHECKPOINT >= 4
+// [snippet cubic-kernel]
 inline double kernel(double r, double h) {
     const double q = r / h;
     const double sigma = 1 / (std::numbers::pi * h * h * h);
@@ -16,6 +17,9 @@ inline double kernel(double r, double h) {
     return sigma * 0.25 * std::pow(2 - q, 3);
 }
 
+// [/snippet cubic-kernel]
+
+// [snippet kernel-gradient]
 inline Vec3 gradient(Vec3 displacement, double h) {
     const double r = length(displacement);
     const double q = r / h;
@@ -29,8 +33,11 @@ inline Vec3 gradient(Vec3 displacement, double h) {
     const double scale = derivative / (std::numbers::pi * h * h * h * h * r);
     return {scale * displacement.x, scale * displacement.y, scale * displacement.z};
 }
+
+// [/snippet kernel-gradient]
 #endif
 #if LAB_CHECKPOINT >= 6
+// [snippet artificial-viscosity]
 inline double viscosity(Vec3 d, Vec3 v, double rhoA, double rhoB, double h, double c, double alpha) {
     const double approach = dot(d, v);
     if (approach >= 0) {
@@ -39,5 +46,7 @@ inline double viscosity(Vec3 d, Vec3 v, double rhoA, double rhoB, double h, doub
     const double mu = h * approach / (dot(d, d) + 0.01 * h * h);
     return -alpha * c * mu / (0.5 * (rhoA + rhoB));
 }
+
+// [/snippet artificial-viscosity]
 #endif
 } // namespace water3

@@ -22,7 +22,8 @@ Chọn hạt giữa và hạt mép, đọc rho thay vì chỉ nhìn màu. Màu b
 
 Reference đọc position packet đã biết, cộng trực tiếp:
 
-```cpp title="include/reference.hpp — oracle summation density"
+{/* snippet include/reference.hpp#reference-density */}
+```cpp title="include/reference.hpp — tổng density trên CPU"
 double rho = 0;
 for (const auto other : positions) {
     rho += plan.mass * kernel(length(subtract(xyz(p), xyz(other))), plan.h);
@@ -34,10 +35,31 @@ evaluate nhận positions/velocities cùng kích thước và từ chối quá 5
 
 ### Bước 2 — Ghi một record riêng trên GPU
 
-Trong density.comp, nhánh all-pairs:
+Trong `density.comp`, viết hàm `main` dưới đây. Ở checkpoint này chỉ có nhánh all-pairs, nên có thể lần theo toàn bộ công việc của một invocation mà chưa phải nghĩ về grid:
 
+{/* snippet shaders/density.comp#density-main */}
 ```glsl title="shaders/density.comp — GLSL tổng mW"
-for (uint j = 0u; j < uCount; j++) rho += uMass * kernel(length(p - positions[j].xyz));
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= uCount)
+        return;
+    vec3 p = positions[i].xyz;
+    float rho = 0.0;
+    uint visited = 0u;
+    if (bad(p)) {
+        density[i] = vec4(1000.0, 0.0, 0.0, 1.0);
+        return;
+    }
+    {
+        for (uint j = 0u; j < uCount; j++)
+            rho += uMass * kernel(length(p - positions[j].xyz));
+    }
+    float pressure = 0.0;
+    float error = 0.0;
+    if (isnan(rho) || isinf(rho) || rho <= 0.0 || isnan(pressure) || isinf(pressure))
+        error = 1.0;
+    density[i] = vec4(rho, pressure, 0.0, error);
+}
 ```
 
 i>=uCount được kiểm trước khi đọc position. Kết quả là vec4(rho,pressure,reserved,error). Ở checkpoint 5, pressure=0; Bài 06 mới tính EOS. Nonfinite hoặc rho không dương được ghi flag, không biến thành một density hợp lệ.
@@ -46,6 +68,7 @@ i>=uCount được kiểm trước khi đọc position. Kết quả là vec4(rho
 
 Engine.submit chọn density program trước force:
 
+{/* snippet include/engine.hpp#density-pass */}
 ```cpp title="include/engine.hpp — density pass"
 use(gl, programs.density, storage.plan, settings, grid);
 bind(gl, 0, storage.positions[current]);
@@ -56,13 +79,23 @@ bind(gl, 4, storage.indices);
 dispatch(gl, storage.plan.count);
 ```
 
-Ba buffer grid chưa được shader đọc ở checkpoint 5; chúng sẽ thay vòng all-pairs ở Bài 08. dispatch tính ceil(N/256) rồi gọi SSBO barrier cho pass tiếp theo. Barrier không đồng nghĩa CPU đã được phép readback; cần fence của cả batch.
+Ba buffer grid chưa được shader đọc ở checkpoint 5; chúng sẽ thay vòng all-pairs ở Bài 08. Hàm `dispatch` dùng chung bên dưới gửi đủ workgroup và đặt SSBO barrier cho shader tiếp theo:
+
+{/* snippet include/passes.hpp#dispatch-barrier */}
+```cpp title="include/passes.hpp — dispatch và visibility cho SSBO"
+inline void dispatch(lab::GlApi& gl, std::uint32_t count) {
+    gl.DispatchCompute(ceilDivide(count, 256), 1, 1);
+    gl.MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+}
+```
+
+Barrier không đồng nghĩa CPU đã được phép readback; cần fence của cả batch. Không chèn `glFinish` để ép hình cập nhật.
 
 ## Ghép các phần lại
 
-N ở checkpoint 5 chỉ tính density, không chuyển động và không tăng simulated tick. R đưa state về lattice. Vertex shader dùng density đổi màu sau khi batch xong; vị trí vẫn không đổi.
+Chạy checkpoint 5 rồi bấm **Step/phím N**: `Controls` gọi `Engine::submit`, density pass ghi buffer riêng, `Queue` đặt fence; khi `Engine::poll` nhận hoàn tất, view mới đọc kết quả. Hạt không chuyển động và simulated tick chưa tăng. Bấm L sang density để nhìn phân bố; R đưa state về lattice. Chuỗi này giúp phân biệt “đã tính density” với “đã đi một bước chuyển động”.
 
-Trong checkpoint 5–8, Engine còn readback các output nhỏ sau fence để phát hiện nonfinite trước khi commit. Đây là đường kiểm tạm cho N≤512, không phải kiến trúc dùng cho hệ lớn. Từ Bài 09, reduction thay nó bằng một record 16 byte.
+Trong checkpoint 5–8, Engine còn readback các output nhỏ sau fence để phát hiện nonfinite trước khi commit. Đây là đường kiểm tạm cho N≤512, không phải kiến trúc dùng cho hệ lớn. Từ Bài 09, reduction thay readback theo từng hạt bằng record extrema 16 byte và bảng diagnostics cố định 288 byte. Không còn kéo position/velocity của hệ lớn về CPU.
 
 ## Thử làm sai để hiểu đúng
 

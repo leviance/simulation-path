@@ -22,6 +22,7 @@ import {
   type Settings,
 } from "@/lib/labs/sph-water-gpu";
 import { forceFixture, type ForcePreset } from "@/lib/labs/sph-water-gpu/fixtures";
+import { orbit, zoomCamera } from "@/lib/labs/sph-water-gpu/view";
 import { LabReadout, useCanvasSize, usePauseOnReducedMotion, useReducedMotion } from "./lab-shared";
 import { drawWater } from "./sph-water-gpu/draw";
 
@@ -46,7 +47,7 @@ function WaterExperiment({ stage }: { stage: number }) {
     [time, setTime] = useState(0),
     [lastDt, setDt] = useState(0),
     [error, setError] = useState("");
-  const [plannedSide, setPlannedSide] = useState(8),
+  const [plannedSide, setPlannedSide] = useState(48),
     largePlan = makePlan(plannedSide);
   const [validation, setValidation] = useState("Chưa chạy");
   const pointer = useRef<{ id: number; x: number; y: number } | null>(null);
@@ -137,7 +138,7 @@ function WaterExperiment({ stage }: { stage: number }) {
   }, [paused, reducedMotion, stage, error, advance]);
   useEffect(() => {
     const ctx = canvas.current?.getContext("2d");
-    if (ctx)
+    if (ctx) {
       drawWater(
         ctx,
         size,
@@ -150,7 +151,21 @@ function WaterExperiment({ stage }: { stage: number }) {
         stage,
         slice,
       );
+      canvas.current!.dataset.sph3Ready = "true";
+    }
   }, [size, plan, particles, report, selected, camera, stage, slice]);
+  useEffect(() => {
+    const element = canvas.current;
+    if (!element) return;
+    const wheel = (event: WheelEvent) => {
+      // Chỉ bắt wheel khi người học chủ động focus Canvas; không chiếm cuộn trang.
+      if (document.activeElement !== element) return;
+      event.preventDefault();
+      setCamera((old) => zoomCamera(old, Math.exp(-event.deltaY * 0.001)));
+    };
+    element.addEventListener("wheel", wheel, { passive: false });
+    return () => element.removeEventListener("wheel", wheel);
+  }, []);
   const down = (event: PointerEvent<HTMLCanvasElement>) => {
     if (event.button !== 0 || pointer.current) return;
     event.currentTarget.focus();
@@ -160,11 +175,7 @@ function WaterExperiment({ stage }: { stage: number }) {
   const move = (event: PointerEvent<HTMLCanvasElement>) => {
     const old = pointer.current;
     if (!old || old.id !== event.pointerId) return;
-    setCamera((c) => ({
-      ...c,
-      yaw: c.yaw + (event.clientX - old.x) * 0.005,
-      pitch: Math.max(-1.2, Math.min(1.2, c.pitch - (event.clientY - old.y) * 0.005)),
-    }));
+    setCamera((c) => orbit(c, (event.clientX - old.x) * 0.005, -(event.clientY - old.y) * 0.005));
     pointer.current = { id: old.id, x: event.clientX, y: event.clientY };
   };
   const end = (event: PointerEvent<HTMLCanvasElement>) => {
@@ -247,7 +258,11 @@ function WaterExperiment({ stage }: { stage: number }) {
       <div className="lab-controls">
         <label>
           Cảnh CPU{" "}
-          <select value={side} onChange={(e) => reset(Number(e.target.value))}>
+          <select
+            aria-label="Cảnh CPU"
+            value={side}
+            onChange={(e) => reset(Number(e.target.value))}
+          >
             <option value={4}>4³ = 64 hạt</option>
             <option value={6}>6³ = 216 hạt</option>
           </select>
@@ -308,6 +323,7 @@ function WaterExperiment({ stage }: { stage: number }) {
             <label>
               Sound speed c{" "}
               <select
+                aria-label="Sound speed c"
                 value={settings.soundSpeed}
                 onChange={(e) => change({ soundSpeed: Number(e.target.value) })}
               >
@@ -321,6 +337,7 @@ function WaterExperiment({ stage }: { stage: number }) {
             <label>
               Artificial viscosity alpha{" "}
               <select
+                aria-label="Artificial viscosity alpha"
                 value={settings.alpha}
                 onChange={(e) => change({ alpha: Number(e.target.value) })}
               >
@@ -337,6 +354,7 @@ function WaterExperiment({ stage }: { stage: number }) {
           <label>
             Search{" "}
             <select
+              aria-label="Search"
               value={settings.grid ? "grid" : "brute"}
               onChange={(e) => change({ grid: e.target.value === "grid" })}
             >
@@ -348,8 +366,12 @@ function WaterExperiment({ stage }: { stage: number }) {
         {stage >= 11 && (
           <label>
             Kế hoạch GPU{" "}
-            <select value={plannedSide} onChange={(e) => setPlannedSide(Number(e.target.value))}>
-              {[8, 32, 48, 100].map((n) => (
+            <select
+              aria-label="Kế hoạch GPU"
+              value={plannedSide}
+              onChange={(e) => setPlannedSide(Number(e.target.value))}
+            >
+              {[8, 32, 48, 80, 100].map((n) => (
                 <option key={n} value={n}>
                   {n}³ hạt
                 </option>
@@ -416,6 +438,7 @@ function WaterExperiment({ stage }: { stage: number }) {
       <canvas
         ref={canvas}
         className="lab-canvas"
+        data-sph3-stage={stage}
         tabIndex={0}
         aria-label="SPH3D CPU oracle"
         aria-describedby={helpId}
@@ -430,14 +453,15 @@ function WaterExperiment({ stage }: { stage: number }) {
         Khối hạt trong hộp 3D; tọa độ và các số đo được ghi dưới Canvas.
       </canvas>
       <p id={helpId}>
-        Kéo để orbit; trái/phải chọn hạt, lên/xuống đổi pitch. N tiến một tick từ bài 7, Space chạy
-        từ bài 10. Bản CPU dùng double; bản GPU dùng float nên so với tolerance, không đòi khớp từng
-        bit.
+        Kéo để orbit; wheel khi Canvas có focus để zoom. Trái/phải chọn hạt, lên/xuống đổi pitch. N
+        tiến một tick từ bài 7, Space chạy từ bài 10. Bản CPU dùng double; bản GPU dùng float nên so
+        với tolerance, không đòi khớp từng bit.
       </p>
       {stage >= 4 && (
         <p>
-          Vòng tím là hình chiếu của support sphere 2h. Hai hạt nhìn gần nhau trên màn hình vẫn có
-          thể cách xa theo z; bảng density dùng khoảng cách 3D, không dùng khoảng cách pixel.
+          Các vòng tím là ba đường tròn lớn trên support sphere 2h, được chiếu perspective. Hai hạt
+          nhìn gần nhau trên màn hình vẫn có thể cách xa theo z; bảng density dùng khoảng cách 3D,
+          không dùng khoảng cách pixel.
         </p>
       )}
       {stage >= 6 && (
@@ -456,6 +480,10 @@ function WaterExperiment({ stage }: { stage: number }) {
         </p>
       )}
       {error && <p role="alert">{error} · Đặt lại để tiếp tục.</p>}
+      <p>
+        Đơn vị: position/h/support tính bằng m, velocity bằng m/s, acceleration bằng m/s², density
+        bằng kg/m³ và pressure bằng Pa.
+      </p>
       <LabReadout items={readout} />
     </>
   );

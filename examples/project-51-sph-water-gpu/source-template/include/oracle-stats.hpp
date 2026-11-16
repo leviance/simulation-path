@@ -10,9 +10,11 @@ struct OracleStats {
 };
 
 enum class VerifyCase {
-    lattice,  // Original lattice, including the 257-particle tail case.
-    acoustic, // Large finite velocity; keep the particle count small.
-    force,    // Prescribed acceleration; isolate reduction and integration.
+    lattice,   // Original lattice, including the 257-particle tail case.
+    acoustic,  // Large finite velocity; keep the particle count small.
+    force,     // Prescribed acceleration; isolate reduction and integration.
+    perturbed, // Nonzero SPH pressure and relative velocities.
+    scan,      // Small particle case with a multi-workgroup cell scan.
 };
 
 inline void prepareVerifyCase(VerifyCase fixture, std::vector<Float4>& positions, std::vector<Float4>& velocities) {
@@ -20,6 +22,15 @@ inline void prepareVerifyCase(VerifyCase fixture, std::vector<Float4>& positions
         if (fixture == VerifyCase::acoustic) {
             // High but finite velocity activates the acoustic bound at only 512 particles.
             velocities[i].x = 500;
+        }
+        if (fixture == VerifyCase::perturbed) {
+            positions[i].x = 0.28F + 0.8F * (positions[i].x - 0.28F);
+            positions[i].y = 0.32F + 0.8F * (positions[i].y - 0.32F);
+            positions[i].z = 0.50F + 0.8F * (positions[i].z - 0.50F);
+            const double t = static_cast<double>(i);
+            velocities[i].x = static_cast<float>(0.2 * std::sin(0.71 * t));
+            velocities[i].y = static_cast<float>(0.15 * std::cos(0.37 * t));
+            velocities[i].z = static_cast<float>(0.11 * std::sin(0.53 * t));
         }
     }
 }
@@ -33,9 +44,12 @@ inline Reference forceTimestepReference(std::size_t count) {
     return result;
 }
 
+// [snippet close-enough]
 inline bool closeEnough(double actual, double expected, double absolute = 0.01, double relative = 0.003) {
     return std::isfinite(actual) && std::isfinite(expected) && std::abs(actual - expected) <= absolute + relative * std::abs(expected);
 }
+
+// [/snippet close-enough]
 
 // Derive extrema from CPU old-state data, never from the GPU reduction being tested.
 inline OracleStats oracleStats(const std::vector<Float4>& velocities, const Reference& report) {
