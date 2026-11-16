@@ -6,6 +6,7 @@
 namespace picking {
 #if LAB_CHECKPOINT >= 5
 // This is a surface query, not just an overlap test against a volume.
+// [snippet box-data]
 struct BoxInterval {
     double entry;
     double exit;
@@ -13,6 +14,9 @@ struct BoxInterval {
     Vec3 exitNormal;
 };
 
+// [/snippet box-data]
+
+// [snippet box-slabs]
 inline std::optional<BoxInterval> boxInterval(const Ray& ray, const Box& box) {
     if (!valid(ray) || !finite(box.minimum) || !finite(box.maximum)) {
         return std::nullopt;
@@ -56,6 +60,9 @@ inline std::optional<BoxInterval> boxInterval(const Ray& ray, const Box& box) {
     return interval;
 }
 
+// [/snippet box-slabs]
+
+// [snippet box-hit]
 inline std::optional<Hit> intersectBox(const Ray& ray, const Box& box) {
     const auto interval = boxInterval(ray, box);
     if (!interval) {
@@ -69,5 +76,7 @@ inline std::optional<Hit> intersectBox(const Ray& ray, const Box& box) {
     }
     return std::nullopt;
 }
+
+// [/snippet box-hit]
 #endif
 } // namespace picking

@@ -24,44 +24,66 @@ Preset “Trong sphere” cho mặt thoát sphere; “Trong box” cho mặt tho
 
 include/query.hpp không chỉ trả một boolean:
 
+{/* snippet include/query.hpp#candidates */}
 ```cpp title="include/query.hpp — bốn ứng viên trên cùng ray"
-hits[0] = intersectPlane(ray, scene.plane);
-hits[1] = intersectSphere(ray, scene.sphere);
-hits[2] = intersectBox(ray, scene.box);
-hits[3] = intersectTriangle(ray, scene.triangle);
+inline std::array<std::optional<Hit>, 4> candidates(const Ray& ray, const Scene& scene) {
+    std::array<std::optional<Hit>, 4> hits{};
+    hits[0] = intersectPlane(ray, scene.plane);
+    hits[1] = intersectSphere(ray, scene.sphere);
+    hits[2] = intersectBox(ray, scene.box);
+    hits[3] = intersectTriangle(ray, scene.triangle);
+    return hits;
+}
 ```
 
 Mỗi slot có thể rỗng. Inspector đọc được cả hình thắng lẫn hình thua, nên người học giải thích được vì sao dấu plane phía sau sphere không được chọn. ID gắn với primitive, không gắn với vị trí trong một danh sách render tùy ý.
 
 ### Bước 2 — Chọn t nhỏ nhất và xử lý tie
 
-```cpp title="include/query.hpp — nearest hit"
-std::optional<Hit> best;
-for (const auto& hit : hits) {
-    if (!hit) {
-        continue;
+{/* snippet include/query.hpp#nearest-hit */}
+```cpp title="include/query.hpp — chọn điểm gần nhất"
+inline std::optional<Hit> nearestHit(const std::array<std::optional<Hit>, 4>& hits) {
+    std::optional<Hit> best;
+    for (const auto& hit : hits) {
+        if (!hit) {
+            continue;
+        }
+        if (!best) {
+            best = hit;
+            continue;
+        }
+        if (hit->t < best->t) {
+            best = hit;
+            continue;
+        }
+        if (hit->t == best->t && hit->objectId < best->objectId) {
+            best = hit;
+        }
     }
-    if (!best || hit->t < best->t || (hit->t == best->t && hit->objectId < best->objectId)) {
-        best = hit;
-    }
-}
-return best;
-```
-
-Input của nearestHit là các Hit hợp lệ do candidates tạo. Nó không sửa point, normal hoặc t. Nếu không có ứng viên, best vẫn rỗng. Main vẽ hit thắng màu xanh lá; các hit khác xám. Marker trùng pixel là điều tự nhiên: mọi điểm trên một ray camera đều project về cùng pixel, normal và t giúp phân biệt độ sâu.
-
-### Bước 3 — Thêm preset và điều khiển dừng được
-
-Đặt camera vào sphere mà không đổi dữ liệu hình:
-
-```cpp title="include/query.hpp — camera trong sphere"
-if (preset == 1) {
-    camera.origin = scene.sphere.center;
-    camera.target = add(camera.origin, {0, 0, 1});
+    return best;
 }
 ```
 
-Preset box dùng trung điểm minimum/maximum. Preset miss quay target về −z. Main nhận phím 1–4, Space quét/dừng, +/- đổi tMax, I in inspector; R reset camera/range/tâm ngắm. Mất focus hoặc minimize dừng quét. Các phép giao vẫn được tính khi paused; pause ở đây chỉ dừng chuyển động tâm ngắm, không tắt chức năng chọn.
+Input của nearestHit là các Hit hợp lệ do candidates tạo. Nó không sửa point, normal hoặc t. Nếu không có ứng viên, best vẫn rỗng. `drawWorkshop` vẽ hit thắng màu xanh lá và cho đoạn tia sáng dừng ở đó; các hit xa hơn giữ để debug. Camera quan sát ở ngoài đường tia giúp bạn nhìn thấy khoảng cách giữa chúng; trong cửa sổ ngắm, các điểm vẫn chiếu về cùng pixel.
+
+### Bước 3 — Dùng kết quả để chọn hình ngay trong cảnh
+
+Nhấp chuột trái vào viewport lớn giờ có thể chọn hình. Cũng là camera ray, nhưng ray phục vụ cú nhấp này phải phát từ **observer** vì đó là góc nhìn người dùng đang nhấp vào, không phải emitter của thí nghiệm:
+
+{/* snippet include/input.hpp#observer-picking */}
+```cpp title="include/input.hpp — chọn hình từ camera quan sát"
+if (event.button.button == SDL_BUTTON_LEFT && !inside(aimRect, x, y) && x >= 0 && x < sceneWidth && y >= 0 && y < viewHeight) {
+    const auto pickRay = cameraRay(state.observer.camera(), x / sceneWidth, y / viewHeight, static_cast<double>(sceneWidth) / viewHeight);
+    const auto hit = nearestHit(candidates(pickRay, state.scene));
+    if (hit) {
+        state.selected = hit->objectId;
+    }
+}
+```
+
+`pickRay` chỉ dùng để tìm `state.selected`; không ghi đè ray emitter đang khảo sát. Kết quả không dựa vào thứ tự vẽ hay màu pixel. Người dùng cũng chọn được bằng phím 1–4 hoặc nút trên bảng. Sau đó A/D/Q/E/S/W dịch vật đang chọn; F ngắm nó bằng emitter. Bạn có thể chọn vật ở góc nhìn lớn, giữ nguyên camera quan sát và đổi vị trí vật để xem entry/exit thay đổi.
+
+Phím **5–8** chọn preset nguồn: phòng ban đầu, trong sphere, trong box, nhìn ra ngoài. Preset box lấy trung điểm min/max; preset miss quay target về −z. Space quét/dừng, +/- đổi tMax; R đặt lại cả scene, hai camera, khoảng tia và phase. Mất focus/minimize dừng quét và nhả capture. Pause chỉ dừng việc tự di chuyển tâm ngắm, không khóa camera, chỉnh vật thể hoặc inspector.
 
 Canvas có thêm thí nghiệm tia song song/tiếp tuyến/suy biến và hỗ trợ pointer capture. Reduced motion tắt quét tự động nhưng không vô hiệu hóa bàn phím. C++ không dùng web reduced-motion preference; mở paused và chỉ quét sau thao tác Space của người dùng.
 
@@ -69,9 +91,9 @@ Canvas có thêm thí nghiệm tia song song/tiếp tuyến/suy biến và hỗ 
 
 Chế độ quét giữ phase riêng trong include/scan.hpp. Mỗi frame vẫn cập nhật mốc thời gian, nhưng chỉ khi đang chạy mới cộng 0.8*dt vào phase. Pause không làm phase trôi theo uptime; R đặt phase về 0. Vì vậy chờ mười giây khi pause không khiến tâm ngắm nhảy tới một vị trí khác lúc resume.
 
-Build project_52_checkpoint_7. Ngắm vào sphere rồi nhấn I: console đọc từng hit với t, point, normal, frontFace. Title ghi nearest ID. Hãy so ID 0/1/2/3 với plane/sphere/box/triangle, không đoán theo màu dây nào ở trên cùng.
+Build `project_52_checkpoint_7`. Chọn Sphere rồi F, so t được chọn với t của plane ở phía sau. Nhấp Box ở góc nhìn lớn: đối tượng đang chọn đổi nhưng direction của emitter không đổi. Chỉ khi nhấn F hoặc ngắm lại, phép đo mới đổi. Tất cả số liệu cần dùng nằm trong bảng trên cửa sổ, không cần mở console.
 
-C++ dùng input trong logical 900×640; Canvas dùng aspect của vùng CSS thật. Nếu hai hình có bố cục hơi khác trên màn hình hẹp, đó là aspect khác, không phải công thức khác. Cả hai vẫn dùng đúng aspect cho vẽ và ray.
+C++ dùng input logical 1200×760; Canvas dùng CSS pixels cho input và DPR cho bitmap. Cả hai giữ cửa sổ ngắm theo aspect 280/190. Viewport quan sát có thể có tỷ lệ khác mà không đổi ray, vì observer và emitter là hai camera riêng.
 
 ## Thử làm sai để hiểu đúng
 
@@ -84,4 +106,4 @@ Nearest có t nhỏ nhất, tie đúng ID và đảo thứ tự ứng viên khô
 
 ## Bài tập mở rộng
 
-Cho click lưu lựa chọn thay vì chỉ hover/ngắm; khi miss hãy giữ hay bỏ lựa chọn theo một quy tắc rõ ràng. Cuối cùng sang [Bài 08 — kiểm chứng và source hoàn chỉnh](/projects/ray-intersections/08-kiem-chung-va-hoan-thien).
+Khi nhấp vùng trống, bản hiện tại giữ lựa chọn cũ. Thử thêm chế độ bỏ lựa chọn khi miss rồi xem những nút dịch vật thể cần được vô hiệu hóa thế nào. Cuối cùng sang [Bài 08 — kiểm chứng và source hoàn chỉnh](/projects/ray-intersections/08-kiem-chung-va-hoan-thien).

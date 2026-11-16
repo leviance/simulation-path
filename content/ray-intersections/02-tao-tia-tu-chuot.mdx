@@ -4,43 +4,45 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Cảnh đã hiện trên màn hình. Bây giờ ta muốn từ một điểm chuột tạo ra một hướng trong world. Không thể lấy mouse.x và mouse.y làm direction.x/y: chúng là pixel, không phải tọa độ 3D, và còn thay đổi khi resize.
+Cảnh đã vẽ được, nhưng chưa có cách chỉ vào một vị trí 3D. Bài này thêm một camera phát tia và một cửa sổ ngắm nhỏ. Kéo tâm ngắm trong cửa sổ ấy sẽ đổi hướng tia; góc nhìn lớn cho bạn nhìn thấy tia trong không gian.
 
-Bài này thêm tâm ngắm, Ray và hình phụ XZ. Chưa tính giao với hình nào. Mục tiêu duy nhất là: điểm bất kỳ trên tia, khi project trở lại, phải nằm đúng dưới tâm ngắm.
+Tại sao cần hai camera? Nếu vừa nhìn từ nguồn tia, vừa vẽ tia của chính camera đó, mọi điểm trên tia chiếu về cùng một pixel. Ta vẫn tính đúng nhưng gần như không thấy gì để quan sát. `emitter` quyết định phép đo; `observer` chỉ quyết định ta nhìn phép đo từ đâu.
+
+Sau bài này có source, direction, khoảng tia và tâm ngắm. **Chưa có giao với hình nào**, nên tia đi xuyên bề mặt mà không dừng là kết quả đúng của checkpoint 2.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Tia được mô tả bằng một điểm bắt đầu origin và hướng direction:
+Một tia được xác định bởi điểm bắt đầu và hướng:
 
 $$
 p(t)=origin+t\,direction,\qquad t\in[tMin,tMax]
 $$
 
-Với direction dài một, t là khoảng cách world. Nếu direction dài hai, cùng t đi xa gấp đôi; các hàm giao sau vẫn hỗ trợ trường hợp đó. Camera ray được normalize để việc đọc t dễ hiểu, nhưng định nghĩa Ray không tự đảm bảo direction là unit.
+Chỉ khi `direction` dài một thì t mới bằng khoảng cách world. Với direction dài hai, cùng t đi xa gấp đôi. Ta chuẩn hóa ray từ camera cho dễ đọc số, nhưng các hàm giao sau vẫn nhận direction không unit và không tự ý chuẩn hóa lại.
 
-Chuột được đổi về u/v trong [0,1]. Tâm màn hình là (0.5,0.5). Trên image plane cách camera một đơn vị, nửa chiều cao là tan(FOV/2), nửa chiều rộng bằng aspect nhân nửa chiều cao. Dùng cùng basis của Bài 01, ta có:
+Trong cửa sổ ngắm, u/v chạy từ 0 đến 1; tâm là (0.5,0.5). Image plane đặt cách emitter một đơn vị có nửa chiều cao bằng tan(FOV/2). Chiều ngang nhân thêm aspect:
 
 $$
-x=(2u-1)\,aspect\,\tan(FOV/2),\quad
-y=(1-2v)\,\tan(FOV/2)
+x=(2u-1)\,aspect\,\tan(FOV/2),\qquad y=(1-2v)\,\tan(FOV/2)
 $$
 
 $$
 direction=normalize(forward+x\,right+y\,up)
 $$
 
-Y phải đổi dấu vì chuột tăng xuống dưới. Camera nhìn theo forward; không nhét screen pixel thẳng vào world.
+Y đổi dấu vì input pixel tăng xuống dưới. Tất cả forward/right/up phải lấy từ **emitter**, không phải observer. Cửa sổ ngắm C++ 280×190 và Canvas giữ đúng tỷ lệ ấy, nên aspect của ray là 280/190 — không lấy nhầm tỷ lệ viewport quan sát lớn.
 
 <InteractiveLab demo="ray-intersections" mode="ray52-2" />
 
-Kéo tâm ngắm hoặc dùng mũi tên. Direction dưới hình phải dài một; u/v giữa hình cho direction trùng forward. Ô XZ cho thấy tia rõ hơn: nhìn từ camera, chính tia của camera chiếu vào một điểm nên không có đoạn dài để quan sát.
+Kéo trong cửa sổ nhỏ rồi xoay góc nhìn lớn. Trước khi nhìn bảng số, hãy đoán thao tác nào làm direction đổi. Chỉ thao tác ngắm hoặc dịch nguồn mới đổi ray; orbit camera quan sát không được đổi ray đang giữ.
 
 ## Viết code từng bước
 
-### Bước 1 — Thêm Ray và hàm lấy điểm trên tia
+### 1. Thêm dữ liệu Ray, rồi mới thêm cách tạo ray
 
-Thêm vào include/camera.hpp:
+Trong `camera.hpp`, đặt định nghĩa này sau phần camera:
 
+{/* snippet include/camera.hpp#ray-data */}
 ```cpp title="include/camera.hpp — dữ liệu và phương trình tia"
 struct Ray {
     Vec3 origin;
@@ -54,57 +56,73 @@ inline Vec3 at(const Ray& ray, double t) {
 }
 ```
 
-tMin nhỏ loại giao ngay sát origin; đây là lựa chọn của công cụ picking, không phải lời giải tổng quát cho self-intersection. tMax giới hạn đoạn cần xét. Hàm valid từ chối vector zero, NaN/Infinity, range âm hoặc đảo; hàm inRange kiểm một nghiệm có nằm trong đoạn hay không.
+`at(ray,t)` trả một điểm world, không phải pixel. `tMin=1e−6` loại các giao ngay sát nguồn theo chính sách picking của bài; đây không phải lời giải tổng quát cho self-intersection. `Workshop` đặt tMax mặc định 14 và cho chỉnh trong [0.1,30].
 
-### Bước 2 — Dựng direction bằng chính camera dùng để vẽ
+### 2. Dựng ray qua vị trí ngắm
 
-Hàm cameraRay nhận u/v đã chuẩn hóa:
+Thêm hàm đầy đủ sau đây, dùng lại `cameraBasis` của Bài 01:
 
-```cpp title="include/camera.hpp — ray qua image plane"
-const Basis basis = cameraBasis(camera);
-const double screenX = (2 * u - 1) * aspect * camera.tanHalfFov;
-const double screenY = (1 - 2 * v) * camera.tanHalfFov;
-const Vec3 offset = add(multiply(basis.right, screenX), multiply(basis.up, screenY));
-const Vec3 direction = normalize(add(basis.forward, offset));
-return {camera.origin, direction, 1e-6, tMax};
-```
-
-Tia giữa hình không cần offset. Ở mép phải, right được cộng thêm; ở mép trên, up được cộng thêm. Origin vẫn ở camera. Đây là phép dựng bằng hình học tương đương unprojection cho camera perspective này; chưa cần inverse matrix.
-
-### Bước 3 — Đổi mouse event trước khi tính u/v
-
-Main dùng logical presentation 900×640 nên cần đổi event bằng API của SDL:
-
-```cpp title="src/main.cpp — event sang hệ pixel dùng để vẽ"
-if (!SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
-    failed = true;
-    break;
-}
-if (event.motion.x >= 0 && event.motion.x <= picking::viewWidth && event.motion.y >= 0 && event.motion.y <= picking::viewHeight) {
-    u = event.motion.x / picking::viewWidth;
-    v = event.motion.y / picking::viewHeight;
+{/* snippet include/camera.hpp#camera-ray */}
+```cpp title="include/camera.hpp — tạo ray qua image plane"
+inline Ray cameraRay(const Camera& camera, double u, double v, double aspect, double tMax = 30) {
+    const Basis basis = cameraBasis(camera);
+    const double screenX = (2 * u - 1) * aspect * camera.tanHalfFov;
+    const double screenY = (1 - 2 * v) * camera.tanHalfFov;
+    const Vec3 offset = add(multiply(basis.right, screenX), multiply(basis.up, screenY));
+    const Vec3 direction = normalize(add(basis.forward, offset));
+    return {camera.origin, direction, 1e-6, tMax};
 }
 ```
 
-Chỉ đổi event đang xử lý, không dùng một mouse state khác vẫn ở window coordinates. Bỏ event ngoài vùng logical content: rê chuột trên viền letterbox không được kéo tâm ngắm vào cảnh. Canvas dùng CSS pixels cho input và backing bitmap theo DPR; phép toán của Canvas không nhân DPR lần nữa.
+Ở giữa hình, hai offset đều bằng zero nên direction trùng forward. Ở mép phải, ta cộng right; ở mép trên, cộng up. `origin` vẫn là vị trí emitter. Không lấy mouse.x/y gán thẳng vào direction vì chúng là pixel, không phải một hướng 3D.
 
-SDL mô tả trực tiếp việc chuyển window coordinates, render scale và logical presentation tại [SDL_ConvertEventToRenderCoordinates](https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates).
+### 3. Đổi input về đúng hệ trước khi tính u/v
+
+`readInput` trong `input.hpp` được main gọi ở đầu mỗi frame. Nó đổi mouse event sang logical coordinates **trước khi** kiểm nút hoặc vùng ngắm:
+
+{/* snippet include/input.hpp#event-coordinates */}
+```cpp title="include/input.hpp — đổi hệ tọa độ event"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP || event.type == SDL_EVENT_MOUSE_MOTION) {
+    if (!SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
+        return false;
+    }
+}
+```
+
+Chỉ khi nhấn chuột trái trong `aimRect`, ứng dụng bắt đầu kéo ngắm và gọi `SDL_CaptureMouse(true)`. Nhờ capture, kéo ra ngoài rồi buông vẫn kết thúc được thao tác. Mouse-up, mất focus hoặc minimize đều nhả capture. Viền letterbox không được bắt đầu một thao tác mới.
+
+Tọa độ logical vẫn tính từ góc cửa sổ chính, nên phải trừ vị trí của cửa sổ ngắm trước khi chia kích thước:
+
+{/* snippet include/input.hpp#aim-input */}
+```cpp title="include/input.hpp — input trong cửa sổ ngắm"
+inline void aimInput(Workshop& state, float x, float y) {
+    state.u = std::clamp((x - aimRect.x) / aimRect.w, 0.0f, 1.0f);
+    state.v = std::clamp((y - aimRect.y) / aimRect.h, 0.0f, 1.0f);
+}
+```
+
+Hàm được gọi ở mouse-down và mouse-motion khi đang kéo. Mũi tên thay cùng u/v bằng bước 0.02. Trong Canvas, input dùng CSS pixels, bitmap dùng DPR; không nhân DPR thêm lần nữa vào vị trí chuột. Xem [SDL_ConvertEventToRenderCoordinates](https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates) nếu muốn đối chiếu cách SDL xử lý logical presentation và scale.
 
 ## Ghép các phần lại
 
-Build project_52_checkpoint_2. Main tạo ray mỗi frame từ camera, u/v, aspect=900/640 và tMax. drawRay vẽ crosshair ở màn hình, đoạn tia ở ô XZ; title ghi direction và range. R đưa tâm ngắm về giữa.
+`Workshop::ray()` gọi `cameraRay(emitter,u,v,aimAspect,tMax)`. Mỗi frame, `drawWorkshop` lấy ray ấy để vẽ từ origin tới `at(ray,tMax)` ở góc nhìn quan sát. Sau đó main gọi `drawWorkshop(aimRaster,state,true)` để vẽ chính cảnh từ emitter lên texture nhỏ. Tâm ngắm được đặt tại `aimRect.x+u*aimRect.w`, `aimRect.y+v*aimRect.h`.
 
-Checkpoint này vẫn không có Hit. Chưa thấy dấu chạm trên sphere là đúng, không phải ray đang hỏng.
+Hai góc nhìn dùng cùng dữ liệu world, nhưng khác camera. Bảng bên phải hiển thị origin/direction; nguồn tia là chấm sáng trong cảnh. Phím J/L dịch nguồn theo x, U/O theo y, K/I theo z; `moveSource` dịch cả origin lẫn target cùng delta để giữ hướng. F ngắm vào tâm hình đang chọn. Các nút trên bảng có tác dụng tương đương.
+
+Build và chạy `project_52_checkpoint_2`. Bạn có thể xoay góc nhìn khi tia đứng yên, rồi dịch nguồn để phân biệt thay đổi góc quan sát với thay đổi hình học phép đo.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ aspect khỏi screenX. Tia giữa hình vẫn đúng nhưng tia gần mép lệch, đặc biệt khi đổi aspect trong tests. Khôi phục aspect.
-2. Bỏ ConvertEventToRenderCoordinates, rồi resize thành cửa sổ rất rộng có viền đen. Dự đoán tâm ngắm lệch ra sao trước khi thử và hoàn tác.
+1. Trong `Workshop::ray`, đổi emitter thành `observer.camera()`. Orbit và quan sát direction tự đổi dù không hề kéo tâm ngắm. Khôi phục emitter.
+2. Bỏ aspect khỏi `screenX`. Giữa hình vẫn đúng nên dễ bị đánh lừa; ray gần mép sẽ không project về đúng pixel. Khôi phục aspect, rồi thử lại ở các góc.
+3. Bỏ phép trừ `aimRect.x/y` hoặc bỏ bước đổi SDL event. Resize cửa sổ có letterbox để thấy tâm ngắm lệch khỏi chuột, rồi khôi phục cả hai.
 
 ## Tự kiểm tra kết quả
 
-Direction dài một. Điểm ray.at(5) project về đúng u/v, không chỉ “gần tâm ngắm”. Mũi tên và chuột đều ngắm được; R đặt lại. Letterbox và DPI không tạo thêm phép scale input. CTest cuối project kiểm round-trip với nhiều aspect độc lập.
+Direction dài một. Lấy `at(ray,5)`, project bằng emitter ở kích thước 280×190: kết quả phải là (u×280,v×190). Orbit/pan/zoom observer giữ nguyên ray. Dịch nguồn giữ hướng nhưng đổi origin. R đặt lại cảnh, nguồn, góc nhìn và khoảng tia; buông chuột ngoài vùng ngắm không để thao tác kéo bị kẹt.
+
+Đọc khoảng 25–35 phút, tự viết/nối input 35–50 phút, kiểm round-trip và resize 15–20 phút. Source đầy đủ dưới bài là checkpoint 2, chưa chứa phép giao plane/sphere/box/triangle.
 
 ## Bài tập mở rộng
 
-Tính direction cho bốn góc bằng giấy, rồi so với inspector. Tiếp theo ta tìm [điểm chạm với plane](/projects/ray-intersections/03-giao-voi-plane).
+Tính direction ở bốn góc image plane bằng giấy trước khi so inspector. Tiếp theo, ta sẽ trả lời câu hỏi đầu tiên về bề mặt: [tia chạm mặt phẳng ở đâu?](/projects/ray-intersections/03-giao-voi-plane)

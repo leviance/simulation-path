@@ -19,9 +19,9 @@ struct Box {
 };
 
 struct Triangle {
-    Vec3 a{-0.9, -0.6, 2.5};
-    Vec3 b{1, -0.6, 2.5};
-    Vec3 c{0.1, 1.3, 2.5};
+    Vec3 a{-0.9, 0.4, 2.5};
+    Vec3 b{1, 0.4, 2.5};
+    Vec3 c{0.1, 2.3, 2.5};
 };
 
 struct Scene {

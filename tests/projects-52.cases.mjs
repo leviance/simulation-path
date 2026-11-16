@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { workspace, authoredLessons, render } from "./site-support.mjs";
+import "./ray-intersections-content.test.mjs";
 const directory = path.join(workspace, "examples/project-52-ray-intersections");
 test("Project52 publishes eight staged ray lessons with challenge, One Dark and runnable source", async () => {
   const overview = await render("/projects/ray-intersections");
@@ -18,6 +19,11 @@ test("Project52 publishes eight staged ray lessons with challenge, One Dark and 
     assert.equal(response.status, 200);
     assert.match(html, /one-dark-pro/);
     assert.match(html, /ma-chay-duoc-sau-bai/);
+    assert.match(html, /data-ray52-ready="false"/);
+    assert.match(
+      html,
+      /aria-label="Điều khiển ray inspector"[^>]*disabled|disabled[^>]*aria-label="Điều khiển ray inspector"/,
+    );
     assert.doesNotMatch(html, /katex-error/);
     assert.ok(Buffer.byteLength(html) < 250 * 1024);
     const source = await readFile(
@@ -29,7 +35,7 @@ test("Project52 publishes eight staged ray lessons with challenge, One Dark and 
 });
 test("Project52 starts with visible scene then introduces each intersection only when taught", async () => {
   for (const [step, file, symbol] of [
-    [1, "include/view.hpp", "drawScene("],
+    [1, "include/scene-drawing.hpp", "drawScene("],
     [2, "include/camera.hpp", "cameraRay("],
     [3, "include/hit.hpp", "intersectPlane("],
     [4, "include/sphere.hpp", "intersectSphere("],

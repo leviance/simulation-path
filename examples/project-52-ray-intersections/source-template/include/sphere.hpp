@@ -4,8 +4,18 @@
 
 namespace picking {
 #if LAB_CHECKPOINT >= 4
+// Keep the uncut geometric interval, including a negative entry for an inside ray.
+// [snippet sphere-data]
+struct SphereInterval {
+    double entry;
+    double exit;
+};
+
+// [/snippet sphere-data]
+
 // Solve a*t*t + 2*halfB*t + c = 0 without assuming a unit direction.
-inline std::optional<Hit> intersectSphere(const Ray& ray, const Sphere& sphere) {
+// [snippet sphere-interval]
+inline std::optional<SphereInterval> sphereInterval(const Ray& ray, const Sphere& sphere) {
     if (!valid(ray) || !finite(sphere.center) || !std::isfinite(sphere.radius) || sphere.radius <= 0) {
         return std::nullopt;
     }
@@ -31,10 +41,23 @@ inline std::optional<Hit> intersectSphere(const Ray& ray, const Sphere& sphere) 
     if (t0 > t1) {
         std::swap(t0, t1);
     }
+    if (!std::isfinite(t0) || !std::isfinite(t1)) {
+        return std::nullopt;
+    }
+    return SphereInterval{t0, t1};
+}
 
-    double t = t0;
+// [/snippet sphere-interval]
+
+// [snippet sphere-hit]
+inline std::optional<Hit> intersectSphere(const Ray& ray, const Sphere& sphere) {
+    const auto interval = sphereInterval(ray, sphere);
+    if (!interval) {
+        return std::nullopt;
+    }
+    double t = interval->entry;
     if (!inRange(ray, t)) {
-        t = t1;
+        t = interval->exit;
     }
     if (!inRange(ray, t)) {
         return std::nullopt;
@@ -43,5 +66,7 @@ inline std::optional<Hit> intersectSphere(const Ray& ray, const Sphere& sphere) 
     const Vec3 normal = normalize(subtract(at(ray, t), sphere.center));
     return makeHit(ray, t, normal, 1);
 }
+
+// [/snippet sphere-hit]
 #endif
 } // namespace picking

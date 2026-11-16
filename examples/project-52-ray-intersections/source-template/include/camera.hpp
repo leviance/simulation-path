@@ -17,8 +17,15 @@ struct Basis {
 };
 
 inline Basis cameraBasis(const Camera& camera) {
-    const Vec3 forward = normalize(subtract(camera.target, camera.origin));
-    const Vec3 right = normalize(cross({0, 1, 0}, forward));
+    Vec3 forward = normalize(subtract(camera.target, camera.origin));
+    if (length(forward) == 0) {
+        forward = {0, 0, 1};
+    }
+    Vec3 referenceUp{0, 1, 0};
+    if (std::abs(forward.y) > 0.999) {
+        referenceUp = {0, 0, 1};
+    }
+    const Vec3 right = normalize(cross(referenceUp, forward));
     return {forward, right, cross(forward, right)};
 }
 
@@ -28,6 +35,7 @@ struct Pixel {
 };
 
 #if LAB_CHECKPOINT >= 1
+// [snippet projection]
 inline std::optional<Pixel> project(Vec3 point, const Camera& camera, double width, double height) {
     const Basis basis = cameraBasis(camera);
     const Vec3 relative = subtract(point, camera.origin);
@@ -38,9 +46,12 @@ inline std::optional<Pixel> project(Vec3 point, const Camera& camera, double wid
     const double scale = height / (2 * camera.tanHalfFov * depth);
     return Pixel{width / 2 + scale * dot(relative, basis.right), height / 2 - scale * dot(relative, basis.up)};
 }
+
+// [/snippet projection]
 #endif
 
 #if LAB_CHECKPOINT >= 2
+// [snippet ray-data]
 struct Ray {
     Vec3 origin;
     Vec3 direction;
@@ -52,6 +63,9 @@ inline Vec3 at(const Ray& ray, double t) {
     return add(ray.origin, multiply(ray.direction, t));
 }
 
+// [/snippet ray-data]
+
+// [snippet camera-ray]
 inline Ray cameraRay(const Camera& camera, double u, double v, double aspect, double tMax = 30) {
     const Basis basis = cameraBasis(camera);
     const double screenX = (2 * u - 1) * aspect * camera.tanHalfFov;
@@ -60,6 +74,8 @@ inline Ray cameraRay(const Camera& camera, double u, double v, double aspect, do
     const Vec3 direction = normalize(add(basis.forward, offset));
     return {camera.origin, direction, 1e-6, tMax};
 }
+
+// [/snippet camera-ray]
 
 inline bool valid(const Ray& ray) {
     return finite(ray.origin) && finite(ray.direction) && length(ray.direction) > 0 && std::isfinite(ray.tMin) && std::isfinite(ray.tMax) && ray.tMin >= 0 && ray.tMax >= ray.tMin;

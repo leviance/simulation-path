@@ -4,7 +4,7 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Ray đã đi đúng qua tâm ngắm. Câu hỏi tiếp theo là nó chạm mặt phẳng y=−1 ở đâu. Đây là phép giao đơn giản nhất để kiểm toàn bộ đường đi: mouse → ray → t → world point → marker.
+Ray đã đi đúng qua tâm ngắm và nhìn được từ camera quan sát. Câu hỏi tiếp theo là nó chạm mặt phẳng y=−1 ở đâu. Đây là phép giao đơn giản nhất để kiểm toàn bộ đường đi: mouse → ray → t → world point → marker.
 
 Ta cần phân biệt ba điều: tia chạm ở phía trước, đường thẳng có giao nhưng điểm ấy nằm sau origin, và tia song song nên không có điểm chạm duy nhất. Không thể trả t=0 cho tất cả ca thất bại vì t=0 đôi khi là nghiệm thật.
 
@@ -22,7 +22,7 @@ Tia nằm hẳn trên plane có vô số điểm chung, không có một surface
 
 <InteractiveLab demo="ray-intersections" mode="ray52-3" />
 
-Ngắm xuống plane, đọc t và point.y. Point.y phải là −1. Chọn thí nghiệm “Song song plane”: kết quả MISS là chủ động, không phải NaN. Hướng gần ngang có thể chạm rất xa; tMax có thể loại nghiệm dù đường thẳng vẫn cắt plane.
+Chọn Plane trên bảng rồi ngắm xuống sàn, đọc t và point.y. Point.y phải là −1. Chọn thí nghiệm “Song song plane”: kết quả MISS là chủ động, không phải NaN. Hướng gần ngang có thể chạm rất xa; tMax có thể loại nghiệm dù đường thẳng vẫn cắt plane.
 
 ## Viết code từng bước
 
@@ -30,6 +30,7 @@ Ngắm xuống plane, đọc t và point.y. Point.y phải là −1. Chọn thí
 
 Thêm Hit trong include/hit.hpp:
 
+{/* snippet include/hit.hpp#hit-data */}
 ```cpp title="include/hit.hpp — kết quả phép giao"
 struct Hit {
     double t = 0;
@@ -40,41 +41,74 @@ struct Hit {
     double u = 0;
     double v = 0;
 };
+
+inline Hit makeHit(const Ray& ray, double t, Vec3 normal, int objectId) {
+    Hit hit;
+    hit.t = t;
+    hit.point = at(ray, t);
+    hit.normal = normal;
+    hit.frontFace = dot(ray.direction, normal) < 0;
+    hit.objectId = objectId;
+    return hit;
+}
 ```
 
 Hàm giao trả `std::optional<Hit>`: có giá trị là hit, rỗng là miss. u/v dành cho tam giác sau này. ID plane là 0; sphere, box, triangle lần lượt 1,2,3. Không dùng con trỏ vào renderer hay một index thay đổi theo thứ tự vẽ.
 
-### Bước 2 — Chặn tia song song trước phép chia
+### Bước 2 — Viết phép giao plane hoàn chỉnh
 
-Chuẩn hóa normal để inspector luôn đọc vector unit:
+Hàm nhận đúng ray đang vẽ và dữ liệu plane trong Scene. Đọc lần lượt ba việc: kiểm input, xử lý song song trước phép chia, rồi chỉ nhận nghiệm trong khoảng tia.
 
-```cpp title="include/hit.hpp — denominator và chính sách gần song song"
-const Vec3 normal = normalize(plane.normal);
-const double denominator = dot(ray.direction, normal);
-if (std::abs(denominator) <= 1e-10 * length(ray.direction)) {
-    return std::nullopt;
+{/* snippet include/hit.hpp#plane-hit */}
+```cpp title="include/hit.hpp — phép giao mặt phẳng"
+inline std::optional<Hit> intersectPlane(const Ray& ray, const Plane& plane) {
+    if (!valid(ray) || !finite(plane.point) || !finite(plane.normal) || length(plane.normal) == 0) {
+        return std::nullopt;
+    }
+    const Vec3 normal = normalize(plane.normal);
+    const double denominator = dot(ray.direction, normal);
+    // Relative angular threshold; a coplanar ray has no unique surface hit.
+    if (std::abs(denominator) <= 1e-10 * length(ray.direction)) {
+        return std::nullopt;
+    }
+    const double t = dot(subtract(plane.point, ray.origin), normal) / denominator;
+    if (!inRange(ray, t)) {
+        return std::nullopt;
+    }
+    return makeHit(ray, t, normal, 0);
 }
 ```
 
-Trước đoạn này, valid kiểm ray, point, normal và normal zero. Ngưỡng này cố ý loại một vùng góc rất nhỏ; nó không chứng minh mọi phép tính floating point đều chính xác. Scene của bài dùng tọa độ nhỏ, không dữ liệu địa lý rất lớn.
+`valid` từ chối ray sai; nhánh đầu còn kiểm point/normal hữu hạn và normal khác zero. Sau đó normal được chuẩn hóa để bảng luôn đọc vector unit. Ngưỡng góc cố ý loại một vùng rất nhỏ gần song song; nó không chứng minh mọi phép tính floating point đều chính xác. Scene dùng tọa độ nhỏ, không dữ liệu địa lý rất lớn.
 
-### Bước 3 — Chọn t hợp lệ rồi dựng point
+### Bước 3 — Nối kết quả vào phần vẽ, không tính lại bằng pixel
 
-```cpp title="include/hit.hpp — nghiệm plane"
-const double t = dot(subtract(plane.point, ray.origin), normal) / denominator;
-if (!inRange(ray, t)) {
-    return std::nullopt;
+{/* snippet include/view.hpp#draw-hit */}
+```cpp title="include/view.hpp — vẽ hit và normal trong world"
+inline void drawHit(Raster& raster, const Hit& hit, bool selected) {
+    Color color{164, 182, 202};
+    if (selected) {
+        color = {139, 255, 162};
+    }
+    const Vec3 end = add(hit.point, multiply(hit.normal, 0.65));
+    raster.marker(hit.point, color, 4);
+    raster.line(hit.point, end, color, true, 1);
+    const Vec3 side = cameraBasis(raster.camera).right;
+    const Vec3 base = subtract(end, multiply(hit.normal, 0.14));
+    raster.line(end, add(base, multiply(side, 0.08)), color, true);
+    raster.line(end, subtract(base, multiply(side, 0.08)), color, true);
 }
-return makeHit(ray, t, normal, 0);
 ```
 
-makeHit lấy point=at(ray,t) và frontFace từ dot; không tự lật normal. candidates trong include/query.hpp đặt kết quả plane vào slot 0. Main vẽ marker xám và đoạn normal, ghi t lên title. Chưa chọn nearest: đến Bài 07 ta mới quyết định ứng viên nào gần nhất.
+`makeHit` ở bước trước lấy point=at(ray,t) và frontFace từ dot; không tự lật normal. Hàm `drawHit` vừa thêm nhận point/normal ấy trong world. Nó vẽ từ point tới point+0.65*normal rồi thêm hai cánh mũi tên; không cộng normal world vào pixel màn hình.
+
+Trong `query.hpp`, `candidates` gọi `intersectPlane(ray,scene.plane)` vào slot ID 0. `drawWorkshop` gọi candidates sau khi lấy `state.ray()`, duyệt các kết quả có giá trị rồi gọi `drawHit`. `drawPanel` đọc cùng kết quả để hiện t/point/normal bên phải. Đó là chỗ nối hàm mới vào ứng dụng đang chạy. Bài 07 mới chọn một hit gần nhất; ở checkpoint này chưa được gọi marker là kết quả chọn giữa cả bốn vật.
 
 ## Ghép các phần lại
 
 Build project_52_checkpoint_3. Ngắm xuống lưới rồi lên cao: một phía có hit, một phía miss. Marker có thể nằm ngoài vùng lưới được vẽ vì plane là vô hạn; lưới chỉ giúp nhìn phương hướng.
 
-Khung dây không có depth test. Hiện tại dấu chạm plane có thể nhìn xuyên sphere; chưa được gọi đó là chọn nhầm. Sphere chưa có hàm giao ở checkpoint này.
+Bề mặt có depth test, nhưng marker và normal là lớp debug cố ý nhìn được cả khi bị che; phần đường tia khuất dùng nét đứt tối. Chưa được gọi dấu plane phía sau sphere là chọn nhầm: sphere chưa có hàm giao ở checkpoint này.
 
 ## Thử làm sai để hiểu đúng
 
@@ -87,4 +121,4 @@ Các hit có point.y≈−1, normal=(0,1,0), frontFace đúng dấu dot. Tia son
 
 ## Bài tập mở rộng
 
-Đổi plane thành mặt nghiêng và kiểm residual n·(point−plane.point). Nếu cần chọn một miếng sàn hữu hạn, phải thêm kiểm biên riêng, không sửa công thức plane. Sang [Bài 04 — giao sphere](/projects/ray-intersections/04-giao-voi-sphere).
+Dịch plane lên/xuống bằng Q/E và dự đoán điểm chạm trước khi nhìn bảng. Dịch plane theo x/z không đổi mặt phẳng vô hạn y=constant — chỉ miếng lưới minh họa đổi vị trí. Nếu mở rộng sang plane nghiêng, phải sửa cả mặt minh họa, không chỉ normal của phép giao. Sang [Bài 04 — giao sphere](/projects/ray-intersections/04-giao-voi-sphere).

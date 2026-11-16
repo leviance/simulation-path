@@ -4,6 +4,7 @@
 namespace picking {
 #if LAB_CHECKPOINT >= 6
 // Two-sided Moller-Trumbore. Closed barycentric edges; not a watertight mesh test.
+// [snippet triangle-hit]
 inline std::optional<Hit> intersectTriangle(const Ray& ray, const Triangle& triangle) {
     if (!valid(ray) || !finite(triangle.a) || !finite(triangle.b) || !finite(triangle.c)) {
         return std::nullopt;
@@ -33,5 +34,7 @@ inline std::optional<Hit> intersectTriangle(const Ray& ray, const Triangle& tria
     hit.v = v;
     return hit;
 }
+
+// [/snippet triangle-hit]
 #endif
 } // namespace picking

@@ -31,59 +31,88 @@ Ngắm sphere và đọc t cùng normal. Chọn “Tiếp tuyến sphere”: ray
 
 ## Viết code từng bước
 
-### Bước 1 — Tính các hệ số từ offset
+### Bước 1 — Giữ hai nghiệm, chưa vội chọn một hit
 
 Trong include/sphere.hpp:
 
-```cpp title="include/sphere.hpp — quadratic của sphere"
-const Vec3 offset = subtract(ray.origin, sphere.center);
-const double a = dot(ray.direction, ray.direction);
-const double halfB = dot(offset, ray.direction);
-const double c = dot(offset, offset) - sphere.radius * sphere.radius;
-const double discriminant = halfB * halfB - a * c;
+{/* snippet include/sphere.hpp#sphere-data */}
+```cpp title="include/sphere.hpp — khoảng hình học của sphere"
+struct SphereInterval {
+    double entry;
+    double exit;
+};
 ```
 
-Hàm đã kiểm valid ray, center hữu hạn và radius dương. Sau đoạn này, discriminant không hữu hạn/âm hoặc a không hợp lệ đều trả miss. Không kẹp một discriminant âm thành zero: làm vậy có thể biến tia trượt sphere thành một hit tiếp tuyến giả.
+`SphereInterval` giữ entry và exit hình học **chưa cắt range**. Khi nguồn ở trong sphere, entry vẫn âm; tiếp tuyến có hai giá trị bằng nhau. Như vậy bảng số còn giải thích được vì sao phép chọn bề mặt bên dưới nhận hoặc bỏ một nghiệm.
 
-### Bước 2 — Tính hai nghiệm và xử lý q=0
+### Bước 2 — Viết hàm giải quadratic và xử lý q=0
 
-```cpp title="include/sphere.hpp — nghiệm ít triệt tiêu hơn"
-const double root = std::sqrt(discriminant);
-const double q = -halfB - std::copysign(root, halfB);
-double t0 = -halfB / a;
-double t1 = t0;
-if (q != 0) {
-    t0 = q / a;
-    t1 = c / q;
-}
-if (t0 > t1) {
-    std::swap(t0, t1);
+{/* snippet include/sphere.hpp#sphere-interval */}
+```cpp title="include/sphere.hpp — giải hai nghiệm"
+inline std::optional<SphereInterval> sphereInterval(const Ray& ray, const Sphere& sphere) {
+    if (!valid(ray) || !finite(sphere.center) || !std::isfinite(sphere.radius) || sphere.radius <= 0) {
+        return std::nullopt;
+    }
+
+    const Vec3 offset = subtract(ray.origin, sphere.center);
+    const double a = dot(ray.direction, ray.direction);
+    const double halfB = dot(offset, ray.direction);
+    const double c = dot(offset, offset) - sphere.radius * sphere.radius;
+    const double discriminant = halfB * halfB - a * c;
+    if (!std::isfinite(discriminant) || discriminant < 0 || !std::isfinite(a) || a <= 0) {
+        return std::nullopt;
+    }
+
+    const double root = std::sqrt(discriminant);
+    const double q = -halfB - std::copysign(root, halfB);
+    double t0 = -halfB / a;
+    double t1 = t0;
+    // A tangent at t=0 has q=0. Never evaluate c/q in that case.
+    if (q != 0) {
+        t0 = q / a;
+        t1 = c / q;
+    }
+    if (t0 > t1) {
+        std::swap(t0, t1);
+    }
+    if (!std::isfinite(t0) || !std::isfinite(t1)) {
+        return std::nullopt;
+    }
+    return SphereInterval{t0, t1};
 }
 ```
 
-copysign lấy độ lớn root với dấu halfB. Nếu q=0, phép c/q không được thực hiện; hai nghiệm giữ −halfB/a. Ca tiếp tuyến ngay tại origin dùng nhánh này. Nếu tMin dương, nghiệm t=0 vẫn bị loại đúng theo range.
+Hàm kiểm valid ray, center hữu hạn và radius dương trước khi tính offset, a, halfB, c. Discriminant âm/không hữu hạn trả miss; không kẹp số âm thành zero để tạo hit tiếp tuyến giả. `copysign` lấy độ lớn root với dấu halfB. Nếu q=0, không thực hiện c/q; hai nghiệm giữ −halfB/a. Cuối hàm sắp nghiệm và từ chối nghiệm không hữu hạn.
 
 ### Bước 3 — Thử cả nghiệm vào và nghiệm ra
 
-```cpp title="include/sphere.hpp — chọn nghiệm và outward normal"
-double t = t0;
-if (!inRange(ray, t)) {
-    t = t1;
+{/* snippet include/sphere.hpp#sphere-hit */}
+```cpp title="include/sphere.hpp — chọn giao bề mặt"
+inline std::optional<Hit> intersectSphere(const Ray& ray, const Sphere& sphere) {
+    const auto interval = sphereInterval(ray, sphere);
+    if (!interval) {
+        return std::nullopt;
+    }
+    double t = interval->entry;
+    if (!inRange(ray, t)) {
+        t = interval->exit;
+    }
+    if (!inRange(ray, t)) {
+        return std::nullopt;
+    }
+
+    const Vec3 normal = normalize(subtract(at(ray, t), sphere.center));
+    return makeHit(ray, t, normal, 1);
 }
-if (!inRange(ray, t)) {
-    return std::nullopt;
-}
-const Vec3 normal = normalize(subtract(at(ray, t), sphere.center));
-return makeHit(ray, t, normal, 1);
 ```
 
 Khi origin ở trong sphere, t0 âm và t1 dương; đoạn code tự chọn t1. Khi tMin nằm sau entry nhưng trước exit, cũng chọn exit. Normal hướng từ tâm ra ngoài, kể cả ở mặt thoát; frontFace khi đó false.
 
 ## Ghép các phần lại
 
-Build project_52_checkpoint_4. candidates giờ có plane và sphere. Hai hit cùng một ray có thể được ghi lên title; chưa có “nearest”. Vẽ sphere bằng các vòng tròn không ảnh hưởng phương trình giao.
+Build `project_52_checkpoint_4`. Trong `query.hpp`, candidates thêm slot 1 bằng `intersectSphere(ray,scene.sphere)`; vòng vẽ hit cũ tự nhận thêm kết quả. Chọn Sphere trên bảng, nhấn F để emitter ngắm tâm cầu, rồi kéo tâm ngắm ra rìa. Bảng hiển thị cả entry/exit từ `sphereInterval` và t được chọn từ `intersectSphere`; điểm ra màu vàng. Chưa có lựa chọn nearest giữa các vật.
 
-Muốn kiểm ca inside ngay ở checkpoint 4, tạm đổi camera.origin sang scene.sphere.center và target sang tâm cộng (0,0,1). Bài 07 mới có preset chính thức; chưa cần thêm hệ thống camera để làm phép thử này.
+Muốn kiểm inside ngay ở checkpoint 4, đặt `state.emitter.origin` bằng `state.scene.sphere.center`, target bằng tâm cộng (0,0,1), rồi đặt u=v=0.5. Observer vẫn ở ngoài nên bạn nhìn thấy ray bắt đầu bên trong và đi tới mặt thoát. Bài 07 mới thêm preset để khỏi sửa source mỗi lần thử. Renderer dùng mesh sphere để vẽ, nhưng phép giao ở đây dùng phương trình mặt cầu, độc lập độ mịn mesh.
 
 Tham khảo cách thiết lập quadratic và khó khăn floating point tại [PBRT — Spheres](https://www.pbr-book.org/4ed/Shapes/Spheres). PBRT có xử lý sai số sâu hơn; source của bài là bản giảng dạy cho cảnh nhỏ, không phải bản sao của renderer ấy.
 
@@ -98,4 +127,4 @@ Entry, exit, tangent và miss có ca riêng. Hit thỏa length(point−center)�
 
 ## Bài tập mở rộng
 
-Trả cả entry/exit để đo độ dài đoạn xuyên sphere; nhớ đoạn dài bằng (tExit−tEntry)*length(direction). Tiếp tục với [ba slab của box](/projects/ray-intersections/05-giao-voi-box).
+Dùng khoảng entry/exit đã có để tính chiều dài đoạn xuyên sphere: (tExit−tEntry)*length(direction). Nếu chỉ đo phần trong ray interval, cắt hai đầu trước khi tính độ dài — nhưng đừng đổi kết quả ấy thành một surface hit giả. Tiếp tục với [ba slab của box](/projects/ray-intersections/05-giao-voi-box).

@@ -1,25 +1,26 @@
-#include "scan.hpp"
-#include "validation.hpp"
-#include "view.hpp"
+#include "input.hpp"
+#include "run-options.hpp"
 #include <cstdlib>
-#include <iomanip>
 #include <iostream>
-#include <sstream>
 
-int main(int, char**) {
-    // Khởi tạo SDL, window và renderer. Starter chỉ có nền trống.
+int main(int argc, char** argv) {
+    picking::RunOptions options;
+    if (!picking::parseOptions(argc, argv, options)) {
+        return EXIT_FAILURE;
+    }
+
+    // Acquire resources one at a time; every failing branch releases predecessors.
+    // [snippet sdl-window]
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << SDL_GetError() << '\n';
         return EXIT_FAILURE;
     }
-
-    SDL_Window* window = SDL_CreateWindow("Ray intersection lab", picking::viewWidth, picking::viewHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_Window* window = SDL_CreateWindow("Project 52 - Ray geometry workshop", picking::viewWidth, picking::viewHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (window == nullptr) {
         std::cerr << SDL_GetError() << '\n';
         SDL_Quit();
         return EXIT_FAILURE;
     }
-
     SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
     if (renderer == nullptr) {
         std::cerr << SDL_GetError() << '\n';
@@ -27,7 +28,7 @@ int main(int, char**) {
         SDL_Quit();
         return EXIT_FAILURE;
     }
-
+    // [/snippet sdl-window]
     if (!SDL_SetRenderLogicalPresentation(renderer, picking::viewWidth, picking::viewHeight, SDL_LOGICAL_PRESENTATION_LETTERBOX)) {
         std::cerr << SDL_GetError() << '\n';
         SDL_DestroyRenderer(renderer);
@@ -36,177 +37,120 @@ int main(int, char**) {
         return EXIT_FAILURE;
     }
 
-    bool running = true;
+    SDL_Texture* sceneTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, picking::sceneWidth, picking::viewHeight);
+    if (sceneTexture == nullptr) {
+        std::cerr << SDL_GetError() << '\n';
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return EXIT_FAILURE;
+    }
+    SDL_Texture* aimTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, 280, 190);
+    if (aimTexture == nullptr) {
+        std::cerr << SDL_GetError() << '\n';
+        SDL_DestroyTexture(sceneTexture);
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return EXIT_FAILURE;
+    }
+
+    picking::Workshop state;
+    picking::Interaction input;
+    picking::Raster sceneRaster(picking::sceneWidth, picking::viewHeight);
+    picking::Raster aimRaster(280, 190);
+#if LAB_CHECKPOINT >= 7
+    if (options.preset != 0) {
+        state.preset(options.preset);
+    }
+#endif
     bool failed = false;
-    [[maybe_unused]] picking::Scene scene;
-    [[maybe_unused]] picking::Camera camera;
-#if LAB_CHECKPOINT >= 2
-    double u = 0.5;
-    double v = 0.5;
-    double tMax = 30;
-    std::cout << "Mouse / arrows: aim | R reset | Esc quit\n";
-#endif
-#if LAB_CHECKPOINT >= 7
-    bool paused = true;
-    int preset = 0;
-    picking::Scan scan;
+    int frame = 0;
     std::uint64_t previous = SDL_GetTicksNS();
-    std::cout << "1 room | 2 inside sphere | 3 inside box | 4 miss | Space scan/pause | +/- range | I inspector\n";
-#endif
-#if LAB_CHECKPOINT >= 8
-    std::cout << "V: validate current hits against surface equations\n";
-#endif
-
-    while (running && !failed) {
-        // Read input in logical renderer coordinates, not window or framebuffer pixels.
-        SDL_Event event{};
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_EVENT_QUIT)
-                running = false;
-            if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE)
-                running = false;
-#if LAB_CHECKPOINT >= 2
-            if (event.type == SDL_EVENT_MOUSE_MOTION) {
-                if (!SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
-                    failed = true;
-                    break;
-                }
-                if (event.motion.x >= 0 && event.motion.x <= picking::viewWidth && event.motion.y >= 0 && event.motion.y <= picking::viewHeight) {
-                    u = event.motion.x / picking::viewWidth;
-                    v = event.motion.y / picking::viewHeight;
-#if LAB_CHECKPOINT >= 7
-                    paused = true;
-#endif
-                }
-            }
-            if (event.type == SDL_EVENT_KEY_DOWN) {
-#if LAB_CHECKPOINT >= 7
-                if (event.key.key == SDLK_LEFT || event.key.key == SDLK_RIGHT || event.key.key == SDLK_UP || event.key.key == SDLK_DOWN)
-                    paused = true;
-#endif
-                if (event.key.key == SDLK_LEFT)
-                    u = std::max(0.0, u - 0.02);
-                if (event.key.key == SDLK_RIGHT)
-                    u = std::min(1.0, u + 0.02);
-                if (event.key.key == SDLK_UP)
-                    v = std::max(0.0, v - 0.02);
-                if (event.key.key == SDLK_DOWN)
-                    v = std::min(1.0, v + 0.02);
-                if (event.key.key == SDLK_R) {
-                    u = 0.5;
-                    v = 0.5;
-                    tMax = 30;
-                    camera = {};
-#if LAB_CHECKPOINT >= 7
-                    paused = true;
-                    preset = 0;
-                    scan.reset();
-#endif
-                }
-            }
-#endif
-#if LAB_CHECKPOINT >= 7
-            if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_MINIMIZED)
-                paused = true;
-            if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
-                if (event.key.key == SDLK_SPACE)
-                    paused = !paused;
-                if (event.key.key == SDLK_EQUALS || event.key.key == SDLK_PLUS)
-                    tMax = std::min(30.0, tMax + 1);
-                if (event.key.key == SDLK_MINUS)
-                    tMax = std::max(0.1, tMax - 1);
-                if (event.key.key >= SDLK_1 && event.key.key <= SDLK_4) {
-                    preset = static_cast<int>(event.key.key - SDLK_1);
-                    camera = picking::presetCamera(preset, scene);
-                    u = 0.5;
-                    v = 0.5;
-                    paused = true;
-                    scan.reset();
-                }
-                if (event.key.key == SDLK_I) {
-                    const auto ray = picking::cameraRay(camera, u, v, static_cast<double>(picking::viewWidth) / picking::viewHeight, tMax);
-                    const auto hits = picking::candidates(ray, scene);
-                    const auto interval = picking::boxInterval(ray, scene.box);
-                    if (interval) {
-                        std::cout << "box interval: entry=" << interval->entry << " exit=" << interval->exit << " (before range clipping)\n";
-                    }
-                    for (const auto& hit : hits) {
-                        if (hit) {
-                            std::cout << std::setprecision(8) << "id=" << hit->objectId << " t=" << hit->t << " point=" << hit->point.x << ',' << hit->point.y << ',' << hit->point.z << " normal=" << hit->normal.x << ',' << hit->normal.y << ',' << hit->normal.z << " front=" << hit->frontFace << " bary=" << 1 - hit->u - hit->v << ',' << hit->u << ',' << hit->v << '\n';
-                        }
-                    }
-                }
-            }
-#endif
-#if LAB_CHECKPOINT >= 8
-            if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.key == SDLK_V) {
-                paused = true;
-                const auto value = picking::cameraRay(camera, u, v, static_cast<double>(picking::viewWidth) / picking::viewHeight, tMax);
-                const auto report = picking::validateHits(value, scene, picking::candidates(value, scene));
-                std::cout << "Hit validation: checks=" << report.checks << " failures=" << report.failures << " (does not prove missed hits)\n";
-            }
-#endif
-        }
-        if (failed || !running)
+    while (input.running && !failed) {
+        if (!picking::readInput(renderer, state, input)) {
+            failed = true;
             break;
-
-#if LAB_CHECKPOINT >= 7
-        // Update the clock even while paused; resume never includes paused wall time.
-        const auto now = SDL_GetTicksNS();
-        const double dt = static_cast<double>(now - previous) / 1e9;
-        previous = now;
-        if (!paused) {
-            u = scan.advance(dt);
         }
+        if (!input.running) {
+            break;
+        }
+        // Always refresh the clock while paused; resume excludes paused wall time.
+        const auto now = SDL_GetTicksNS();
+        [[maybe_unused]] const double dt = static_cast<double>(now - previous) / 1e9;
+        previous = now;
+#if LAB_CHECKPOINT >= 7
+        state.update(dt);
 #endif
-        SDL_SetRenderDrawColor(renderer, 11, 16, 32, 255);
+        SDL_SetRenderDrawColor(renderer, 12, 20, 35, 255);
         if (!SDL_RenderClear(renderer)) {
             failed = true;
             break;
         }
+        // [snippet frame-presentation]
+        picking::drawWorkshop(sceneRaster, state);
+        const SDL_FRect viewport{0, 0, picking::sceneWidth, picking::viewHeight};
+        if (!picking::presentRaster(renderer, sceneTexture, sceneRaster, viewport)) {
+            failed = true;
+            break;
+        }
+        // [/snippet frame-presentation]
 #if LAB_CHECKPOINT >= 1
-        picking::drawScene(renderer, scene, camera);
+        picking::drawPanel(renderer, state);
+        picking::text(renderer, 22, 22, "GEOMETRY WORKSHOP", true);
+        picking::text(renderer, 22, 48, "RMB orbit / Shift+RMB pan / wheel zoom");
+        picking::text(renderer, 22, 68, "Keyboard: Ctrl+arrows / +Shift pan / PgUp-Dn zoom");
+        if (state.debug) {
+            picking::drawLabels(renderer, state);
+            picking::text(renderer, 22, 94, "RGB = world X/Y/Z. Dim dashes = hidden ray.");
+        }
 #endif
 #if LAB_CHECKPOINT >= 2
-        const auto ray = picking::cameraRay(camera, u, v, static_cast<double>(picking::viewWidth) / picking::viewHeight, tMax);
-        picking::drawRay(renderer, ray, u, v);
-        std::ostringstream title;
-        title << std::fixed << std::setprecision(3) << "Ray | direction=" << ray.direction.x << ',' << ray.direction.y << ',' << ray.direction.z << " | range=" << tMax;
+        picking::drawWorkshop(aimRaster, state, true);
+        if (!picking::presentRaster(renderer, aimTexture, aimRaster, picking::aimRect)) {
+            failed = true;
+            break;
+        }
+        SDL_SetRenderDrawColor(renderer, 105, 201, 219, 255);
+        SDL_RenderRect(renderer, &picking::aimRect);
+        const float x = picking::aimRect.x + static_cast<float>(state.u) * picking::aimRect.w;
+        const float y = picking::aimRect.y + static_cast<float>(state.v) * picking::aimRect.h;
+        SDL_RenderLine(renderer, x - 7, y, x + 7, y);
+        SDL_RenderLine(renderer, x, y - 7, x, y + 7);
+        picking::text(renderer, 22, 526, "AIM VIEW / drag here or use arrows");
 #endif
-#if LAB_CHECKPOINT >= 3
-        const auto hits = picking::candidates(ray, scene);
-        for (const auto& hit : hits) {
-            if (hit) {
-                picking::drawHit(renderer, *hit, camera, false);
-                title << " | id" << hit->objectId << " t=" << hit->t;
+        ++frame;
+        if (frame == options.frames && !options.capture.empty()) {
+            SDL_Surface* capture = SDL_RenderReadPixels(renderer, nullptr);
+            if (capture == nullptr) {
+                failed = true;
+            } else {
+                if (!SDL_SaveBMP(capture, options.capture.c_str())) {
+                    failed = true;
+                }
+                SDL_DestroySurface(capture);
             }
         }
-#endif
-#if LAB_CHECKPOINT >= 7
-        const auto best = picking::nearestHit(hits);
-        if (best) {
-            picking::drawHit(renderer, *best, camera, true);
-            title << " | nearest=" << best->objectId << " front=" << best->frontFace;
-        } else {
-            title << " | MISS";
-        }
-#endif
-#if LAB_CHECKPOINT >= 2
-        SDL_SetWindowTitle(window, title.str().c_str());
-#endif
-        if (!SDL_RenderPresent(renderer))
+        if (!SDL_RenderPresent(renderer)) {
             failed = true;
+        }
+        if (options.frames > 0 && frame >= options.frames) {
+            input.running = false;
+        }
         SDL_Delay(16);
     }
-
-    if (failed)
+    if (failed) {
         std::cerr << SDL_GetError() << '\n';
-
-    // Giải phóng renderer trước window; không có GPU compute hay thread phụ.
+    }
+    picking::releasePointer(input);
+    SDL_DestroyTexture(aimTexture);
+    SDL_DestroyTexture(sceneTexture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
-    if (failed)
+    if (failed) {
         return EXIT_FAILURE;
+    }
+    std::cout << "Completed " << frame << " frame(s)\n";
     return EXIT_SUCCESS;
 }

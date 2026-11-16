@@ -34,9 +34,9 @@ export const scene: Scene = {
   sphere: { center: { x: -1.5, y: 0, z: 0 }, radius: 0.85 },
   box: { minimum: { x: 0.3, y: -0.9, z: 0 }, maximum: { x: 1.7, y: 0.7, z: 1.4 } },
   triangle: {
-    a: { x: -0.9, y: -0.6, z: 2.5 },
-    b: { x: 1, y: -0.6, z: 2.5 },
-    c: { x: 0.1, y: 1.3, z: 2.5 },
+    a: { x: -0.9, y: 0.4, z: 2.5 },
+    b: { x: 1, y: 0.4, z: 2.5 },
+    c: { x: 0.1, y: 2.3, z: 2.5 },
   },
 };
 export const add = (a: Vec3, b: Vec3): Vec3 => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z });
@@ -57,8 +57,11 @@ export function normalize(v: Vec3): Vec3 {
   return multiply(v, 1 / magnitude);
 }
 export function cameraBasis(camera: Camera) {
-  const forward = normalize(subtract(camera.target, camera.origin));
-  const right = normalize(cross({ x: 0, y: 1, z: 0 }, forward));
+  let forward = normalize(subtract(camera.target, camera.origin));
+  if (length(forward) === 0) forward = { x: 0, y: 0, z: 1 };
+  let referenceUp = { x: 0, y: 1, z: 0 };
+  if (Math.abs(forward.y) > 0.999) referenceUp = { x: 0, y: 0, z: 1 };
+  const right = normalize(cross(referenceUp, forward));
   return { forward, right, up: cross(forward, right) };
 }
 export function presetCamera(preset = 0, geometry = scene): Camera {

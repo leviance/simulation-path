@@ -295,6 +295,31 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
     workload:
       "Tối thiểu 100.000 hạt thật; 500.000/một triệu là mở rộng theo phần cứng, không dùng oracle nhỏ để thay mốc nghiệm thu.",
   },
+  "52": {
+    previousTitle: "Bắn tia vào hình học: chọn điểm chạm plane, sphere, box và triangle",
+    replacement: {
+      slug: "ray-intersections",
+    },
+    summary:
+      "Ngắm bắn vào bốn primitive, đổi góc nhìn và kiểm tra điểm chạm cùng pháp tuyến trong không gian 3D.",
+    outcome:
+      "Công cụ C++/SDL3 có bề mặt và chiều sâu, camera quan sát độc lập, cửa sổ ngắm và bảng giao điểm ngay trong ứng dụng.",
+    question:
+      "Làm sao xác định bề mặt đầu tiên mà tia chạm, và biết kết quả ấy đúng ngay cả khi tia bắt đầu bên trong vật thể?",
+    interactions: [
+      "Orbit/pan/zoom, ngắm tia và dịch nguồn.",
+      "Chọn và dịch từng primitive, đọc hit/normal/entry/exit.",
+      "Pause/reset, preset và kiểm các ca biên.",
+    ],
+    concepts: [
+      "Camera ray, interval, plane/quadratic/slab/Möller–Trumbore.",
+      "Nearest surface hit, outward normal, frontFace và kiểm phương trình bề mặt.",
+    ],
+    prerequisites:
+      "SDL/input, vector và camera; renderer CPU được cung cấp, không phụ thuộc volume, CT hoặc GPU compute.",
+    workload:
+      "Một cảnh tương tác đủ plane, sphere, AABB và triangle; mọi phép giao tự viết và có tests Debug/Release.",
+  },
 };
 
 export const rebuildRevisions = Object.fromEntries(

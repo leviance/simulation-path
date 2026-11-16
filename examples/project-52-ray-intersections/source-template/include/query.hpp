@@ -7,6 +7,7 @@
 namespace picking {
 #if LAB_CHECKPOINT >= 3
 // Keep all individual hits visible even before nearest-hit selection is taught.
+// [snippet candidates]
 inline std::array<std::optional<Hit>, 4> candidates(const Ray& ray, const Scene& scene) {
     std::array<std::optional<Hit>, 4> hits{};
     hits[0] = intersectPlane(ray, scene.plane);
@@ -21,21 +22,34 @@ inline std::array<std::optional<Hit>, 4> candidates(const Ray& ray, const Scene&
 #endif
     return hits;
 }
+
+// [/snippet candidates]
 #endif
 
 #if LAB_CHECKPOINT >= 7
+// [snippet nearest-hit]
 inline std::optional<Hit> nearestHit(const std::array<std::optional<Hit>, 4>& hits) {
     std::optional<Hit> best;
     for (const auto& hit : hits) {
         if (!hit) {
             continue;
         }
-        if (!best || hit->t < best->t || (hit->t == best->t && hit->objectId < best->objectId)) {
+        if (!best) {
+            best = hit;
+            continue;
+        }
+        if (hit->t < best->t) {
+            best = hit;
+            continue;
+        }
+        if (hit->t == best->t && hit->objectId < best->objectId) {
             best = hit;
         }
     }
     return best;
 }
+
+// [/snippet nearest-hit]
 
 inline Camera presetCamera(int preset, const Scene& scene) {
     Camera camera;

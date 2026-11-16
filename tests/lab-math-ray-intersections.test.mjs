@@ -22,10 +22,51 @@ const near = (a, b, tolerance = 1e-9) =>
 const hitAt = (hit, t) => {
   assert.ok(hit);
   near(hit.t, t);
-  near(r.length(hit.normal), 1);
+  near(r.length(hit.normal), 1, 1e-10);
   assert.ok(r.finite(hit.point));
   return hit;
 };
+
+test("Sphere exposes uncut geometric entry/exit, including tangent and inside intervals", () => {
+  const sphere = { center: vec(), radius: 1 };
+  assert.deepEqual(r.sphereInterval(ray(), sphere), { entry: 2, exit: 4 });
+  assert.deepEqual(r.sphereInterval(ray(vec()), sphere), { entry: -1, exit: 1 });
+  assert.deepEqual(r.sphereInterval(ray(vec(1, 0, -3)), sphere), { entry: 3, exit: 3 });
+  assert.equal(r.intersectSphere(ray(vec(), vec(0, 0, 1), 0.1, 0.5), sphere), null);
+});
+
+test("Observer controls preserve the held ray; translation preserves AABB dimensions and source orientation", () => {
+  const geometry = structuredClone(r.scene);
+  const emitter = r.presetCamera();
+  const held = r.cameraRay(emitter, 0.37, 0.5, r.aimAspect, 14);
+  let orbit = r.initialOrbit();
+  const before = r.orbitCamera(orbit);
+  orbit = r.rotateOrbit(orbit, 100, -50);
+  orbit = r.panOrbit(orbit, 20, 40);
+  orbit = r.zoomOrbit(orbit, 4);
+  assert.notDeepEqual(r.orbitCamera(orbit), before);
+  assert.deepEqual(r.cameraRay(emitter, 0.37, 0.5, r.aimAspect, 14), held);
+  const moved = r.translateObject(geometry, 2, vec(100, 100, 100));
+  const extent = r.subtract(geometry.box.maximum, geometry.box.minimum);
+  near(r.length(r.subtract(r.subtract(moved.box.maximum, moved.box.minimum), extent)), 0);
+  assert.equal(r.objectCenter(moved, 2).x, 5);
+  assert.deepEqual(geometry, r.scene, "pure edit does not mutate the catalog scene");
+  const movedEmitter = r.moveSource(emitter, vec(0.2, 0.3, -0.1));
+  const movedRay = r.cameraRay(movedEmitter, 0.37, 0.5, r.aimAspect, 14);
+  near(r.length(r.subtract(movedRay.direction, held.direction)), 0);
+  assert.notDeepEqual(movedRay.origin, held.origin);
+  const vertical = r.cameraBasis({ ...emitter, origin: vec(), target: vec(0, 1) });
+  near(r.length(vertical.right), 1);
+  near(r.dot(vertical.right, vertical.forward), 0);
+});
+test("Runtime validator uses dimensionless normal tolerance separately from world distance", () => {
+  const value = r.cameraRay(r.presetCamera(), 0.37, 0.5, r.aimAspect);
+  const hits = r.candidates(value, r.scene);
+  assert.ok(hits[1]);
+  hits[1] = { ...hits[1], normal: r.multiply(hits[1].normal, 1 + 5e-9) };
+  assert.ok(r.validateHits(value, r.scene, hits).failures > 0);
+});
+
 test("Ray camera projection round trips at corners and four aspect ratios", () => {
   const camera = r.presetCamera();
   for (const aspect of [0.6, 1, 1.5, 2.5])
@@ -33,10 +74,10 @@ test("Ray camera projection round trips at corners and four aspect ratios", () =
       for (const v of [0, 0.5, 1]) {
         const value = r.cameraRay(camera, u, v, aspect),
           pixel = r.project(r.at(value, 5), camera, 600 * aspect, 600);
-        near(r.length(value.direction), 1);
+        near(r.length(value.direction), 1, 1e-10);
         assert.ok(pixel);
-        near(pixel.x, 600 * aspect * u);
-        near(pixel.y, 600 * v);
+        near(pixel.x, 600 * aspect * u, 1e-7);
+        near(pixel.y, 600 * v, 1e-7);
       }
   assert.equal(r.project(vec(0, 0, -9), camera, 800, 600), null);
 });

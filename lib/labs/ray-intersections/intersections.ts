@@ -26,7 +26,11 @@ export function intersectPlane(ray: Ray, plane: Scene["plane"]): Hit | null {
   if (!inRange(ray, t)) return null;
   return makeHit(ray, t, normal, 0);
 }
-export function intersectSphere(ray: Ray, sphere: Scene["sphere"]): Hit | null {
+export interface SphereInterval {
+  entry: number;
+  exit: number;
+}
+export function sphereInterval(ray: Ray, sphere: Scene["sphere"]): SphereInterval | null {
   if (
     !valid(ray) ||
     !finite(sphere.center) ||
@@ -52,8 +56,14 @@ export function intersectSphere(ray: Ray, sphere: Scene["sphere"]): Hit | null {
     t1 = c / q;
   }
   if (t0 > t1) [t0, t1] = [t1, t0];
-  let t = t0;
-  if (!inRange(ray, t)) t = t1;
+  if (!Number.isFinite(t0) || !Number.isFinite(t1)) return null;
+  return { entry: t0, exit: t1 };
+}
+export function intersectSphere(ray: Ray, sphere: Scene["sphere"]): Hit | null {
+  const interval = sphereInterval(ray, sphere);
+  if (!interval) return null;
+  let t = interval.entry;
+  if (!inRange(ray, t)) t = interval.exit;
   if (!inRange(ray, t)) return null;
   return makeHit(ray, t, normalize(subtract(at(ray, t), sphere.center)), 1);
 }

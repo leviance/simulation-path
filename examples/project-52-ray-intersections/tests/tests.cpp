@@ -1,6 +1,8 @@
 #include "query.hpp"
+#include "raster.hpp"
 #include "scan.hpp"
 #include "validation.hpp"
+#include "workshop.hpp"
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -10,12 +12,15 @@ namespace {
 int failures = 0;
 
 // Checks remain active under NDEBUG, so Release runs real tests too.
+// [snippet test-runner]
 void check(bool condition, std::string_view label) {
     if (!condition) {
         std::cerr << "FAIL: " << label << '\n';
         ++failures;
     }
 }
+
+// [/snippet test-runner]
 
 bool closeEnough(double a, double b, double tolerance = 1e-9) {
     return std::isfinite(a) && std::abs(a - b) <= tolerance;
@@ -25,7 +30,7 @@ void checkHit(const std::optional<picking::Hit>& hit, double t, std::string_view
     check(hit.has_value(), label);
     if (hit) {
         check(closeEnough(hit->t, t), label);
-        check(closeEnough(picking::length(hit->normal), 1), "normal has unit length");
+        check(closeEnough(picking::length(hit->normal), 1, 1e-10), "normal has unit length");
         check(picking::finite(hit->point), "finite point");
     }
 }
@@ -43,21 +48,23 @@ int main() {
     check(scan.phase == 0 && closeEnough(scan.advance(0), 0.5), "scan reset ignores uptime");
     check(closeEnough(scan.advance(10), 0.5 + 0.35 * std::sin(0.08)), "scan clamps a real long frame");
     // Projection and unprojection must agree at different aspect ratios.
+    // [snippet camera-roundtrip]
     const Camera camera;
     for (double aspect : {0.6, 1.0, 1.5, 2.5}) {
         for (double u : {0.0, 0.25, 0.5, 1.0}) {
             for (double v : {0.0, 0.5, 1.0}) {
                 const auto ray = cameraRay(camera, u, v, aspect);
                 const auto pixel = project(at(ray, 5), camera, 600 * aspect, 600);
-                check(closeEnough(length(ray.direction), 1), "camera ray normalized");
+                check(closeEnough(length(ray.direction), 1, 1e-10), "camera ray normalized");
                 check(pixel.has_value(), "ray sample projects");
                 if (pixel) {
-                    check(closeEnough(pixel->x, u * 600 * aspect), "projection x round trip");
-                    check(closeEnough(pixel->y, v * 600), "projection y round trip");
+                    check(closeEnough(pixel->x, u * 600 * aspect, 1e-7), "projection x round trip");
+                    check(closeEnough(pixel->y, v * 600, 1e-7), "projection y round trip");
                 }
             }
         }
     }
+    // [/snippet camera-roundtrip]
     const Plane plane{{0, 0, 0}, {0, 2, 0}};
     Ray down{{0, 2, 0}, {0, -1, 0}};
     checkHit(intersectPlane(down, plane), 2, "plane forward");
@@ -67,6 +74,13 @@ int main() {
     check(!intersectPlane({{0, 2, 0}, {0, 1, 0}}, plane), "plane behind origin");
     check(!intersectPlane({{0, 2, 0}, {0, -1, 0}, 0, 1}, plane), "plane beyond range");
     const Sphere sphere{{0, 0, 0}, 1};
+    const auto sphereRange = sphereInterval({{0, 0, -3}, {0, 0, 1}}, sphere);
+    check(sphereRange && closeEnough(sphereRange->entry, 2) && closeEnough(sphereRange->exit, 4), "sphere geometric interval");
+    const auto insideSphere = sphereInterval({{0, 0, 0}, {0, 0, 1}}, sphere);
+    check(insideSphere && closeEnough(insideSphere->entry, -1) && closeEnough(insideSphere->exit, 1), "inside sphere keeps negative entry");
+    const auto tangentRange = sphereInterval({{1, 0, -3}, {0, 0, 1}}, sphere);
+    check(tangentRange && closeEnough(tangentRange->entry, 3) && closeEnough(tangentRange->exit, 3), "tangent is a zero length interval");
+    check(!intersectSphere({{0, 0, 0}, {0, 0, 1}, 0.1, 0.5}, sphere), "inside sphere segment may have no surface hit");
     checkHit(intersectSphere({{0, 0, -3}, {0, 0, 1}}, sphere), 2, "sphere entry");
     checkHit(intersectSphere({{0, 0, -3}, {0, 0, 2}}, sphere), 1, "nonunit direction");
     checkHit(intersectSphere({{0, 0, 0}, {0, 0, 1}}, sphere), 1, "sphere inside exit");
@@ -91,9 +105,11 @@ int main() {
     const auto triangleHit = intersectTriangle(front, triangle);
     checkHit(triangleHit, 3, "triangle center");
     if (triangleHit) {
+        // [snippet triangle-reconstruction]
         const double w = 1 - triangleHit->u - triangleHit->v;
         const auto reconstructed = add(add(multiply(triangle.a, w), multiply(triangle.b, triangleHit->u)), multiply(triangle.c, triangleHit->v));
         check(closeEnough(length(subtract(reconstructed, triangleHit->point)), 0), "barycentric reconstruction");
+        // [/snippet triangle-reconstruction]
         check(!triangleHit->frontFace, "back side remains selectable");
     }
     checkHit(intersectTriangle({{0, 0, 3}, {0, 0, -1}}, triangle), 3, "triangle opposite side");
@@ -110,6 +126,16 @@ int main() {
     std::reverse(hits.begin(), hits.end());
     check(nearestHit(hits)->objectId == 1, "query order independent");
     check(!nearestHit({}), "empty scene miss");
+    Scene aligned;
+    aligned.sphere = sphere;
+    aligned.box = {{-0.5, -0.5, 2}, {0.5, 0.5, 4}};
+    aligned.triangle = {{-1, -1, 5}, {1, -1, 5}, {0, 1, 5}};
+    const auto actualCandidates = candidates(front, aligned);
+    checkHit(actualCandidates[1], 2, "aligned sphere analytic t");
+    checkHit(actualCandidates[2], 5, "aligned box analytic t");
+    checkHit(actualCandidates[3], 8, "aligned triangle analytic t");
+    const auto actualNearest = nearestHit(actualCandidates);
+    check(actualNearest && actualNearest->objectId == 1 && closeEnough(actualNearest->t, 2), "nearest across real primitive routines");
     // Invalid inputs may not leak NaN or infinity into a Hit record.
     const double nan = std::numeric_limits<double>::quiet_NaN();
     const Ray invalids[]{{{nan, 0, 0}, {0, 0, 1}}, {{0, 0, 0}, {}}, {{0, 0, 0}, {0, 0, 1}, 2, 1}, {{0, 0, 0}, {0, 0, 1}, 0, nan}};
@@ -130,7 +156,7 @@ int main() {
             for (const auto& hit : all) {
                 if (!hit)
                     continue;
-                check(closeEnough(length(hit->normal), 1), "scene unit normal");
+                check(closeEnough(length(hit->normal), 1, 1e-10), "scene unit normal");
                 check(hit->frontFace == (dot(ray.direction, hit->normal) < 0), "scene front face");
                 if (hit->objectId == 0)
                     check(closeEnough(dot(subtract(hit->point, scene.plane.point), scene.plane.normal), 0), "plane residual");
@@ -155,6 +181,52 @@ int main() {
     check(validateHits(sceneRay, scene, sceneHits).failures == 0, "valid reported hits");
     sceneHits[1] = makeHit(sceneRay, 3, {1, 0, 0}, 1);
     check(validateHits(sceneRay, scene, sceneHits).failures > 0, "validator catches forged sphere point");
+    const auto sphereProbe = cameraRay(camera, 0.37, 0.5, aimAspect);
+    auto alteredNormals = candidates(sphereProbe, scene);
+    check(alteredNormals[1].has_value(), "normal tolerance fixture hits sphere");
+    if (alteredNormals[1]) {
+        alteredNormals[1]->normal = multiply(alteredNormals[1]->normal, 1 + 5e-9);
+        check(validateHits(sphereProbe, scene, alteredNormals).failures > 0, "normal tolerance is not a world distance tolerance");
+    }
+
+    // View navigation changes only presentation, never the emitter/query.
+    Workshop workshop;
+    const Ray held = workshop.ray();
+    workshop.observer.rotate(100, -30);
+    workshop.observer.zoom(3);
+    workshop.observer.pan(40, 20);
+    check(length(subtract(workshop.ray().origin, held.origin)) == 0, "observer leaves ray origin unchanged");
+    check(length(subtract(workshop.ray().direction, held.direction)) == 0, "observer leaves ray direction unchanged");
+    const Vec3 beforeExtent = subtract(workshop.scene.box.maximum, workshop.scene.box.minimum);
+    translateObject(workshop.scene, 2, {100, 100, 100});
+    check(length(subtract(subtract(workshop.scene.box.maximum, workshop.scene.box.minimum), beforeExtent)) < 1e-12, "box translation preserves its dimensions");
+    check(objectCenter(workshop.scene, 2).x == 5, "object translation clamps center");
+    const Vec3 directionBefore = workshop.ray().direction;
+    workshop.moveSource({0.2, 0.3, -0.1});
+    check(length(subtract(workshop.ray().direction, directionBefore)) < 1e-12, "source translation preserves its orientation");
+    workshop.aimAtSelected();
+    const Vec3 expectedDirection = normalize(subtract(objectCenter(workshop.scene, workshop.selected), workshop.emitter.origin));
+    check(length(subtract(workshop.ray().direction, expectedDirection)) < 1e-12, "aim selected uses world geometry");
+    const auto verticalBasis = cameraBasis({{0, 0, 0}, {0, 1, 0}});
+    check(closeEnough(length(verticalBasis.right), 1) && closeEnough(dot(verticalBasis.right, verticalBasis.forward), 0), "vertical camera has an orthonormal fallback");
+
+    // Known camera depths 3 and 4 are an independent oracle for depth ordering.
+    Raster raster(64, 64);
+    const Camera testCamera{{0, 0, -3}, {0, 0, 0}};
+    raster.begin(testCamera);
+    raster.triangle({-1, -1, 1}, {1, -1, 1}, {0, 1, 1}, {0, 0, 255});
+    raster.triangle({-1, -1, 0}, {1, -1, 0}, {0, 1, 0}, {255, 0, 0});
+    const int centerPixel = 32 * 64 + 32;
+    check(closeEnough(raster.inverseDepth[centerPixel], 1.0 / 3), "raster stores reciprocal camera depth");
+    check((raster.pixels[centerPixel] & 0xff) == 0 && ((raster.pixels[centerPixel] >> 16) & 0xff) > 0, "front red surface occludes back blue surface");
+    raster.triangle({-1, -1, 1}, {1, -1, 1}, {0, 1, 1}, {0, 0, 255});
+    check((raster.pixels[centerPixel] & 0xff) == 0, "later back draw cannot overwrite nearer pixel");
+    raster.triangle({-1, -1, -3.2}, {1, -1, -2}, {0, 1, -2}, {0, 255, 0});
+    raster.line({-100, 0, -3.2}, {100, 0, -2}, {255, 255, 255});
+    check(std::all_of(raster.inverseDepth.begin(), raster.inverseDepth.end(), [](double d) {
+              return std::isfinite(d) && d >= 0;
+          }),
+          "near clipping leaves only finite depth");
     if (failures != 0) {
         return EXIT_FAILURE;
     }

@@ -3,12 +3,14 @@ const data = {
   base: {
     label: "RAY INTERSECTION LAB",
     title: "Một tia, bốn loại bề mặt",
-    description: "Ngắm tia bằng chuột hoặc bàn phím, đọc hit và thử những trường hợp dễ viết sai.",
+    description:
+      "Đổi góc nhìn, dịch nguồn và vật thể, rồi quan sát điểm chạm, pháp tuyến và khoảng đi qua từng hình.",
   },
   modes: {
     "ray52-1": {
       title: "Dựng cảnh để nhìn thấy thứ mình sắp chọn",
-      description: "Mở SDL window, chiếu world lên màn hình và vẽ bốn hình bằng khung dây.",
+      description:
+        "Dựng cảnh có bề mặt và depth bằng renderer CPU được cung cấp; orbit/pan/zoom và dịch từng hình.",
     },
     "ray52-2": {
       title: "Từ vị trí chuột đến một tia trong world",

@@ -2,9 +2,16 @@ import type { ProjectLearningAssets } from "../../learning/types";
 const data = {
   guides: {
     "p52-l01": {
-      focus: "Mở SDL window, chiếu world lên màn hình và vẽ bốn hình bằng khung dây.",
+      focus:
+        "Đặt bốn vật thể, nối renderer CPU có sẵn và đổi góc nhìn để quan sát cảnh có chiều sâu.",
       expected: "Dựng cảnh để nhìn thấy thứ mình sắp chọn",
-      files: ["include/shapes.hpp", "include/camera.hpp", "include/view.hpp", "src/main.cpp"],
+      files: [
+        "src/main.cpp",
+        "include/shapes.hpp",
+        "include/scene-drawing.hpp",
+        "include/camera.hpp",
+        "include/workshop.hpp",
+      ],
       steps: [
         {
           title: "Chạy bộ khung SDL",
@@ -15,16 +22,22 @@ const data = {
           explanation: "Plane, sphere, AABB và triangle giữ dữ liệu hình học tách khỏi pixel.",
         },
         {
-          title: "Chiếu rồi vẽ cạnh",
+          title: "Nối phần trình bày có sẵn",
           explanation:
-            "Camera basis và vertical FOV quyết định projection; các đoạn qua near plane được cắt trước khi chia depth.",
+            "Renderer CPU tự vẽ triangle/depth, độc lập ray intersection; main đưa framebuffer vào SDL texture rồi vẽ bảng điều khiển.",
         },
       ],
     },
     "p52-l02": {
       focus: "Đổi tọa độ input, aspect và FOV thành direction; kiểm ngược bằng projection.",
       expected: "Từ vị trí chuột đến một tia trong world",
-      files: ["include/camera.hpp", "include/view.hpp", "src/main.cpp"],
+      files: [
+        "include/camera.hpp",
+        "include/workshop.hpp",
+        "include/input.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
           title: "Quy ước một tia",
@@ -39,14 +52,20 @@ const data = {
         {
           title: "Nối input vào ray",
           explanation:
-            "Đổi SDL event sang logical renderer coordinates để letterbox và DPI không làm lệch tia.",
+            "Đổi event sang logical, trừ vị trí cửa sổ ngắm; emitter quyết định ray, observer chỉ đổi góc nhìn.",
         },
       ],
     },
     "p52-l03": {
       focus: "Giải một phương trình theo t, thêm Hit và xử lý khoảng tia cùng normal.",
       expected: "Tìm điểm chạm mặt phẳng và nhận ra tia song song",
-      files: ["include/hit.hpp", "include/query.hpp", "src/main.cpp"],
+      files: [
+        "include/hit.hpp",
+        "include/query.hpp",
+        "include/view.hpp",
+        "include/panel.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
           title: "Chọn dữ liệu trả về",
@@ -61,7 +80,7 @@ const data = {
         {
           title: "Vẽ điểm và normal",
           explanation:
-            "Các hit riêng được ghi lên title và vẽ đoạn normal; plane là vô hạn dù lưới chỉ vẽ hữu hạn.",
+            "Vẽ point/normal trong world và đọc dữ liệu ngay trên bảng; plane vô hạn dù miếng sàn minh họa hữu hạn.",
         },
       ],
     },
@@ -128,7 +147,13 @@ const data = {
     "p52-l07": {
       focus: "So t trên cùng ray, giữ ID ổn định và thêm preset, scan/pause, range.",
       expected: "Ghép bốn phép giao thành công cụ chọn vật thể",
-      files: ["include/query.hpp", "src/main.cpp"],
+      files: [
+        "include/query.hpp",
+        "include/input.hpp",
+        "include/workshop.hpp",
+        "include/scan.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
           title: "Thu đủ ứng viên",
@@ -141,16 +166,22 @@ const data = {
             "Tie chính xác dùng ID nhỏ hơn, không phụ thuộc thứ tự duyệt; không lấy hình vẽ sau cùng.",
         },
         {
-          title: "Thêm điều khiển có thể dừng",
+          title: "Chọn và dịch hình ngay trong cảnh",
           explanation:
-            "Preset trong sphere/box kiểm exit; scan chỉ bật chủ động, blur dừng và reset đưa mọi tham số về mặc định.",
+            "Click ở viewport lớn tạo pickRay từ observer, không ghi đè ray thí nghiệm; preset và pause giữ vai trò riêng.",
         },
       ],
     },
     "p52-l08": {
       focus: "CTest Debug/Release, round-trip, residual và source độc lập tải về.",
       expected: "Kiểm chứng hình học và chạy project hoàn chỉnh",
-      files: ["tests/tests.cpp", "include/validation.hpp", "include/query.hpp", "src/main.cpp"],
+      files: [
+        "tests/tests.cpp",
+        "include/validation.hpp",
+        "include/panel.hpp",
+        "include/run-options.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
           title: "Kiểm camera bằng chiều ngược lại",
@@ -165,7 +196,7 @@ const data = {
         {
           title: "Đóng gói và chạy cả Release",
           explanation:
-            "Phím V kiểm các hit hiện tại bằng phương trình hình; CTest kiểm thêm ca có nghiệm biết trước và vẫn chạy thật ở Release.",
+            "Bảng kiểm residual của hit hiện tại; CTest kiểm thêm nghiệm biết trước, tịnh tiến/camera và depth, vẫn chạy thật ở Release.",
         },
       ],
     },
@@ -180,6 +211,11 @@ const data = {
     ],
     "p52-l02": [
       {
+        label: "Camera quan sát và camera phát tia",
+        href: "/glossary#observer-and-emitter",
+        kind: "Thuật ngữ",
+      },
+      {
         label: "SDL input → render coordinates",
         href: "https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates",
         kind: "SDL API",
@@ -193,6 +229,11 @@ const data = {
       },
     ],
     "p52-l04": [
+      {
+        label: "Entry/exit hình học của solid",
+        href: "/glossary#solid-entry-exit",
+        kind: "Thuật ngữ",
+      },
       {
         label: "Ray interval và surface hit",
         href: "/glossary#ray-surface-hit",

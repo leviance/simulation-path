@@ -1,5 +1,17 @@
 export const rayIntersectionGlossaryTerms = [
   {
+    id: "observer-and-emitter",
+    term: "Camera quan sát và camera phát tia",
+    definition:
+      "Emitter quyết định origin/direction của ray qua cửa sổ ngắm; observer chỉ quyết định cách nhìn cảnh và đường tia ấy. Orbit observer không đổi phép đo. Click chọn hình trong viewport lớn dùng một pickRay riêng từ observer, không ghi đè ray emitter đang khảo sát ở Project 52.",
+  },
+  {
+    id: "solid-entry-exit",
+    term: "Entry/exit hình học của solid",
+    definition:
+      "Sphere/AABB có hai biên tEntry/tExit trên đường thẳng chứa ray, chưa cắt [tMin,tMax]. Nguồn nằm trong solid thường có entry âm; tiếp tuyến sphere có entry=exit. Nếu cả đoạn ray nằm trong lòng solid và chưa tới mặt nào, volume vẫn overlap nhưng không có surface hit. Plane/triangle chỉ là bề mặt, không tự tạo khoảng thể tích.",
+  },
+  {
     id: "ray-surface-hit",
     term: "Ray interval và surface hit",
     definition:

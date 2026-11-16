@@ -2,12 +2,12 @@ import type { PublishedProjectEditorial } from "../../types";
 const data = {
   summary:
     "Tự xây công cụ chọn hình 3D bằng tia từ chuột: nhìn cảnh trước, tìm giao plane/sphere/AABB/triangle rồi chọn bề mặt gần nhất. Đọc t, point, normal, entry/exit và barycentric để kiểm được cả những lần tia không chạm.",
-  duration: "10–13 giờ",
+  duration: "11–14 giờ, chưa tính cài đặt/build lần đầu",
   prerequisites: [
     "Project 01–05 — SDL window, renderer, input và đổi hệ tọa độ",
     "Project 06, 10 — vector, dot/cross và normal",
     "Project 11–15 — camera, perspective và clipping",
-    "Project 16–17 — barycentric và ý nghĩa che khuất; Project 36 giúp so sánh với ray marching",
+    "Có thể ôn Project 16–19 để đọc renderer CPU được cung cấp; không bắt học volume, CT hay GPU compute",
   ],
   objectives: [
     "Dựng cùng camera basis/FOV cho projection và ray từ chuột.",
@@ -16,41 +16,43 @@ const data = {
     "Xử lý song song, coplanar, tiếp tuyến, inside, direction zero và hình suy biến.",
     "Giữ normal hình học, frontFace, objectId và barycentric trong Hit.",
     "Chọn điểm chạm gần nhất độc lập thứ tự; phân biệt surface query với volume interval.",
+    "Đổi góc nhìn mà không đổi phép đo; di chuyển nguồn tia và từng đối tượng để thấy vì sao hit thay đổi.",
     "Kiểm round-trip và residual bằng CTest ở Debug/Release, không cần window.",
   ],
   challenge: {
     timebox: "90–120 phút tự thử trước khi đọc lời giải",
     mission:
-      "Tự xây một ứng dụng C++20/SDL3 hiển thị cảnh 3D có mặt phẳng, quả cầu, hộp song song các trục và tam giác. Dùng chuột để phát tia từ camera, chọn điểm chạm gần nhất và hiển thị thông tin hình học tại đó.",
+      "Tự xây một công cụ C++20/SDL3 để khảo sát tia trong cảnh 3D có mặt phẳng, quả cầu, hộp song song các trục và tam giác. Người dùng ngắm bắn, di chuyển nguồn tia hoặc vật thể, rồi đổi góc nhìn để xem điểm chạm và hướng pháp tuyến.",
     outcome:
-      "Một cảnh khung dây có tâm ngắm, điểm chạm và đoạn normal; hình phụ XZ giúp nhìn hướng tia. Title/console đọc được ID, t, point, normal, frontFace; tam giác có barycentric và box có khoảng vào/ra.",
+      "Một cảnh có bề mặt, ánh sáng và chiều sâu; cửa sổ ngắm nhỏ cho biết tia đi qua pixel nào, còn góc nhìn quan sát cho thấy cả đường tia. Bảng ngay trong ứng dụng đọc được t, point, normal, frontFace và khoảng vào/ra của sphere/AABB, không phải mở console để dùng công cụ.",
     requirements: [
       "World x sang phải, y lên, z xa camera ban đầu; camera (0,1.5,−7) nhìn (0,0.3,0), vertical FOV 55°.",
-      "Vẽ cảnh trước khi thêm picking: plane y=−1, sphere tâm (−1.5,0,0) bán kính 0.85, box min=(0.3,−0.9,0), max=(1.7,0.7,1.4), triangle A=(−0.9,−0.6,2.5), B=(1,−0.6,2.5), C=(0.1,1.3,2.5).",
-      "Dùng cùng camera cho vẽ và tạo ray; SDL logical presentation 900×640 và ConvertEventToRenderCoordinates; bỏ input ngoài letterbox.",
-      "Ray p(t)=origin+t*direction, tMin=1e−6, tMax=30; camera ray normalize, hàm giao vẫn hỗ trợ direction không unit.",
+      "Vẽ cảnh trước khi thêm picking: plane y=−1, sphere tâm (−1.5,0,0) bán kính 0.85, box min=(0.3,−0.9,0), max=(1.7,0.7,1.4), triangle A=(−0.9,0.4,2.5), B=(1,0.4,2.5), C=(0.1,2.3,2.5). Tam giác được nâng lên để không bị hộp che hết ở góc nhìn ban đầu.",
+      "Tách camera quan sát và camera phát tia. Trong cửa sổ ngắm, projection và cameraRay dùng cùng emitter/basis/FOV/aspect=280/190. Cửa sổ chính dùng logical presentation 1200×760, input đổi bằng ConvertEventToRenderCoordinates.",
+      "Ray p(t)=origin+t*direction, tMin=1e−6; tMax mặc định 14, chỉnh trong [0.1,30]. Camera ray normalize, hàm giao vẫn hỗ trợ direction không unit.",
       "Plane gần song song/coplanar trả miss. Sphere thử cả hai nghiệm và tiếp tuyến; AABB xử lý direction zero trước chia; triangle hai phía, kiểm barycentric và suy biến.",
       "Hit giữ t, point, unit geometric normal, frontFace và ID 0–3. Triangle thêm u/v/w; tie t chính xác chọn ID nhỏ hơn.",
-      "Tia trong sphere/box chọn mặt thoát; đoạn nằm trong box nhưng chưa tới mặt không phải surface hit.",
-      "Chuột/mũi tên ngắm; R reset; preset trong sphere, trong box và nhìn ra ngoài cảnh; Space quét/dừng, blur dừng, range có giới hạn.",
+      "Giữ entry/exit hình học chưa cắt range cho sphere/AABB. Tia trong solid chọn mặt thoát; đoạn nằm trọn trong solid nhưng chưa tới mặt không phải surface hit. Plane/triangle không có khoảng thể tích.",
+      "Chuột/mũi tên ngắm, orbit/pan/zoom có phím tương đương; chọn và dịch riêng cả bốn primitive, dịch nguồn tia. Pause chỉ dừng quét, không khóa camera hay inspector; blur dừng và nhả chuột.",
       "CTest không cần SDL window; build starter, 8 checkpoint và final độc lập bằng CMake, SDL3 khóa 3.4.8.",
     ],
     constraints: [
-      "Không có phản xạ, shadow, lighting, texture hay ray tracer tạo ảnh từng pixel; đây là công cụ học intersection và picking.",
-      "Khung dây không có depth test; chỉ nearest hit mới quyết định bề mặt được chọn. Lưới plane hữu hạn để vẽ, toán plane vô hạn.",
+      "Tự viết intersection và debug drawing, không engine raycast. Renderer CPU có depth buffer/flat shading được cung cấp từ nhánh 16–19, không dùng chính các phép giao đang học để giấu lời giải trong phần vẽ.",
+      "Lưới plane hữu hạn để vẽ, toán plane vô hạn. Phần tia bị bề mặt che dùng nét đứt tối trong debug; không giả vờ tia luôn nằm trước mọi hình.",
       "Box là AABB không xoay. Triangle dùng Möller–Trumbore dễ đọc, không hứa watertight cho mesh cạnh chung hoặc độ chính xác ở tọa độ cực lớn.",
       "Scene dùng tọa độ nhỏ, double và angular threshold 1e−10. Không kẹp discriminant âm thành zero để che sai số.",
       "Canvas dùng TypeScript/Canvas 2D và CPU với cùng công thức; không chạy C++ trong browser, không cần GPU compute.",
-      "Cửa sổ C++ cố định camera theo preset; không thêm orbit/free-fly làm loãng phần giao tia.",
+      "Orbit chỉ thay góc quan sát. Dịch nguồn hoặc ngắm lại mới thay ray; không nối nhầm camera quan sát vào phép đo.",
     ],
     definitionOfDone: [
       "project(at(ray,t)) khớp vị trí input ở nhiều aspect; resize/DPI/letterbox không đổi hệ tọa độ input.",
       "Plane parallel/coplanar/behind; sphere entry/inside/tangent/nonunit; box parallel/inside/clipped range; triangle edge/vertex/backside/degenerate đều có test.",
       "Point thỏa phương trình hình; normal dài một; triangle barycentric tái dựng point.",
       "Nearest ID giữ nguyên khi đảo thứ tự ứng viên; tất cả miss trả optional rỗng.",
+      "Orbit/pan/zoom không sửa ray hoặc hit đang giữ. Dịch AABB không đổi kích thước; dịch triangle giữ nguyên ba cạnh; dịch nguồn giữ hướng ngắm.",
       "Không NaN/Infinity trong hit ở ca kiểm; invalid ray và geometry bị từ chối.",
       "CTest Debug và Release thực sự chạy checks, không dùng assert bị NDEBUG bỏ qua.",
-      "Pause/reset/preset/keyboard có mô tả và source đầy đủ; mọi checkpoint chỉ chứa kiến thức đã học.",
+      "Tự kiểm chuột/phím, reset, preset, mất focus và kéo ra ngoài vùng vẽ. Source đầy đủ ở mọi checkpoint; phân biệt rõ scaffold có sẵn với phép giao được thêm trong bài.",
     ],
   },
   lessons: [
@@ -58,9 +60,10 @@ const data = {
       id: "p52-l01",
       slug: "01-canh-3d",
       title: "Dựng cảnh để nhìn thấy thứ mình sắp chọn",
-      summary: "Mở SDL window, chiếu world lên màn hình và vẽ bốn hình bằng khung dây.",
+      summary:
+        "Chạy bộ khung SDL, đặt bốn vật thể và nối renderer CPU có sẵn vào cảnh 3D có thể quan sát từ nhiều phía.",
       order: 1,
-      estimatedMinutes: 65,
+      estimatedMinutes: 90,
       demoId: "ray-intersections",
     },
     {
@@ -69,7 +72,7 @@ const data = {
       title: "Từ vị trí chuột đến một tia trong world",
       summary: "Đổi tọa độ input, aspect và FOV thành direction; kiểm ngược bằng projection.",
       order: 2,
-      estimatedMinutes: 75,
+      estimatedMinutes: 90,
       demoId: "ray-intersections",
     },
     {
@@ -122,7 +125,7 @@ const data = {
       slug: "08-kiem-chung-va-hoan-thien",
       title: "Kiểm chứng hình học và chạy project hoàn chỉnh",
       summary:
-        "Phím V kiểm hit, CTest Debug/Release, round-trip, residual và source độc lập tải về.",
+        "Đọc residual trong cửa sổ, kiểm CTest Debug/Release, thử tương tác và chạy source độc lập tải về.",
       order: 8,
       estimatedMinutes: 90,
       demoId: "ray-intersections",

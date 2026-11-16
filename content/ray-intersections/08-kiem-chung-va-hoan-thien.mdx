@@ -6,7 +6,9 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 Một marker nằm “đúng chỗ” chưa đủ chứng minh phép giao đúng. Camera và ray có thể cùng sai một dấu; một hit có t hợp lý nhưng normal sai; build Debug qua trong khi Release bỏ hết assert.
 
-Bài cuối dùng test thuần để kiểm các quan hệ hình học độc lập, rồi thêm phím V để kiểm các hit đang ngắm ngay trong ứng dụng. CTest không mở window, không GPU compute và không benchmark chạy vô hạn; lệnh V chỉ kiểm bốn primitive, không khởi động benchmark khác.
+Bài cuối dùng test thuần để kiểm các quan hệ hình học độc lập, rồi nối kiểm residual vào bảng trong ứng dụng. CTest không mở window, không GPU compute và không benchmark chạy vô hạn. Phần kiểm tương tác là bước riêng, không thay bằng việc thấy dòng PASS.
+
+Cho toàn module, bạn có thể dành khoảng 3–4 giờ đọc, 6–7 giờ tự viết và 2–3 giờ thử/kiểm chứng. Đây là khoảng tham khảo, không phải thời hạn chấm nhanh/chậm; setup và build lần đầu tính riêng.
 
 ## Hiểu ý tưởng trước khi viết code
 
@@ -30,7 +32,8 @@ Inspector hiện các quan hệ số để bạn quan sát, nhưng CTest mới g
 
 tests/tests.cpp dùng check rõ ràng thay assert:
 
-```cpp title="tests/tests.cpp — check còn hoạt động với NDEBUG"
+{/* snippet tests/tests.cpp#test-runner */}
+```cpp title="tests/tests.cpp — checks hoạt động trong Release"
 void check(bool condition, std::string_view label) {
     if (!condition) {
         std::cerr << "FAIL: " << label << '\n';
@@ -39,17 +42,38 @@ void check(bool condition, std::string_view label) {
 }
 ```
 
-Cuối main, failures khác zero trả EXIT_FAILURE; thành công trả EXIT_SUCCESS. CTest đọc exit code, không dựa vào dòng “PASS” in ra. closeEnough kiểm hữu hạn và sai số tuyệt đối 1e−9 cho các ca nhỏ đã chọn; đây không phải tolerance dùng cho mọi scene cực lớn.
+Cuối main, failures khác zero trả EXIT_FAILURE; thành công trả EXIT_SUCCESS. CTest đọc exit code, không dựa vào dòng “PASS” in ra. `closeEnough` kiểm hữu hạn trước khi so sai số; ngưỡng được chọn theo đại lượng, không lấy một epsilon áp cho mọi thứ:
+
+| Đại lượng | Ngưỡng tuyệt đối trong phạm vi bài |
+| --- | --- |
+| t và world point trong các fixture nhỏ | 1e−9 |
+| Round-trip về pixel | 1e−7 pixel |
+| Sai lệch độ dài normal so với 1 | 1e−10, không đơn vị |
+| Residual khoảng cách trong validator runtime | 1e−8 đơn vị world |
+
+Ca cố ý nhân normal với (1+5e−9) phải bị validator từ chối dù sai lệch ấy nhỏ hơn ngưỡng khoảng cách world. Các con số này dành cho cảnh nhỏ đã công bố, không phải cam kết cho mọi thang tọa độ.
 
 ### Bước 2 — Kiểm camera bằng chiều ngược lại
 
 Tests duyệt nhiều u/v và aspect 0.6/1/1.5/2.5:
 
-```cpp title="tests/tests.cpp — project điểm nằm trên ray"
-const auto ray = cameraRay(camera, u, v, aspect);
-const auto pixel = project(at(ray, 5), camera, 600 * aspect, 600);
-check(closeEnough(length(ray.direction), 1), "camera ray normalized");
-check(pixel.has_value(), "ray sample projects");
+{/* snippet tests/tests.cpp#camera-roundtrip */}
+```cpp title="tests/tests.cpp — kiểm cả image plane"
+const Camera camera;
+for (double aspect : {0.6, 1.0, 1.5, 2.5}) {
+    for (double u : {0.0, 0.25, 0.5, 1.0}) {
+        for (double v : {0.0, 0.5, 1.0}) {
+            const auto ray = cameraRay(camera, u, v, aspect);
+            const auto pixel = project(at(ray, 5), camera, 600 * aspect, 600);
+            check(closeEnough(length(ray.direction), 1, 1e-10), "camera ray normalized");
+            check(pixel.has_value(), "ray sample projects");
+            if (pixel) {
+                check(closeEnough(pixel->x, u * 600 * aspect, 1e-7), "projection x round trip");
+                check(closeEnough(pixel->y, v * 600, 1e-7), "projection y round trip");
+            }
+        }
+    }
+}
 ```
 
 Sau đó so pixel.x với u*width và pixel.y với v*height. Nếu bỏ aspect hoặc đổi dấu y ở một phía, ca này thất bại. Không chỉ so ray giữa màn hình: lỗi scale thường bị che ở đó.
@@ -60,7 +84,8 @@ Các ca primitive kiểm entry/exit/tangent/nonunit, plane song song/coplanar, b
 
 Với triangle, lấy barycentric từ hit rồi tái dựng một point độc lập:
 
-```cpp title="tests/tests.cpp — barycentric reconstruction"
+{/* snippet tests/tests.cpp#triangle-reconstruction */}
+```cpp title="tests/tests.cpp — tái dựng bằng barycentric"
 const double w = 1 - triangleHit->u - triangleHit->v;
 const auto reconstructed = add(add(multiply(triangle.a, w), multiply(triangle.b, triangleHit->u)), multiply(triangle.c, triangleHit->v));
 check(closeEnough(length(subtract(reconstructed, triangleHit->point)), 0), "barycentric reconstruction");
@@ -68,13 +93,47 @@ check(closeEnough(length(subtract(reconstructed, triangleHit->point)), 0), "bary
 
 Tests còn kiểm residual plane/sphere, box nằm trên mặt, normal và frontFace. Nhóm nearest đảo thứ tự ứng viên, kiểm tie ID và empty miss. Hãy thử đảo một dấu ở công thức rồi chạy lại để chắc tests bắt được sai, không chỉ test đi qua đường code.
 
-Thêm include/validation.hpp và gọi validateHits bằng phím V từ main. Hàm giữ một report checks/failures, kiểm range, point, normal rồi dùng phương trình riêng của từng hình. Chẳng hạn sphere được kiểm bằng khoảng cách tới tâm:
+Thêm `include/validation.hpp`. Hàm dưới đây giữ report checks/failures, kiểm range, point, normal rồi dùng phương trình riêng của từng hình. Sphere được kiểm bằng khoảng cách tới tâm; triangle được tái dựng bằng ba đỉnh và barycentric:
 
-```cpp title="include/validation.hpp — kiểm bề mặt sphere"
-report.check(std::abs(length(subtract(hit->point, scene.sphere.center)) - scene.sphere.radius) <= tolerance);
+{/* snippet include/validation.hpp#validate-hits */}
+```cpp title="include/validation.hpp — kiểm các record được báo"
+inline ValidationReport validateHits(const Ray& ray, const Scene& scene, const std::array<std::optional<Hit>, 4>& hits) {
+    ValidationReport report;
+    constexpr double worldTolerance = 1e-8;   // World-space distance.
+    constexpr double normalTolerance = 1e-10; // Dimensionless error around unit length.
+    report.check(valid(ray));
+    for (const auto& hit : hits) {
+        if (!hit)
+            continue;
+        report.check(inRange(ray, hit->t));
+        report.check(finite(hit->point) && finite(hit->normal));
+        report.check(std::abs(length(hit->normal) - 1) <= normalTolerance);
+        report.check(length(subtract(hit->point, at(ray, hit->t))) <= worldTolerance);
+        report.check(hit->frontFace == (dot(ray.direction, hit->normal) < 0));
+        if (hit->objectId == 0) {
+            report.check(std::abs(dot(subtract(hit->point, scene.plane.point), normalize(scene.plane.normal))) <= worldTolerance);
+        } else if (hit->objectId == 1) {
+            report.check(std::abs(length(subtract(hit->point, scene.sphere.center)) - scene.sphere.radius) <= worldTolerance);
+        } else if (hit->objectId == 2) {
+            const auto p = hit->point;
+            const auto lo = scene.box.minimum;
+            const auto hi = scene.box.maximum;
+            report.check(p.x >= lo.x - worldTolerance && p.x <= hi.x + worldTolerance && p.y >= lo.y - worldTolerance && p.y <= hi.y + worldTolerance && p.z >= lo.z - worldTolerance && p.z <= hi.z + worldTolerance);
+            const double distanceToFace = std::min({std::abs(p.x - lo.x), std::abs(p.x - hi.x), std::abs(p.y - lo.y), std::abs(p.y - hi.y), std::abs(p.z - lo.z), std::abs(p.z - hi.z)});
+            report.check(distanceToFace <= worldTolerance);
+        } else if (hit->objectId == 3) {
+            const auto reconstructed = add(add(multiply(scene.triangle.a, 1 - hit->u - hit->v), multiply(scene.triangle.b, hit->u)), multiply(scene.triangle.c, hit->v));
+            report.check(hit->u >= 0 && hit->v >= 0 && hit->u + hit->v <= 1);
+            report.check(length(subtract(reconstructed, hit->point)) <= worldTolerance);
+        } else {
+            report.check(false);
+        }
+    }
+    return report;
+}
 ```
 
-V dừng scan trước khi kiểm và in report vào console; nút “Kiểm hit hiện tại” trong Canvas làm điều tương tự. Một tia miss có thể chỉ cho một check valid(ray) và không có lỗi. Vì thế PASS ở đây chỉ nói record được báo là nhất quán, không chứng minh query không bỏ sót hit. Các ca nghiệm biết trước trong CTest vẫn cần thiết.
+`drawPanel` gọi validateHits cho dữ liệu đang hiển thị và đọc report ngay trong cửa sổ C++. Nút “Kiểm hit hiện tại” ở Canvas chốt một lần kiểm, dừng scan; nếu ray hoặc geometry đổi, nhãn yêu cầu kiểm lại thay vì giữ PASS cũ. Một tia miss có thể chỉ có một check valid(ray) và không có lỗi. Vì thế PASS chỉ nói các record được báo là nhất quán, không chứng minh query không bỏ sót hit. Các ca nghiệm biết trước trong CTest vẫn cần thiết.
 
 ## Ghép các phần lại
 
@@ -82,9 +141,9 @@ Tải ZIP, mở terminal ở thư mục có CMakeLists.txt:
 
 ```bash title="Terminal — build toàn bộ và kiểm cả Debug/Release"
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
+cmake --build build --config Debug --parallel 1
 ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
+cmake --build build --config Release --parallel 1
 ctest --test-dir build -C Release --output-on-failure --timeout 20
 ```
 
@@ -99,7 +158,9 @@ ZIP chứa README, CMake, starter, checkpoints, final và tests; không cần we
 
 ## Tự kiểm tra kết quả
 
-Starter, tám checkpoint và final build được. CTest Debug/Release kiểm toán mà không window. Test ca biết trước và residual qua; thay một dấu chủ động phải khiến test fail. Sau đó kiểm tay resize/DPI/letterbox, mouse/keyboard, scan/pause/preset/reset trên desktop.
+Starter, tám checkpoint và final build được. CTest Debug/Release kiểm toán mà không window; cả camera thẳng đứng, phép tịnh tiến và depth/near clipping cũng có fixture. Thay một dấu chủ động phải khiến test fail. Sau đó kiểm tay resize/DPI/letterbox, ngắm và buông ngoài vùng vẽ, orbit/pan/zoom, chọn/dịch vật thể, dịch nguồn, scan/pause/preset/reset trên desktop. Orbit không được đổi ray đang giữ; pause không được khóa chỉnh camera.
+
+Ứng dụng có chế độ smoke hữu hạn: `project_52_final.exe --frames 2 --capture result.bmp` vẽ hai frame, lưu ảnh rồi tự thoát; `--preset 1`, `2`, `3` thử nguồn trong sphere, box hoặc nhìn ra ngoài. Tối đa 600 frame mỗi lần. Đây là kiểm render/khởi tạo, **không thay** kiểm chuột/phím. Không chạy hàng loạt cửa sổ hoặc test nặng song song; hướng dẫn build dùng một worker.
 
 Đây là ray intersection giải tích cho bốn primitive, không phải ray marcher của Project 36 hoặc ray tracer hoàn chỉnh. Không hứa watertight cho triangle mesh, transformed box hay floating point ở tọa độ cực lớn. Ghi rõ phạm vi khi dùng code làm nền cho project khác.
 

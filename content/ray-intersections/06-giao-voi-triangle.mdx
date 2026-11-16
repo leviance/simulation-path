@@ -4,90 +4,111 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Tia có thể cắt mặt phẳng chứa triangle nhưng điểm cắt nằm ngoài ba cạnh. Dùng intersectPlane thôi chưa đủ để chọn mesh: cần xác định điểm có thực sự thuộc tam giác hay không.
+Plane trả lời được tia cắt một mặt phẳng ở đâu. Nhưng tam giác chỉ chiếm một phần của mặt phẳng ấy: rất nhiều điểm cắt nằm ngoài ba cạnh. Nếu chỉ gọi intersectPlane, người dùng nhấp vùng trống quanh tam giác vẫn bị báo chạm.
 
-Bài này thêm Möller–Trumbore, một cách giải đồng thời t và vị trí trong triangle. Ta không bắt đầu bằng chuỗi cross/dot khó nhớ: trước hết viết điểm giao dưới hai cách rồi xem các ẩn đại diện cho gì.
+Ta sẽ thêm một phép giao trả cả t lẫn vị trí trên tam giác. Cách giải là Möller–Trumbore. Đừng học thuộc các dòng cross/dot trước khi hiểu chúng đang giải những ẩn nào.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Từ đỉnh A, đặt edge1=B−A, edge2=C−A. Mọi điểm trên plane triangle có dạng A+u*edge1+v*edge2. Điểm trên ray có dạng origin+t*direction. Hai biểu thức phải bằng nhau:
+Từ đỉnh A, lấy `edge1=B−A`, `edge2=C−A`. Một điểm trên mặt phẳng có thể viết là `A+u*edge1+v*edge2`. Điểm trên ray là `origin+t*direction`. Ở giao điểm, hai cách viết phải bằng nhau:
 
 $$
 origin+t\,direction=A+u\,edge1+v\,edge2
 $$
 
-Đây là hệ ba phương trình, ba ẩn t/u/v. Miền triangle thêm điều kiện:
+Đây là ba phương trình theo ba thành phần x/y/z, với ba ẩn t/u/v. Để điểm thuộc tam giác chứ không chỉ thuộc mặt phẳng, cần thêm:
 
 $$
-u\ge0,\quad v\ge0,\quad u+v\le1,\quad w=1-u-v
+u\ge0,\qquad v\ge0,\qquad u+v\le1,\qquad w=1-u-v
 $$
 
-w/u/v là trọng số của A/B/C. Chúng không phải screen barycentric của rasterizer; đây là tọa độ của world point trên triangle thật. Determinant đo xem ba hướng tạo được cơ sở để giải hệ hay không. Gần zero nghĩa là ray gần song song hoặc triangle suy biến; không được chia tiếp.
+w/u/v là trọng số của A/B/C. Ở A, w=1; ở B, u=1; ở C, v=1. Chúng là barycentric của **world point trên triangle**, không phải tọa độ chuột hoặc barycentric tính trên màn hình của rasterizer.
 
 <InteractiveLab demo="ray-intersections" mode="ray52-6" />
 
-Ngắm triangle tím và đọc w/u/v. Đi gần A thì w tăng, gần B thì u tăng, gần C thì v tăng. Chọn “Triangle suy biến” để biến C thành B; hình chỉ còn đoạn và kết quả phải MISS, không có normal hoặc barycentric giả.
+Chọn Triangle rồi nhấn “Ngắm đối tượng đã chọn”. Di chuyển tâm ngắm trong cửa sổ nhỏ, quan sát lúc trọng số tiến gần 0 và lúc hit chuyển thành MISS. Thí nghiệm “Triangle suy biến” cho C trùng B: hình không còn diện tích và không có normal mặt hợp lệ.
 
 ## Viết code từng bước
 
-### Bước 1 — Dựng cạnh, normal và determinant
+### 1. Viết một phép giao đủ các nhánh
 
-Thêm include/triangle.hpp:
+Tạo `include/triangle.hpp`, include `hit.hpp`, rồi thêm hàm đầy đủ dưới đây trong namespace `picking`:
 
-```cpp title="include/triangle.hpp — cơ sở của hệ giao triangle"
-const Vec3 edge1 = subtract(triangle.b, triangle.a);
-const Vec3 edge2 = subtract(triangle.c, triangle.a);
-const Vec3 normal = cross(edge1, edge2);
-const Vec3 p = cross(ray.direction, edge2);
-const double determinant = dot(edge1, p);
-const double scale = length(edge1) * length(edge2) * length(ray.direction);
-```
+{/* snippet include/triangle.hpp#triangle-hit */}
+```cpp title="include/triangle.hpp — giao ray với triangle hai phía"
+inline std::optional<Hit> intersectTriangle(const Ray& ray, const Triangle& triangle) {
+    if (!valid(ray) || !finite(triangle.a) || !finite(triangle.b) || !finite(triangle.c)) {
+        return std::nullopt;
+    }
 
-normal dùng thứ tự A→B→C. Đảo B/C đảo normal nhưng không được tự làm triangle hết khả năng chọn. Source kiểm cả diện tích gần zero và determinant tương đối với scale bằng ngưỡng 1e−10. Việc dùng ngưỡng tương đối tránh gắn một số tuyệt đối vào mọi kích thước triangle, nhưng vẫn chủ động loại góc quá nhỏ.
+    const Vec3 edge1 = subtract(triangle.b, triangle.a);
+    const Vec3 edge2 = subtract(triangle.c, triangle.a);
+    const Vec3 normal = cross(edge1, edge2);
+    const Vec3 p = cross(ray.direction, edge2);
+    const double determinant = dot(edge1, p);
+    const double scale = length(edge1) * length(edge2) * length(ray.direction);
+    if (!std::isfinite(scale) || scale == 0 || length(normal) <= 1e-10 * length(edge1) * length(edge2) || std::abs(determinant) <= 1e-10 * scale) {
+        return std::nullopt;
+    }
 
-### Bước 2 — Giải u/v/t bằng cross và dot
+    const Vec3 offset = subtract(ray.origin, triangle.a);
+    const double u = dot(offset, p) / determinant;
+    const Vec3 q = cross(offset, edge1);
+    const double v = dot(ray.direction, q) / determinant;
+    const double t = dot(edge2, q) / determinant;
+    if (!std::isfinite(u) || !std::isfinite(v) || u < 0 || v < 0 || u + v > 1 || !inRange(ray, t)) {
+        return std::nullopt;
+    }
 
-Sau khi determinant hợp lệ:
-
-```cpp title="include/triangle.hpp — ba ẩn từ cùng một hệ"
-const Vec3 offset = subtract(ray.origin, triangle.a);
-const double u = dot(offset, p) / determinant;
-const Vec3 q = cross(offset, edge1);
-const double v = dot(ray.direction, q) / determinant;
-const double t = dot(edge2, q) / determinant;
-```
-
-Offset dịch origin về A. Cross/dot ở đây là cách tính determinant để giải hệ, không phải những phép xoay ray tùy ý. Vì chia cho determinant có dấu, cùng code xử lý cả hai phía. Không thay điều kiện abs(determinant) bằng determinant>epsilon: điều đó vô tình thêm back-face culling.
-
-### Bước 3 — Kiểm miền rồi ghi barycentric vào Hit
-
-```cpp title="include/triangle.hpp — chọn miền tam giác"
-if (!std::isfinite(u) || !std::isfinite(v) || u < 0 || v < 0 || u + v > 1 || !inRange(ray, t)) {
-    return std::nullopt;
+    Hit hit = makeHit(ray, t, normalize(normal), 3);
+    hit.u = u;
+    hit.v = v;
+    return hit;
 }
-Hit hit = makeHit(ray, t, normalize(normal), 3);
-hit.u = u;
-hit.v = v;
-return hit;
 ```
 
-w không cần lưu riêng vì luôn bằng 1−u−v. Miền đóng nhận cạnh và đỉnh theo phép tính hiện tại. Bản này dễ đọc nhưng không watertight: rounding trên cạnh chung của hai triangle có thể khiến chúng phân loại khác nhau. Không nới u/v bằng epsilon tùy tiện rồi coi lỗi mesh đã được giải quyết.
+Hãy đọc theo ba khối, không theo kiểu ghi nhớ từng phép cross:
+
+- **Dựng hệ:** edge1/edge2 xuất phát từ A; normal=cross(edge1,edge2) giữ thứ tự A→B→C. `determinant` cho biết hệ có giải được không. Tam giác suy biến hoặc tia gần song song phải dừng trước phép chia. Ngưỡng 1e−10 ở đây tương đối với độ dài cạnh và hướng tia, không phải một epsilon chung cho mọi phép đo.
+- **Giải u/v/t:** offset đưa origin về mốc A. Các cross/dot là cách tính determinant của hệ phương trình ở trên. Chúng không xoay hay bẻ cong ray. Chia cho determinant có dấu nên cùng hàm nhận cả hai phía; kiểm abs chứ không chỉ nhận determinant dương.
+- **Chọn miền:** u/v âm hoặc tổng vượt 1 nghĩa là giao nằm ngoài tam giác. t còn phải nằm trong interval của ray. Sau đó tạo Hit và ghi u/v; w suy ra từ 1−u−v, không cần lưu thêm một giá trị dễ lệch.
+
+### 2. Nối vào query đang chạy
+
+Thêm kết quả vào slot 3 của `candidates`. Sau thay đổi này, hàm có đủ bốn phép giao:
+
+{/* snippet include/query.hpp#candidates */}
+```cpp title="include/query.hpp — thêm ứng viên triangle"
+inline std::array<std::optional<Hit>, 4> candidates(const Ray& ray, const Scene& scene) {
+    std::array<std::optional<Hit>, 4> hits{};
+    hits[0] = intersectPlane(ray, scene.plane);
+    hits[1] = intersectSphere(ray, scene.sphere);
+    hits[2] = intersectBox(ray, scene.box);
+    hits[3] = intersectTriangle(ray, scene.triangle);
+    return hits;
+}
+```
+
+Không phải thêm một event loop khác. Main vẫn gọi `readInput`, lấy ray hiện tại và vẽ workshop; `drawWorkshop` duyệt candidates như cũ. `drawPanel` đọc `hits[3]` để hiện t/point/normal và w/u/v khi chọn Triangle. Phần vẽ triangle dùng đúng ba đỉnh trong Scene, nên dịch vật thể là dịch cả ba đỉnh cùng một delta.
 
 ## Ghép các phần lại
 
-Build project_52_checkpoint_6. candidates giờ có đủ bốn phép giao, mỗi phép vẫn giữ kết quả riêng. Triangle trong Scene có normal hướng +z; tia từ camera ban đầu đi +z nên chạm phía sau và frontFace=false. Vẫn chọn được là đúng vì thuật toán hai phía.
+Build `project_52_checkpoint_6`. Chọn triangle, nhấn F rồi dùng mũi tên ngắm tới từng góc. Khi gần A, w tăng; gần B, u tăng; gần C, v tăng. Nếu t nằm trong range mà điểm ngoài cạnh BC, kết quả vẫn phải MISS.
 
-Đọc bài gốc [Möller–Trumbore — Fast, Minimum Storage Ray/Triangle Intersection](https://my.eng.utah.edu/~cs6965/papers/MT97.pdf) nếu muốn đối chiếu hệ phương trình và cách tính. Chưa cần tối ưu branch hay SIMD trước khi các test hình học qua.
+Tam giác mặc định có normal theo +z. Ray từ emitter ban đầu đi gần +z nên tiếp cận phía sau, `frontFace=false`, nhưng vẫn chạm được vì phép giao hai phía. Giữ nguyên ray rồi orbit observer ra sau tam giác: giao điểm và normal không được tự đổi theo góc bạn nhìn.
+
+Miền đóng nhận cả cạnh/đỉnh theo phép tính hiện tại, nhưng bản giảng dạy này **không watertight**: rounding trên cạnh chung của hai triangle có thể khiến chúng phân loại khác nhau. Không nới u/v bằng một epsilon tùy tiện rồi tuyên bố đã giải hết lỗi mesh. Có thể đối chiếu hệ phương trình tại [bài gốc Möller–Trumbore](https://my.eng.utah.edu/~cs6965/papers/MT97.pdf).
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ u+v>1. Các điểm bên ngoài cạnh BC vẫn bị nhận; ngắm vùng bên phải/phía trên rồi khôi phục.
-2. Thay abs(determinant) bằng kiểm determinant dương. Một phía triangle biến mất khỏi picking. Kiểm cả hai phía rồi trả lại thuật toán hai phía.
+1. Bỏ điều kiện u+v>1. Ngắm vùng qua cạnh BC: các điểm thuộc mặt phẳng nhưng ngoài triangle sẽ bị nhận. Khôi phục nhánh kiểm miền.
+2. Thay kiểm abs(determinant) bằng điều kiện chỉ nhận determinant dương. Một phía tam giác biến mất khỏi picking dù vẫn nhìn thấy bề mặt; trả lại thuật toán hai phía.
+3. Chỉ dịch A khi di chuyển triangle. Hình bị biến dạng và normal có thể đổi. Khôi phục việc dịch A/B/C cùng delta rồi so ba cạnh trước/sau.
 
 ## Tự kiểm tra kết quả
 
-Barycentric không âm và tổng một. w*A+u*B+v*C khớp ray.at(t). Các ca interior, edge, vertex, outside, backside, parallel và degenerate có kết quả dự đoán được. Normal dài một, giữ hướng vertex order; không tự lật khi frontFace=false.
+Với mỗi hit, w/u/v không âm, tổng bằng một, và w*A+u*B+v*C xấp xỉ `at(ray,t)`. Normal dài một và giữ hướng vertex order, không tự lật khi frontFace=false. Interior, edge, vertex, outside, backside, parallel và degenerate đều cần ca kiểm riêng. Chưa có nearest giữa các vật ở checkpoint này.
 
 ## Bài tập mở rộng
 
-Gán một màu cho mỗi vertex rồi nội suy bằng w/u/v ở điểm chạm. Nếu muốn chọn mesh thật, nghiên cứu watertight intersection và quy tắc cạnh chung trước khi hứa không có khe. Sang [Bài 07 — chọn hit gần nhất](/projects/ray-intersections/07-chon-hit-gan-nhat).
+Gán một màu riêng cho A/B/C, rồi nội suy màu tại hit bằng w/u/v. Khi đã kiểm đúng từng primitive, sang [Bài 07 — chọn giao gần nhất](/projects/ray-intersections/07-chon-hit-gan-nhat) để ghép chúng thành công cụ picking.
