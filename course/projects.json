@@ -406,6 +406,7 @@
     "slug": "volume-slicer",
     "sourceDirectory": "project-53-volume-slicer",
     "checkpointCount": 7,
+    "contentRevision": 2,
     "demoId": "volume-slicer"
   },
   {

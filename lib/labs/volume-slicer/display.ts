@@ -31,6 +31,16 @@ export function windowValue(value: number, window: Window) {
   const minimum = window.level - window.width / 2;
   return Math.max(0, Math.min(1, (value - minimum) / window.width));
 }
+export function locatorPoint(grid: Grid, point: Point, area: Rect) {
+  const extent = grid.count.map((n, a) => n * grid.spacing[a]);
+  const horizontalSpan = extent[0] + 0.65 * extent[1];
+  const verticalSpan = 0.3 * extent[0] + 0.35 * extent[1] + extent[2];
+  const scale = 0.9 * Math.min(area.width / horizontalSpan, area.height / verticalSpan);
+  return {
+    x: area.x + area.width / 2 + (point[0] - 0.65 * point[1]) * scale,
+    y: area.y + area.height / 2 + (0.3 * point[0] + 0.35 * point[1] - point[2]) * scale,
+  };
+}
 export function slicePoint(grid: Grid, view: number, cursor: Point, u: number, v: number): Point {
   const axes = axesFor(view),
     point: Point = [...cursor];
@@ -40,18 +50,17 @@ export function slicePoint(grid: Grid, view: number, cursor: Point, u: number, v
     lower(grid, axes.vertical) + (1 - v) * grid.count[axes.vertical] * grid.spacing[axes.vertical];
   return point;
 }
-export function makeImage(
+export function sampleImage(
   volume: Volume | null,
   view: number,
   cursor: Point,
-  window: Window,
   linear: boolean,
   stage: number,
   side = 128,
 ) {
   if (!Number.isInteger(side) || side < 1 || side > 256)
     throw new RangeError("Bounded image size required");
-  const rgba = new Uint8ClampedArray(side * side * 4);
+  const scalars = new Float64Array(side * side);
   const grid = volume?.grid ?? defaultGrid;
   for (let y = 0; y < side; y++)
     for (let x = 0; x < side; x++) {
@@ -63,16 +72,54 @@ export function makeImage(
         if (stage >= 5 && linear) value = sampleLinear(volume, point) ?? 0;
         else value = sampleNearest(volume, point) ?? 0;
       }
-      let brightness = Math.max(0, Math.min(1, value));
-      if (stage >= 4) brightness = windowValue(value, window);
-      const gray = Math.floor(brightness * 255 + 0.5),
-        pixel = 4 * (x + y * side);
-      rgba[pixel] = gray;
-      rgba[pixel + 1] = gray;
-      rgba[pixel + 2] = gray;
-      rgba[pixel + 3] = 255;
+      scalars[x + y * side] = value;
     }
+  return scalars;
+}
+const colorStops = [
+  [6, 10, 23],
+  [43, 34, 95],
+  [20, 136, 145],
+  [104, 205, 145],
+  [255, 235, 145],
+];
+export function colorValue(brightness: number, color: boolean): Point {
+  if (!Number.isFinite(brightness)) throw new RangeError("Brightness must be finite");
+  const t = Math.max(0, Math.min(1, brightness));
+  if (!color) {
+    const gray = Math.floor(t * 255 + 0.5);
+    return [gray, gray, gray];
+  }
+  const position = t * 4,
+    index = Math.min(3, Math.floor(position));
+  return colorStops[index].map((a, c) =>
+    Math.floor(a + (colorStops[index + 1][c] - a) * (position - index) + 0.5),
+  ) as Point;
+}
+export function colorImage(scalars: Float64Array, window: Window, stage: number, color = false) {
+  if (scalars.length < 1 || scalars.length > 256 * 256)
+    throw new RangeError("Bounded scalar image required");
+  const rgba = new Uint8ClampedArray(scalars.length * 4);
+  for (let i = 0; i < scalars.length; i++) {
+    let brightness = Math.max(0, Math.min(1, scalars[i]));
+    if (stage >= 4) brightness = windowValue(scalars[i], window);
+    const rgb = colorValue(brightness, color);
+    rgba.set(rgb, 4 * i);
+    rgba[4 * i + 3] = 255;
+  }
   return rgba;
+}
+export function makeImage(
+  volume: Volume | null,
+  view: number,
+  cursor: Point,
+  window: Window,
+  linear: boolean,
+  stage: number,
+  side = 128,
+  color = false,
+) {
+  return colorImage(sampleImage(volume, view, cursor, linear, stage, side), window, stage, color);
 }
 export function fitSlice(grid: Grid, view: number, panel: Rect): Rect {
   const axes = axesFor(view),
@@ -88,7 +135,7 @@ export function fitSlice(grid: Grid, view: number, panel: Rect): Rect {
 }
 export function panelRect(view: number, width: number, height: number, threeViews: boolean): Rect {
   if (threeViews)
-    return { x: (view * width) / 3 + 12, y: 40, width: width / 3 - 24, height: height - 64 };
+    return { x: (view * width) / 3 + 12, y: 42, width: width / 3 - 24, height: height * 0.51 };
   return { x: 24, y: 40, width: width - 48, height: height - 64 };
 }
 export function pickSlice(

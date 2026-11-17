@@ -1,97 +1,159 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Kiểm volume bằng oracle rồi chạy project hoàn chỉnh
+# Chứng minh trình xem đang đọc đúng dữ liệu
 
 ## Vấn đề cần giải quyết
 
-Một ảnh trông giống lát CT không chứng minh volume được đọc đúng. Dataset đối xứng có thể che tráo trục; sampler cùng sai với công thức expected có thể cho test xanh; Release có thể bỏ assert.
+Một ảnh mềm và đối xứng chưa chứng minh sampler đúng. Cả fillVolume lẫn renderer có thể tráo cùng hai trục, tạo hình có vẻ hợp lý nhưng sai tọa độ. Bài cuối dùng những đáp án độc lập với đường vẽ ảnh, rồi đóng gói một ứng dụng chạy được.
 
-Bài cuối thêm audit bằng phím V, kiểm field affine độc lập và bàn giao project chạy riêng. Audit là công cụ toán/dữ liệu hữu hạn, không kiểm định ảnh CT hay chẩn đoán.
+Bản cuối mở **128³ = 2.097.152 scalar double, 16 MiB**. Khối vật liệu có vỏ bo góc, lõi xoắn và ống rỗng; người xem xoay khối, bỏ một góc, rồi dời ba mặt cắt để lần theo chi tiết bên trong. Ba ảnh 2D, histogram và voxel inspector cùng đọc dữ liệu thật. Cả C++ lẫn Canvas cuối đều mở 128³ và có tùy chọn 64³; Canvas giúp học công thức, không thay executable C++.
+
+Dành khoảng 20 phút đọc ca chuẩn, 30 phút chạy/đọc tests và 25 phút nghiệm thu tương tác. Không cần thêm ray marching để làm bản này “đủ 3D”: mục tiêu là cắt chính xác khối scalar, không tích phân theo tia.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Ta cần ba lớp bằng chứng. Index test dùng grid không cubic và giá trị có thể tính tay. Sampling test dùng centre/boundary/singleton. Interpolation oracle dùng field affine:
+Ta chia bằng chứng thành bốn nhóm:
 
-$$
-f(x,y,z)=0.2+0.1x+0.2y+0.15z
-$$
+| Điều muốn chứng minh | Cách kiểm có đáp án độc lập |
+| --- | --- |
+| Địa chỉ và tám mẫu được đọc đúng | Fixture 3×2×4, giá trị 100z+10y+x |
+| Trilinear giữ giá trị giữa các tâm | Field hằng và affine có công thức đóng |
+| Dữ liệu và hướng cắt giữ đối xứng | Sphere, phản xạ toàn bộ voxel qua x/y/z |
+| Giao diện nối đúng state | Checklist chuột/phím, slider/crosshair/inspector và reset |
 
-Trong vùng giữa các centre, trilinear phải tái tạo f trong sai số floating point. Ở nửa voxel sát mép, replication có thể khác f analytic; đó là chính sách đã chọn, không dùng affine oracle ngoài vùng centre rồi kết luận sai.
+Trong fixture số, tám góc đầu là 0,1,10,11,100,101,110,111. Trung điểm phải có trung bình **55.5**. Nearest ở điểm giữa chọn góc index cao, tức **111**. Những số này không do sampleLinear tính ra để rồi dùng lại làm expected.
+
+Affine field có dạng a+bx+cy+dz. Trilinear phải tái tạo nó ở miền giữa các tâm. Không áp yêu cầu ấy ra nửa voxel sát mép, nơi chính sách replicate cố ý giữ mẫu biên. Dung sai scalar 1e−12 dùng cho các fixture nhỏ double này; nó không phải một epsilon chung để sửa mọi loại lỗi tọa độ.
 
 <InteractiveLab demo="volume-slicer" mode="slice53-7" />
 
-Nhấn “Kiểm volume và nội suy”. Report ghi scalar min/max và max residual trên oracle nhỏ. Nó không sửa cursor, window hay dataset. PASS không có nghĩa phantom trở thành CT thật hoặc volume đã chứa mọi chi tiết của hàm analytic.
+Bấm Kiểm volume và nội suy. Audit duyệt dữ liệu đang mở để tìm scalar không hữu hạn/ngoài [0,1], rồi kiểm 16 điểm trên **một fixture affine riêng**. PASS không có nghĩa là đã kiểm mọi input hoặc đã chứng nhận ảnh y khoa; CTest và checklist vẫn có vai trò riêng.
+
+Audit còn kiểm grid hợp lệ và buffer có đúng nx·ny·nz phần tử. Một fixture affine riêng có thể chạy đúng ngay cả khi dataset đang xem đã bị xóa hết hoặc thiếu voxel; không được dùng kết quả của fixture để bỏ qua tình trạng bộ dữ liệu thật.
 
 ## Viết code từng bước
 
-### Bước 1 — Giữ checks trong cả Debug và Release
+### 1. Kiểm fixture biết trước, không dùng sampler làm oracle
 
-tests/tests.cpp dùng runner rõ ràng:
-
-```cpp title="tests/tests.cpp — check không bị NDEBUG bỏ qua"
-void check(bool condition, std::string_view label) {
-    if (!condition) {
-        std::cerr << "FAIL: " << label << '\n';
-        ++failures;
+{/* snippet tests/tests.cpp#fixture */}
+```cpp title="tests/tests.cpp — địa chỉ, tám góc và sáu mặt ngoài"
+void checkKnownFixture() {
+    using namespace slices;
+    Volume fixture({{3, 2, 4}, {1, 2, 3}});
+    for (int z = 0; z < 4; ++z) {
+        for (int y = 0; y < 2; ++y) {
+            for (int x = 0; x < 3; ++x) {
+                fixture.values[fixture.index(x, y, z)] = 100 * z + 10 * y + x;
+                const Point point{worldCoordinate(fixture.grid, 0, x), worldCoordinate(fixture.grid, 1, y), worldCoordinate(fixture.grid, 2, z)};
+                check(sampleNearest(fixture, point).value() == 100 * z + 10 * y + x, "known centre nearest");
+                check(closeEnough(sampleLinear(fixture, point).value(), 100 * z + 10 * y + x), "known centre linear");
+            }
+        }
+    }
+    check(fixture.index(2, 1, 3) == 23, "known final address");
+    check(fixture.voxel(2, 1, 3) == 312, "known final voxel");
+    const Point centre{worldCoordinate(fixture.grid, 0, 0.5), worldCoordinate(fixture.grid, 1, 0.5), worldCoordinate(fixture.grid, 2, 0.5)};
+    check(closeEnough(sampleLinear(fixture, centre).value(), 55.5), "eight known corners average to 55.5");
+    check(sampleNearest(fixture, centre).value() == 111, "nearest tie chooses upper centre");
+    const Point offCentre{worldCoordinate(fixture.grid, 0, 0.25), worldCoordinate(fixture.grid, 1, 0.5), worldCoordinate(fixture.grid, 2, 0.75)};
+    check(closeEnough(sampleLinear(fixture, offCentre).value(), 80.25), "unequal weights use each fraction independently");
+    const Point low{lower(fixture.grid, 0), lower(fixture.grid, 1), lower(fixture.grid, 2)};
+    const Point high{-low[0], -low[1], -low[2]};
+    check(sampleNearest(fixture, low).value() == 0, "low physical corner");
+    check(sampleLinear(fixture, high).value() == 312, "high physical corner replication");
+    for (int axis = 0; axis < 3; ++axis) {
+        Point outside = low;
+        outside[axis] -= 1e-6;
+        check(!sampleNearest(fixture, outside) && !sampleLinear(fixture, outside), "outside low face must miss");
+        outside = high;
+        outside[axis] += 1e-6;
+        check(!sampleNearest(fixture, outside) && !sampleLinear(fixture, outside), "outside high face must miss");
     }
 }
 ```
 
-Cuối main, failures khác zero trả EXIT_FAILURE; thành công trả EXIT_SUCCESS. CTest đọc exit code. Dataset 4×3×5 kiểm x stride 1, y stride 4, z stride 12 và index cuối 59; không dùng một lưới cubic duy nhất.
+check là hàm ghi lỗi và tăng failures, không phải assert bị NDEBUG bỏ đi. Debug và Release đều thực thi các kiểm tra này. count không lập phương làm lỗi stride/tráo trục khó ẩn hơn fixture N³.
 
-### Bước 2 — Tạo expected bằng một hàm độc lập
+Tests còn kiểm tâm, world/grid, singleton, spacing không hợp lệ, constant field, window/level và layout. Phần scale cấp phát thật cả 64³ lẫn 128³, phản xạ từng voxel Sphere và đếm đủ histogram.
 
-include/diagnostics.hpp có affine, không gọi sampleLinear để tính expected:
+### 2. Dùng một công thức scalar độc lập
 
-```cpp title="include/diagnostics.hpp — trường tuyến tính làm oracle"
+{/* snippet include/diagnostics.hpp#affine */}
+```cpp title="include/diagnostics.hpp — nghiệm affine để đối chiếu"
 inline double affine(Point point) {
     return 0.2 + 0.1 * point[0] + 0.2 * point[1] + 0.15 * point[2];
 }
 ```
 
-Audit điền một Volume nhỏ ở các centre, lấy 16 point interior rồi so sampleLinear với affine(point). Test còn giữ centre, outside, replicated edge và singleton riêng; một oracle đẹp ở interior không thay những ca biên đó.
+Tạo fixture 4×3×5 với spacing khác nhau, lưu affine tại các tâm. Sau đó chọn điểm lẻ **bên trong miền tâm**, gọi sampleLinear rồi so với affine(point). Một lỗi −0.5, nhầm fraction hoặc tráo trục không thể được chữa bằng việc làm ảnh mượt.
 
-### Bước 3 — Báo residual và thử làm validator thất bại
+Audit trong diagnostics.hpp dùng chính cách đó cho 16 điểm và báo residual lớn nhất; đồng thời đọc min/max của dataset hiện tại. Phím V/nút Check chạy một lượt hữu hạn. Không chạy audit hai triệu scalar trong mỗi frame.
 
-Trong auditVolume:
+### 3. Hoàn thiện sản phẩm mà không trộn thêm bài mới
 
-```cpp title="include/diagnostics.hpp — sai số nội suy"
-const double error = std::abs(*sampled - affine(point));
-report.residual = std::max(report.residual, error);
-report.check(error <= 1e-12);
-```
+State chọn 128³ mặc định từ checkpoint 07/final; checkpoint trước mở 64³ để đọc và thử nhanh. N đổi resolution mà giữ physical extent. Histogram và scalar được tái tạo khi N/preset đổi; contrast chỉ recolor; cursor chỉ ảnh hưởng mặt cắt cần thiết.
 
-Source default dùng double/Float64, nên tolerance này dành cho grid nhỏ và field đã chọn. Audit quét tối đa 122.880 scalar của app rồi oracle nhỏ, không có benchmark vô hạn. V dừng scan trước khi chạy. Test cố ý sửa một scalar âm để xác nhận report.failures tăng.
+Toàn bộ UI vẽ bằng SDL3; chữ trong executable là ASCII do giới hạn của SDL_RenderDebugText. Bài học và Canvas dùng tiếng Việt có dấu. Khối phối cảnh dùng mesh tham chiếu stride 3/isovalue 0.18; các mặt cắt đọc đủ dữ liệu và giữ cùng màu với ảnh 2D. Phần vỏ chỉ giúp định hướng, không được dùng thay scalar gốc để đo hoặc làm expected cho tests.
 
-Các test khác kiểm physical aspect, hướng plane, pixel/world pick, invalid dimensions/spacing, window width và RGBA. MakeImage không được đổi volume.values khi thay window/level.
+Tests còn kiểm các đỉnh mesh hữu hạn, nằm trong physical box, normal chuẩn hóa và extraction không sửa volume. Một tam giác có diện tích 2 bị bỏ góc diện tích 0.5 phải còn 1.5: ca này kiểm clipping bằng đáp án tính tay. Tách những kiểm ấy khỏi test sampler giúp biết lỗi nằm ở dữ liệu hay phần trình bày.
 
 ## Ghép các phần lại
 
-Tải ZIP, mở terminal ở thư mục có CMakeLists.txt:
+[ZIP đầy đủ](/downloads/project-53-volume-slicer.zip) không cần Node.js. Sau khi giải nén, CMake lấy đúng SDL 3.4.8 theo checksum. Từ thư mục có CMakeLists.txt:
 
-```bash title="Terminal — build và CTest Debug/Release"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
+```bash title="Terminal — build và kiểm Debug/Release tuần tự"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug --parallel 1
 ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
+cmake --build build --config Release --parallel 1
 ctest --test-dir build -C Release --output-on-failure --timeout 20
 ```
 
-Windows/Visual Studio chạy build/Debug/project_53_final.exe. Single-config generator dùng thư mục build riêng cho từng CMAKE_BUILD_TYPE. Final là target mặc định; BUILD_CHECKPOINTS bật starter và bảy checkpoint độc lập.
+Windows/Visual Studio chạy build/Release/project_53_final.exe. Single-config generator cần hai build directory với CMAKE_BUILD_TYPE tương ứng. Nếu chỉ muốn chạy sản phẩm, BUILD_CHECKPOINTS mặc định OFF; target project_53_final là đủ.
 
-C++20, CMake 3.24+, SDL 3.4.8 khóa checksum qua FetchContent, link SDL3::SDL3. ZIP có README, CMake, starter, checkpoints, final và tests; không cần website hoặc build project trước. Source hoàn chỉnh của final nằm dưới bài, có comment và các khối code tách rõ.
+Để chạy kiểm có điểm dừng trong event loop SDL, dùng bản final hoặc checkpoint 07:
+
+```bash title="Terminal — kiểm ứng dụng hữu hạn, không để chạy nền vô hạn"
+build/Release/project_53_final.exe --self-test
+build/Release/project_53_final.exe --frames=2 --capture=volume-slicer.bmp
+```
+
+--self-test đưa một chuỗi sự kiện vào SDL_PushEvent rồi thoát sau 17 frame. Nó kiểm nút camera, slider, pick, chuyển dataset/N, reset, audit và mất focus qua vòng lặp thật. Đây là **sự kiện SDL tổng hợp**, không phải xác nhận driver bàn phím hoặc mouse capture của hệ điều hành. --capture xuất framebuffer do chính renderer vẽ; bạn vẫn cần nhìn ảnh và thử kéo/thả thực tế.
+
+Các thư mục trong ZIP:
+
+- starter: shell SDL và layout, chưa lấy mẫu ảnh.
+- checkpoints/01..07: mỗi bước chạy độc lập, không cần chép file từ bài khác.
+- final: toàn bộ mã của viewer hoàn chỉnh.
+- tests: kiểm toán học/storage/layout không mở window.
+- README: lệnh build, điều khiển, giới hạn và checklist.
+
+Source ngay dưới bài cho phép mở từng file của checkpoint, cùng bản diff với bài trước. Khi làm việc trong repository khóa học, sửa source-template rồi sinh lại snapshot; đừng sửa final/checkpoints được sinh và tưởng thay đổi đã vào nguồn chuẩn.
 
 ## Thử làm sai để hiểu đúng
 
-1. Trong sampler bỏ −0.5 hoặc đổi một stride. Centre/affine/index test phải fail; đừng đổi expected để khớp bug.
-2. Đổi check sang assert rồi chạy Release với NDEBUG. Không coi việc CTest xanh là đủ nếu check bị xóa; trả lại runner và sửa một scalar âm để chứng minh validator bắt lỗi.
+Sửa một giá trị voxel thành −0.1 trong bản sao rồi chạy audit: phải FAIL. Sửa một stride hoặc fraction rồi chạy CTest: expected fixture/affine phải bắt được lỗi. Khôi phục source trước khi dùng viewer.
+
+Tiếp theo, bật Trilinear trên Sphere và nhìn mép mềm hơn. Test đối xứng vẫn có thể pass, nhưng điều đó không chứng minh ta vừa phục hồi một mặt cầu liên tục chính xác. Mảng chỉ lưu mẫu, nội suy chỉ là một quy tắc ước lượng.
 
 ## Tự kiểm tra kết quả
 
-Starter, bảy checkpoint và final build được. CTest Debug/Release kiểm toán không cần window. Chạy tay phantom/ramp, ba hướng cắt, nearest/trilinear, window/level, crosshair, scan/pause/reset và resize/DPI/letterbox trên desktop.
+Nghiệm thu sản phẩm bằng cả dữ liệu lẫn thao tác:
 
-Audit và unit tests không kiểm mouse capture hoặc UI của máy thật. Trilinear không phục hồi chi tiết đã mất, spacing không mặc định mm, phantom không phải HU. Không có DICOM loader, oblique slice, MIP hay ray integration trong project này.
+- Mở final thấy 128³/2.097.152 mẫu/16 MiB, khối cắt mở lớn, ba ảnh và thông tin hướng trục.
+- Nguyên khối/cắt mở khác nhau rõ; xoay, zoom hoặc đặt lại camera không dời điểm đo. Lõi xoắn dịch vị trí trên XY khi thay z; ống rỗng giữ cùng vị trí x/y.
+- Sphere thu nhỏ đúng khi mặt đi xa tâm; Layers đồng mức trên XY và thành dải trên XZ/YZ; Gaussian có tâm sáng nhất.
+- Ba slider đổi z/y/x đúng bảng trục; chọn điểm trên ảnh liên kết đúng ba crosshair và số đọc.
+- Nearest/trilinear khác nhau ở vị trí lẻ; Level/Width/palette không sửa scalar hoặc histogram.
+- Pause/reset/blur/capture hoạt động; reset giữ dataset/độ phân giải; quét tới cuối phải dừng.
+- CTest Debug/Release pass; ZIP, source và code block khớp nhau.
+
+CTest **không kiểm mouse capture, bàn phím hệ điều hành hoặc chất lượng hình ảnh**. Kiểm tự động web cũng không thay được việc quan sát executable thật. Ghi rõ phạm vi đã kiểm thay vì dùng một chữ PASS cho mọi thứ.
+
+Đây là scalar tổng hợp, **không phải HU**, ảnh CT đo được hoặc tái tạo CT từ projections. Đơn vị world là tùy chọn, không mặc định mm.
 
 ## Bài tập mở rộng
 
-Thêm export một lát dưới dạng PGM ở một nhánh riêng, kèm mapping window/level trong metadata. Tiếp theo là [Project 54 — Volume Ray Marching](/projects/volume-ray-marching): thay vì chỉ hỏi một mặt phẳng, ta lấy mẫu dọc tia qua volume và tích lũy màu/transmittance bằng fragment shader.
+Thêm một phantom có hai Sphere lệch tâm, viết trước các vị trí có đáp án rõ rồi mới nối vào UI. Giữ lại test Sphere đối xứng cũ: không dùng sản phẩm mới để làm mất bằng chứng của thuật toán.
+
+Tiếp theo là [Project 54 — nhìn xuyên volume](/roadmap/54). Khác biệt quan trọng: Project 53 hỏi scalar tại một mặt phẳng; Project 54 tích lũy nhiều sample dọc theo tia. Đừng gọi ảnh lát cắt hiện tại là volume ray marching.

@@ -1,38 +1,45 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Đọc cùng khối dữ liệu theo ba hướng cắt
+# Ba mặt cắt của cùng một khối
 
 ## Vấn đề cần giải quyết
 
-Lát XY chỉ cho thấy một phần cấu trúc. Ta muốn xem cùng khối theo XZ và YZ mà không sao chép hay transpose cả volume.
+Một lát XY cho biết bên trong khối ở một độ sâu z, nhưng chưa cho thấy vùng sáng kéo dài theo chiều sâu ra sao. Ta cần thêm XZ và YZ, **không phải tạo thêm hai dataset**.
 
-Một lỗi hay gặp là đổi trục cắt nhưng quên đổi trục đứng trên ảnh. Một lỗi khác là vẽ mỗi voxel thành ô vuông dù spacing khác nhau, khiến khối bị méo. Bài này xử lý cả bảng trục và tỉ lệ hiển thị.
+Hết bài này, cả ba ảnh xuất hiện cùng lúc, mỗi ảnh có một thanh cắt riêng và cùng tuân theo kích thước world. Bên cạnh chúng là khối vật liệu được cắt mở một góc: dời slider, mặt cắt trên khối cũng dịch theo. Click vào ảnh để liên kết crosshair sẽ được thêm ở Bài 06; hiện tại dùng slider để hiểu từng hướng trước.
+
+Dành khoảng 20 phút đọc bảng trục, 35 phút ghép view và 20 phút thử các preset.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Mỗi view có horizontal, vertical và cut axis. Quy ước của project:
+Một mặt cắt giữ cố định một tọa độ và cho hai tọa độ còn lại chạy:
 
-| View | Ngang sang phải | Đứng lên trên | Giữ cố định |
-| --- | --- | --- | --- |
-| XY — axial | x | y | z |
-| XZ — coronal | x | z | y |
-| YZ — sagittal | y | z | x |
+| View | Sang phải | Lên trên | Giữ cố định | Thanh cắt điều khiển |
+| --- | --- | --- | --- | --- |
+| XY | x | y | z | world z |
+| XZ | x | z | y | world y |
+| YZ | y | z | x | world x |
 
-Các tên axial/coronal/sagittal giúp nhớ mặt phẳng, nhưng đây là quy ước toán của một phantom. Ta chưa có hướng giải phẫu bệnh nhân, không dùng radiology display convention hoặc dữ liệu DICOM.
+Ta **không dùng radiology convention** hoặc gán các trục này cho giải phẫu người. Đây là hệ trục toán của dữ liệu tổng hợp. Tên XY/XZ/YZ đủ mô tả hướng; không cần gọi một mặt là trái/phải bệnh nhân.
 
-Một pixel (u,v) đổi thành world theo hai extent; trục cut giữ giá trị cursor. V tăng xuống nên dùng 1−v trên trục đứng. Physical extent là count*spacing, không phải count đơn thuần.
+Cùng tọa độ chuẩn hóa u/v trên ảnh, ta dựng Point như sau: tọa độ ngang đi từ mép thấp đến mép cao; tọa độ dọc đi ngược chiều v; tọa độ cut giữ nguyên. Một bảng Axes dùng chung cho vẽ ảnh, slider, inspector và input sẽ tránh mỗi nơi hiểu một hướng.
+
+Khối 3D giúp ta hiểu lát đang đi qua phần nào của vật thể. Chế độ Cắt mở bỏ vùng x lớn hơn cursor.x, y nhỏ hơn cursor.y và z lớn hơn cursor.z. Ba mặt mới lộ ra đọc **đúng ba ảnh scalar** cạnh khối, không lấy màu từ một mô hình vẽ riêng. Bấm Nguyên khối để so với vật thể trước khi cắt; kéo trên khối hoặc dùng Ctrl+mũi tên để đổi góc nhìn. Camera không làm xoay dữ liệu hay đổi tọa độ cắt.
+
+Phần vỏ xám là mesh tham chiếu ở scalar 0.18, dựng từ một tập con các mẫu với stride 3. Nó được cung cấp như phần trình bày của viewer, không phải dữ liệu dùng để đo. Ở biên box, bộ dựng mesh thêm lớp mẫu 0 **chỉ cho hình vỏ** để đóng bề mặt; volume gốc không bị sửa. Ba lát vẫn lấy mẫu mảng 64³/128³ đầy đủ. Vì vậy mép vỏ có thể không trùng từng pixel của lát, nhất là với dữ liệu thay đổi đột ngột như Layers.
 
 <InteractiveLab demo="volume-slicer" mode="slice53-3" />
 
-Chọn lần lượt XY/XZ/YZ, dùng ramp để đoán chiều sáng tăng. So aspect khác nhau giữa ba ảnh. Đổi view giữ nguyên world cursor; chỉ thành phần được lấy làm cut thay đổi.
+Chọn Layers. Kéo thanh XY: toàn ảnh đổi mức khi z qua một lớp khác. Nhìn XZ và YZ: các dải nằm ngang. Nếu thấy dải dựng đứng, hãy kiểm bảng trục trước khi sửa dữ liệu.
 
 ## Viết code từng bước
 
-### Bước 1 — Đặt bảng trục vào một chỗ
+### 1. Một bảng trục, không ba renderer riêng
 
-axesFor trong include/model.hpp mở thêm hai trường hợp:
+Axes mặc định của XY là (horizontal=0, vertical=1, cut=2). Từ checkpoint 03, thêm hai trường hợp:
 
-```cpp title="include/model.hpp — trục của XZ và YZ"
+{/* snippet include/model.hpp#axes */}
+```cpp title="include/model.hpp — chọn hai trục nhìn thấy và một trục giữ"
 if (view == 1) {
     return {0, 2, 1};
 }
@@ -41,50 +48,113 @@ if (view == 2) {
 }
 ```
 
-View 0 trả mặc định {0,1,2}. Cùng bảng này dùng cho lấy mẫu, fit image, input và crosshair sau này. Nếu mỗi phần tự viết một cách tráo trục riêng, ảnh có thể đúng nhưng chuột hoặc inspector lại sai.
+Ở đây 0/1/2 là x/y/z, không phải số view. Chẳng hạn XZ dùng cut=1 vì y phải giữ nguyên. Khi người dùng kéo thanh XZ, ta chỉ thay cursor[1].
 
-### Bước 2 — Dựng world point trên plane
+### 2. Dựng Point từ một pixel trên từng mặt
 
-slicePoint trong include/display.hpp không thay volume:
-
-```cpp title="include/display.hpp — pixel centre tới plane world"
-const Axes axes = axesFor(view);
-Point point = cursor;
-point[axes.horizontal] = lower(grid, axes.horizontal) + u * grid.count[axes.horizontal] * grid.spacing[axes.horizontal];
-point[axes.vertical] = lower(grid, axes.vertical) + (1 - v) * grid.count[axes.vertical] * grid.spacing[axes.vertical];
-return point;
+{/* snippet include/display.hpp#plane */}
+```cpp title="include/display.hpp — cùng một công thức cho ba mặt cắt"
+inline Point slicePoint(const Grid& grid, int view, Point cursor, double u, double v) {
+    const Axes axes = axesFor(view);
+    Point point = cursor;
+    point[axes.horizontal] = lower(grid, axes.horizontal) + u * grid.count[axes.horizontal] * grid.spacing[axes.horizontal];
+    point[axes.vertical] = lower(grid, axes.vertical) + (1 - v) * grid.count[axes.vertical] * grid.spacing[axes.vertical];
+    return point;
+}
 ```
 
-Chỉ hai thành phần đổi, nên point[cut] vẫn bằng cursor[cut]. Main nhận phím 1/2/3; PageUp/Down dùng axesFor(activeView).cut để dời đúng mặt phẳng. Không lấy mouse y làm world y cho mọi view.
+point bắt đầu bằng cursor để giữ tọa độ cut. Sau đó chỉ thay hai thành phần trong mặt phẳng. Hàm không sửa volume, không tráo byte trong mảng và không đổi camera.
 
-### Bước 3 — Fit theo kích thước world
+Tâm pixel u=(x+0.5)/side, v=(y+0.5)/side vẫn được tính ở sampleImage. Bạn vừa thay bảng trục chứ không thay cách duyệt pixel.
 
-Trong include/layout.hpp:
+### 3. Giữ hình tròn là hình tròn
 
-```cpp title="include/layout.hpp — physical aspect"
-const double width = grid.count[axes.horizontal] * grid.spacing[axes.horizontal];
-const double height = grid.count[axes.vertical] * grid.spacing[axes.vertical];
-const double scale = std::min(panel.width / width, panel.height / height);
-return {panel.x + (panel.width - width * scale) / 2, panel.y + (panel.height - height * scale) / 2, width * scale, height * scale};
+Ảnh texture luôn vuông 256², nhưng vùng world mà nó mô tả có thể không vuông. XY rộng 3.2 và cao 3.84; XZ rộng 3.2 và cao 4.8. Nếu ép chúng vào hình vuông, một Sphere trông như ellipsoid.
+
+{/* snippet include/layout.hpp#fit */}
+```cpp title="include/layout.hpp — fit theo kích thước world"
+inline Rect fitSlice(const Grid& grid, int view, Rect panel) {
+    const Axes axes = axesFor(view);
+    const double width = grid.count[axes.horizontal] * grid.spacing[axes.horizontal];
+    const double height = grid.count[axes.vertical] * grid.spacing[axes.vertical];
+    const double scale = std::min(panel.width / width, panel.height / height);
+    return {panel.x + (panel.width - width * scale) / 2, panel.y + (panel.height - height * scale) / 2, width * scale, height * scale};
+}
 ```
 
-Cùng scale cho ngang/dọc giữ hình đúng tỉ lệ. Khoảng dư là letterbox bên trong panel, khác viền letterbox của cả SDL window. Input Bài 06 phải xét fitted rectangle này, không chỉ xét toàn panel.
+width và height là count·spacing, không chỉ là count. Ta dùng **một** scale cho cả hai chiều rồi căn giữa panel. Khoảng thừa là letterbox; nó không thuộc dữ liệu để chọn voxel.
+
+### 4. Nối slider vào đúng cut coordinate
+
+Trong input.hpp, movePointer lấy trục cut từ axesFor(view), đổi vị trí con trượt thành index liên tục rồi gọi worldCoordinate. Ở bài này index được làm tròn; từ Bài 05 sẽ giữ phần lẻ.
+
+Bàn phím đi qua cùng state. Sau khi chọn view bằng 1/2/3, PageUp/Down cộng hoặc trừ spacing của chính trục cut:
+
+{/* snippet include/input.hpp#move-cut */}
+```cpp title="include/input.hpp — dời mặt cắt theo spacing của nó"
+if (key == SDLK_PAGEUP) {
+    state.cursor[axes.cut] += step * state.grid.spacing[axes.cut];
+}
+if (key == SDLK_PAGEDOWN) {
+    state.cursor[axes.cut] -= step * state.grid.spacing[axes.cut];
+}
+state.cursor = clampPoint(state.grid, state.cursor);
+```
+
+Hết mỗi lần điều khiển, cursor được chặn trong miền từ tâm đầu đến tâm cuối. Khối cắt mở đọc chính cursor ấy; không giữ ba bản sao của vị trí mặt cắt rồi cố đồng bộ thủ công.
+
+### 5. Nối khối cắt mở vào ba ảnh vừa tạo
+
+Bạn đã tự viết phần cần học ở đây: bảng trục, điểm world của mỗi pixel và ba ảnh từ cùng volume. Để không biến bài này thành một khóa dựng mesh khác, source cung cấp sẵn geometry.hpp, surface.hpp, cutaway-clip.hpp và cutaway-render.hpp. Chúng dựng vỏ tham chiếu, bỏ góc khối và vẽ các mặt cắt đục. Không có tích phân alpha, MIP hoặc vòng lấy nhiều mẫu dọc tia như Project 54.
+
+Trong main, tạo thêm một streaming texture cho ảnh phối cảnh:
+
+{/* snippet src/main.cpp#scene-texture */}
+```cpp title="src/main.cpp — texture riêng cho khối cắt mở"
+sceneTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, slices::SceneFrame::width, slices::SceneFrame::height);
+if (sceneTexture == nullptr || !SDL_SetTextureScaleMode(sceneTexture, SDL_SCALEMODE_LINEAR)) {
+    failed = true;
+}
+```
+
+SceneCache nhận ba SliceCache sau khi chúng đã refresh. Đây là chỗ quan trọng để tránh hai cách hiểu khác nhau về cùng một mặt cắt:
+
+{/* snippet include/view.hpp#scene-inputs */}
+```cpp title="include/view.hpp — dùng lại scalar và màu của ba lát"
+const std::array<const ScalarImage*, 3> raw{&slices[0].scalars, &slices[1].scalars, &slices[2].scalars};
+const std::array<const Image*, 3> images{&slices[0].image, &slices[1].image, &slices[2].image};
+const auto frame = renderCutaway(state.grid, state.mesh, state.cursor, state.camera, state.cutaway, raw, images, state.dark);
+```
+
+raw quyết định một pixel của mặt cắt có thuộc phần vật liệu hay không; images cho màu đã ánh xạ của chính pixel ấy. renderCutaway rasterize mesh, kiểm giao tia–mặt phẳng với tối đa ba mặt cắt rồi so depth. Giao tia–mặt phẳng ở đây chỉ tìm vị trí trên một lát, không đi xuyên volume để cộng hàng trăm sample. Upload frame lên texture cũng chép theo pitch, giống ảnh XY ở Bài 01.
+
+Nối lời gọi sau vòng refresh ba SliceCache, trước drawDashboard:
+
+{/* snippet src/main.cpp#scene-refresh */}
+```cpp title="src/main.cpp — cập nhật khối sau ba ảnh lấy mẫu"
+if (!sceneCache.refresh(sceneTexture, state, cache)) {
+    failed = true;
+}
+```
+
+drawDashboard đã có vị trí để vẽ sceneTexture bằng SDL_RenderTexture. Khi rời ứng dụng, hủy texture này trước renderer. Mã đầy đủ ở cuối bài cho phép lần theo toàn bộ đường gọi; bạn không cần tự đoán một hàm vẽ còn thiếu.
 
 ## Ghép các phần lại
 
-Build project_53_checkpoint_3. View 0/1/2 đọc cùng Volume.values. Chuyển XY→XZ không làm index trong mảng tự đổi; slicePoint chỉ chọn những world point khác để sampleNearest tra lại layout x-fast.
+Build project_53_checkpoint_3. Main giờ refresh và vẽ ba texture; SliceCache của từng view chỉ phụ thuộc cut coordinate của view đó. Kéo XY thay z nên XZ/YZ không cần lấy mẫu lại: mặt phẳng của chúng vẫn ở cùng x/y. Đến Bài 06, crosshair của chúng sẽ đổi dù ảnh không cần dựng lại.
 
-Trong default grid, XY aspect là 3.2/3.84, XZ là 3.2/4.8, YZ là 3.84/4.8. Bảng này giúp kiểm bằng số thay vì chỉ hỏi ảnh có “trông tròn” không.
+Chọn Sphere, đưa các mặt về giữa. Ba lát đều là hình tròn có cùng bán kính theo world; chúng không nhất thiết chiếm cùng số pixel vì panel phải fit những extent khác nhau. Chọn Ramp để kiểm xem tăng z làm giá trị đổi mạnh hơn tăng y hay x.
 
 ## Thử làm sai để hiểu đúng
 
-1. Trong XZ, vẫn dùng y làm vertical. Ảnh thực chất không quét z; dùng ramp để phân biệt rồi trả lại {0,2,1}.
-2. Fit theo count ngang/count dọc mà bỏ spacing. Mỗi voxel trông vuông nhưng kích thước vật lý sai; tính ba aspect trên để kiểm và hoàn tác.
+Đổi XZ thành horizontal=2, vertical=0 trong bản sao. Dải Layers xoay thành dọc: đó là lỗi hướng nhìn, không phải dataset đã quay. Khôi phục bảng rồi thử fit chỉ theo count. Sphere bị kéo dãn dù phép sampling vẫn đúng.
+
+Đừng sửa sai tỉ lệ bằng cách đổi spacing để vừa panel. Spacing thuộc dữ liệu; layout phải thích nghi với nó.
 
 ## Tự kiểm tra kết quả
 
-Ba view đúng bảng trục, đổi view không sửa volume/cursor. Pixel top có world vertical lớn hơn pixel bottom. Fitted aspect đúng count*spacing; PageUp/Down dời đúng cut axis. Không có transpose, copy volume hoặc allocation mới khi chỉ đổi view.
+Ba slider lần lượt đổi z/y/x, hai tọa độ còn lại giữ nguyên. XY: x phải/y lên; XZ: x phải/z lên; YZ: y phải/z lên. Phần khối bị bỏ đi và ba mặt mới lộ ra thay đổi theo đúng cursor. Xoay camera không dịch slider hoặc đổi scalar. Sphere không bị méo bởi layout, Layers giúp phân biệt lát đồng mức với ảnh xuyên nhiều lớp.
 
 ## Bài tập mở rộng
 
-Thêm nhãn +x/+y/+z ở các mép ảnh theo bảng trục, không viết nhãn cố định cho mọi view. Tiếp tục với [window/level](/projects/volume-slicer/04-window-level).
+Dự đoán ảnh của một field chỉ thay theo x: view nào sẽ đồng mức trên toàn ảnh, view nào có gradient trái–phải? Thử bằng một fixture nhỏ trước khi sang [Bài 04 — tương phản và màu](/projects/volume-slicer/04-window-level).

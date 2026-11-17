@@ -3,10 +3,11 @@
 
 namespace slices {
 #if LAB_CHECKPOINT >= 5
-// Extend the boundary sample to the voxel edge, but never sample outside the physical box.
+// [snippet trilinear]
 inline std::optional<double> sampleLinear(const Volume& volume, Point point) {
-    if (!inside(volume.grid, point))
+    if (!inside(volume.grid, point)) {
         return std::nullopt;
+    }
     std::array<int, 3> low{};
     std::array<int, 3> high{};
     Point fraction{};
@@ -17,26 +18,16 @@ inline std::optional<double> sampleLinear(const Volume& volume, Point point) {
         fraction[axis] = coordinate - low[axis];
     }
 
-    double result = 0;
-    for (int z = 0; z < 2; ++z) {
-        for (int y = 0; y < 2; ++y) {
-            for (int x = 0; x < 2; ++x) {
-                const std::array<int, 3> corner{x, y, z};
-                std::array<int, 3> index = low;
-                double weight = 1;
-                for (int axis = 0; axis < 3; ++axis) {
-                    double factor = 1 - fraction[axis];
-                    if (corner[axis] == 1) {
-                        index[axis] = high[axis];
-                        factor = fraction[axis];
-                    }
-                    weight *= factor;
-                }
-                result += weight * volume.voxel(index[0], index[1], index[2]);
-            }
-        }
-    }
-    return result;
+    // Interpolate four x-edges, then two y-edges, then the z-edge.
+    const double c00 = std::lerp(volume.voxel(low[0], low[1], low[2]), volume.voxel(high[0], low[1], low[2]), fraction[0]);
+    const double c10 = std::lerp(volume.voxel(low[0], high[1], low[2]), volume.voxel(high[0], high[1], low[2]), fraction[0]);
+    const double c01 = std::lerp(volume.voxel(low[0], low[1], high[2]), volume.voxel(high[0], low[1], high[2]), fraction[0]);
+    const double c11 = std::lerp(volume.voxel(low[0], high[1], high[2]), volume.voxel(high[0], high[1], high[2]), fraction[0]);
+    const double c0 = std::lerp(c00, c10, fraction[1]);
+    const double c1 = std::lerp(c01, c11, fraction[1]);
+    return std::lerp(c0, c1, fraction[2]);
 }
+
+// [/snippet trilinear]
 #endif
 } // namespace slices

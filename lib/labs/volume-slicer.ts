@@ -2,3 +2,4 @@
 export * from "./volume-slicer/model.ts";
 export * from "./volume-slicer/sampling.ts";
 export * from "./volume-slicer/display.ts";
+export * from "./volume-slicer/statistics.ts";

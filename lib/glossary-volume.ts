@@ -1,5 +1,11 @@
 export const volumeGlossaryTerms = [
   {
+    id: "volume-context-surface",
+    term: "Bề mặt tham chiếu của volume",
+    definition:
+      "Mesh tại một isovalue giúp thấy vị trí mặt cắt trong khối. Project 53 dựng vỏ với isovalue 0.18/stride 3 và zero padding riêng cho mesh; không sửa mảng scalar. Các lát vẫn đọc toàn bộ volume, còn vỏ chỉ để định hướng, không dùng làm dữ liệu đo hay gọi là volume ray marching.",
+  },
+  {
     id: "volume-voxel-centre",
     term: "Voxel centre và physical spacing",
     definition:

@@ -17,6 +17,8 @@ test("Project53 publishes seven volume lessons with challenge, One Dark and comp
     assert.match(html, /one-dark-pro/);
     assert.match(html, /ma-chay-duoc-sau-bai/);
     assert.doesNotMatch(html, /katex-error/);
+    if (lesson.file.startsWith("01-")) assert.match(html, /lõi xoắn/);
+    if (lesson.file.startsWith("03-")) assert.match(html, /renderCutaway/);
     assert.ok(Buffer.byteLength(html) < 250 * 1024);
     const source = await readFile(
       path.join(workspace, "content/volume-slicer", lesson.file),
@@ -27,7 +29,7 @@ test("Project53 publishes seven volume lessons with challenge, One Dark and comp
 });
 test("Project53 draws first then progressively adds volume, axes, contrast, interpolation and audit", async () => {
   for (const [step, file, symbol] of [
-    [1, "include/display.hpp", "makeImage("],
+    [1, "include/display.hpp", "sampleImage("],
     [2, "include/volume.hpp", "sampleNearest("],
     [3, "include/model.hpp", "return {0, 2, 1}"],
     [4, "include/display.hpp", "windowValue("],
@@ -55,7 +57,8 @@ test("Project53 draws first then progressively adds volume, axes, contrast, inte
 });
 test("Project53 documents physical spacing, centre sampling, boundary and synthetic-data limits", async () => {
   const lesson = (name) => readFile(path.join(workspace, "content/volume-slicer", name), "utf8");
-  assert.match(await lesson("02-voxel-va-memory-layout.mdx"), /960 KiB/);
+  assert.match(await lesson("02-voxel-va-memory-layout.mdx"), /2\.097\.152/);
+  assert.match(await lesson("02-voxel-va-memory-layout.mdx"), /16 MiB/);
   assert.match(await lesson("03-ba-huong-cat.mdx"), /không dùng radiology/);
   assert.match(await lesson("04-window-level.mdx"), /không thay dataset/);
   assert.match(await lesson("05-noi-suy-giua-cac-lat.mdx"), /Ngoài box phải miss/);

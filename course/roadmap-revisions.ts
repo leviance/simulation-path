@@ -320,6 +320,29 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
     workload:
       "Một cảnh tương tác đủ plane, sphere, AABB và triangle; mọi phép giao tự viết và có tests Debug/Release.",
   },
+  "53": {
+    previousTitle: "Máy cắt lát khối 3D: xem từng lớp mật độ như ảnh CT giả",
+    replacement: {
+      slug: "volume-slicer",
+    },
+    summary:
+      "Mở một khối scalar thật, cắt theo ba hướng và tìm hiểu mỗi pixel đang đọc từ những voxel nào.",
+    outcome:
+      "Khối vật liệu 128³ có lõi xoắn, cắt mở một góc và xoay/zoom; ba ảnh XY/XZ/YZ liên kết, histogram và voxel inspector.",
+    question: "Một ảnh 2D có thể cho ta biết điều gì về bên trong khối dữ liệu 3D?",
+    interactions: [
+      "Chọn Sphere/Gaussian/Layers/Phantom/Ramp, đổi 64³/128³ và kéo ba mặt cắt.",
+      "Dời điểm chung, so nearest/trilinear, chỉnh window/level, quét/dừng/đặt lại và kiểm dữ liệu.",
+    ],
+    concepts: [
+      "Volume storage, voxel centre, physical spacing và ánh xạ pixel–world–grid.",
+      "Nearest/trilinear, chính sách biên, display mapping và oracle độc lập.",
+    ],
+    prerequisites:
+      "SDL texture/input, hệ tọa độ và nội suy; không cần DICOM, OpenGL hoặc kiến thức chụp CT.",
+    workload:
+      "C++ cuối mặc định 128³ = 2.097.152 scalar double; 64³ để so sánh. Canvas 64³/128³ thật, không thay ứng dụng C++.",
+  },
 };
 
 export const rebuildRevisions = Object.fromEntries(

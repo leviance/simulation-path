@@ -3,7 +3,7 @@ const data = {
   guides: {
     "p53-l01": {
       focus: "Từ phantom scalar đến ảnh mức xám và streaming texture SDL3.",
-      expected: "Vẽ lát cắt đầu tiên trước khi dựng volume",
+      expected: "Nhìn thấy lát cắt đầu tiên",
       files: ["include/model.hpp", "include/display.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
@@ -24,19 +24,19 @@ const data = {
       ],
     },
     "p53-l02": {
-      focus: "Grid không lập phương, spacing khác nhau và row-major x nhanh nhất.",
-      expected: "Lưu khối 3D bằng voxel và kiểm đúng địa chỉ",
+      focus: "Khối 64³/128³ thật, tâm mẫu, spacing và địa chỉ x nhanh nhất.",
+      expected: "Lưu cả khối, không chỉ tính một ảnh",
       files: ["include/volume.hpp", "include/model.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Cấp phát có giới hạn",
+          title: "Cấp phát volume thật và giữ nguyên extent",
           explanation:
-            "Count 1..128 và spacing dương hữu hạn; default 64×48×40 dùng 960 KiB double.",
+            "Bắt đầu 64³ (2 MiB), cuối mở 128³ (16 MiB); spacing dương hữu hạn và extent giữ nguyên.",
         },
         {
           title: "Đổi index sang world centre",
           explanation:
-            "World origin là mép thấp; centre=(index+0.5)*spacing, không trộn với góc voxel.",
+            "Gốc world ở giữa box; tâm mẫu là lower+(index+0.5)*spacing. Đừng coi tâm voxel là góc ô.",
         },
         {
           title: "Lấy nearest từ dữ liệu thật",
@@ -47,7 +47,7 @@ const data = {
     },
     "p53-l03": {
       focus: "XY/XZ/YZ, trục giữ cố định và tỉ lệ hình theo physical spacing.",
-      expected: "Đọc cùng khối dữ liệu theo ba hướng cắt",
+      expected: "Ba mặt cắt của cùng một khối",
       files: ["include/model.hpp", "include/display.hpp", "include/layout.hpp", "src/main.cpp"],
       steps: [
         {
@@ -56,8 +56,9 @@ const data = {
             "XY giữ z, XZ giữ y, YZ giữ x; quy ước toán rõ ràng, không gọi là radiology convention.",
         },
         {
-          title: "Giữ world point khi đổi view",
-          explanation: "Đổi camera hiển thị mặt cắt không hoán đổi dữ liệu hay ghi lại volume.",
+          title: "Dùng ba thanh cắt độc lập",
+          explanation:
+            "XY/XZ/YZ lần lượt giữ z/y/x; khối cắt mở dùng lại ba ảnh ấy, không tạo volume khác hoặc đo bằng mesh vỏ.",
         },
         {
           title: "Fit ảnh bằng physical extent",
@@ -68,7 +69,7 @@ const data = {
     },
     "p53-l04": {
       focus: "Tách scalar, window/level, brightness và byte màu.",
-      expected: "Chỉnh tương phản mà không sửa dữ liệu volume",
+      expected: "Làm rõ chi tiết mà không sửa dữ liệu",
       files: ["include/display.hpp", "src/main.cpp"],
       steps: [
         {
@@ -82,13 +83,14 @@ const data = {
         },
         {
           title: "Đối chiếu inspector",
-          explanation: "I đọc scalar gốc, thay W/S/A/D chỉ đổi display mapping và không đổi voxel.",
+          explanation:
+            "Inspector luôn hiện scalar gốc; W/S/A/D chỉ đổi display mapping, histogram không thay.",
         },
       ],
     },
     "p53-l05": {
-      focus: "World→grid có −0.5; tám mẫu, trọng số và chính sách mép.",
-      expected: "Dời mặt cắt liên tục bằng trilinear",
+      focus: "Tâm mẫu, tám voxel, bảy lerp và cách xử lý nửa voxel sát mép.",
+      expected: "Đi giữa hai lát bằng trilinear",
       files: ["include/sampling.hpp", "include/display.hpp", "src/main.cpp"],
       steps: [
         {
@@ -96,9 +98,9 @@ const data = {
           explanation: "Chặn ngoài physical box trước khi clamp grid coordinate về vùng centre.",
         },
         {
-          title: "Ghép tám góc theo trọng số",
+          title: "Nội suy bốn cạnh x, hai cạnh y rồi một cạnh z",
           explanation:
-            "Tích ba trọng số tuyến tính; sum weights bằng một và centre trả đúng voxel.",
+            "Bảy lerp dùng tám voxel; bảng trọng số minh họa cùng phép tính và tổng trọng số bằng một.",
         },
         {
           title: "So nearest và trilinear",
@@ -109,8 +111,8 @@ const data = {
     },
     "p53-l06": {
       focus: "Crosshair đồng bộ, pointer input, keyboard và quét có thể dừng.",
-      expected: "Ghép ba lát cắt qua cùng một điểm trong world",
-      files: ["include/layout.hpp", "include/view.hpp", "src/main.cpp"],
+      expected: "Chọn một điểm, hiểu cả ba mặt cắt",
+      files: ["include/layout.hpp", "include/input.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
           title: "Dùng một cursor cho cả ba view",
@@ -120,7 +122,7 @@ const data = {
         {
           title: "Đổi pixel trong ảnh sang world",
           explanation:
-            "Chỉ pick fitted image, không pick letterbox; update hai trục trong plane và giữ trục cut.",
+            "Chỉ pick fitted image, giữ trục cut; kéo vùng khối thì orbit camera. Ctrl+mũi tên không dời probe.",
         },
         {
           title: "Cho quét chạy có giới hạn",
@@ -131,7 +133,7 @@ const data = {
     },
     "p53-l07": {
       focus: "Phím V, affine-field oracle, CTest Debug/Release và source tải về.",
-      expected: "Kiểm volume bằng oracle rồi chạy project hoàn chỉnh",
+      expected: "Chứng minh trình xem đang đọc đúng dữ liệu",
       files: ["include/diagnostics.hpp", "tests/tests.cpp", "src/main.cpp"],
       steps: [
         {

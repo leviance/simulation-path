@@ -19,12 +19,27 @@ struct Report {
     }
 };
 
+// [snippet affine]
 inline double affine(Point point) {
     return 0.2 + 0.1 * point[0] + 0.2 * point[1] + 0.15 * point[2];
 }
 
+// [/snippet affine]
+
+// [snippet audit]
 inline Report auditVolume(const Volume& volume) {
     Report report;
+    // A correct interpolation fixture cannot validate missing or malformed storage.
+    std::size_t expectedSamples = 1;
+    bool validShape = true;
+    for (int axis = 0; axis < 3; ++axis) {
+        if (volume.grid.count[axis] < 1 || volume.grid.count[axis] > 128 || !std::isfinite(volume.grid.spacing[axis]) || volume.grid.spacing[axis] <= 0) {
+            validShape = false;
+            break;
+        }
+        expectedSamples *= static_cast<std::size_t>(volume.grid.count[axis]);
+    }
+    report.check(validShape && volume.values.size() == expectedSamples);
     for (double value : volume.values) {
         report.check(std::isfinite(value) && value >= 0 && value <= 1);
         report.minimum = std::min(report.minimum, value);
@@ -52,5 +67,7 @@ inline Report auditVolume(const Volume& volume) {
     }
     return report;
 }
+
+// [/snippet audit]
 #endif
 } // namespace slices

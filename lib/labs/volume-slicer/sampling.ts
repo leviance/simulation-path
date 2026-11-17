@@ -17,24 +17,30 @@ function linearCell(volume: Volume, point: Point) {
 export function sampleLinear(volume: Volume, point: Point): number | null {
   if (!inside(volume.grid, point)) return null;
   const { low, high, fraction } = linearCell(volume, point);
-  let result = 0;
-  for (let z = 0; z < 2; z++)
-    for (let y = 0; y < 2; y++)
-      for (let x = 0; x < 2; x++) {
-        const corner = [x, y, z],
-          index = [...low];
-        let weight = 1;
-        for (let axis = 0; axis < 3; axis++) {
-          let factor = 1 - fraction[axis];
-          if (corner[axis] === 1) {
-            index[axis] = high[axis];
-            factor = fraction[axis];
-          }
-          weight *= factor;
-        }
-        result += weight * volume.voxel(index[0], index[1], index[2]);
-      }
-  return result;
+  const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+  const c00 = lerp(
+    volume.voxel(low[0], low[1], low[2]),
+    volume.voxel(high[0], low[1], low[2]),
+    fraction[0],
+  );
+  const c10 = lerp(
+    volume.voxel(low[0], high[1], low[2]),
+    volume.voxel(high[0], high[1], low[2]),
+    fraction[0],
+  );
+  const c01 = lerp(
+    volume.voxel(low[0], low[1], high[2]),
+    volume.voxel(high[0], low[1], high[2]),
+    fraction[0],
+  );
+  const c11 = lerp(
+    volume.voxel(low[0], high[1], high[2]),
+    volume.voxel(high[0], high[1], high[2]),
+    fraction[0],
+  );
+  const c0 = lerp(c00, c10, fraction[1]);
+  const c1 = lerp(c01, c11, fraction[1]);
+  return lerp(c0, c1, fraction[2]);
 }
 
 // Inspector-only trace; the image sampler does not allocate corner records per pixel.
@@ -66,6 +72,22 @@ export function auditVolume(volume: Volume) {
     report.checks++;
     if (!condition) report.failures++;
   };
+  let expectedSamples = 1;
+  let validShape = true;
+  for (let axis = 0; axis < 3; axis++) {
+    if (
+      !Number.isInteger(volume.grid.count[axis]) ||
+      volume.grid.count[axis] < 1 ||
+      volume.grid.count[axis] > 128 ||
+      !Number.isFinite(volume.grid.spacing[axis]) ||
+      volume.grid.spacing[axis] <= 0
+    ) {
+      validShape = false;
+      break;
+    }
+    expectedSamples *= volume.grid.count[axis];
+  }
+  check(validShape && volume.values.length === expectedSamples);
   for (const value of volume.values) {
     check(Number.isFinite(value) && value >= 0 && value <= 1);
     report.minimum = Math.min(report.minimum, value);

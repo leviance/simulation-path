@@ -12,7 +12,7 @@ function teachingCell() {
 export function TrilinearInspector({ volume, point }: { volume: Volume; point: Point }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const size = useCanvasSize(canvas);
-  const cell = useMemo(teachingCell, []);
+  const cell = useMemo(() => teachingCell(), []);
   const [mode, setMode] = useState("example");
   const [fraction, setFraction] = useState<Point>([0.25, 0.5, 0.75]);
   const probe = fraction.map((f, a) => worldCoordinate(cell.grid, a, f)) as Point;
