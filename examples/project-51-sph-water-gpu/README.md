@@ -45,6 +45,8 @@ dt=min(0,00075; 0,25h/(c+vmax+1); 0,25√(h/amax)). Extrema thuộc chính tick 
 
 Đây là WCSPH giảng dạy, không phải solver không nén được đã chứng minh hội tụ. Density/pressure trong báo cáo thuộc đầu tick cuối, còn position đã ở cuối tick. Quang học screen-space/bilateral là xấp xỉ hiển thị, không thay lực. Không có caustics chính xác, surface tension hoặc phản lực rigid body hai chiều.
 
+Mặt nước dùng cặp RG32F (depth, thickness), ba lượt joint bilateral 3 × 3 ở stride 1/2/4 và normal dựng lại từ depth. Hai trường được lọc cùng trọng số để giảm gồ theo từng hạt. Phản xạ lấy từ môi trường thủ tục có vùng sáng rộng; transmission dùng hệ số hấp thụ nhẹ cho bể nhỏ. Các hệ số màu là lựa chọn hiển thị, không phải số đo nước tinh khiết. Không thêm PCA, mesh isosurface, ray tracing nhiều lần hoặc hệ bọt nước riêng.
+
 ## Quy mô và tài nguyên
 
 Mặc định final 48³ = **110.592 hạt thật**. 512 và 32.768 là các mức nhỏ; 80³ = 512.000 và 100³ = 1.000.000 là mục tiêu nâng cao theo phần cứng. Chọn trong UI không có nghĩa là mức đó đã được kiểm trên máy của bạn. Không cam kết realtime hoặc một mức FPS; model time tách khỏi thời gian thực.
@@ -66,6 +68,8 @@ Nếu fence/timestamp vượt deadline, ứng dụng kết thúc ngay với mã 
 ```
 
 --verify dùng sáu fixture N=2/64/257/512: tail, nén có pressure khác 0, velocity tương đối, obstacle và sparse grid đủ lớn cho scan nhiều tầng. GPU CSR so với GPU all-pairs và CPU double độc lập. Kiểm density, pressure, acceleration, adaptive dt, CSR permutation và một bước integration. Reference không dùng indices GPU.
+
+Verifier còn kiểm filter GPU trên fixture 80 × 80: đóng gói R+R→RG, ba lượt lọc, depth phẳng, thickness checker, nền rỗng và bước nhảy depth. Readback chỉ dùng khi kiểm, không nằm trong render loop. Chạy được shader hoặc test PASS không chứng nhận chất lượng hình ảnh: vẫn cần xem Pool, Dam và Obstacle đang chuyển động từ nhiều góc.
 
 Tolerance: density abs 0,05 kg/m³, pressure abs 25 Pa, force |GPU−CPU|/(1+|CPU|)≤0,003, dt abs 1e−7 s, position abs 2e−5 m, velocity abs 0,002 m/s. Không nới tolerance khi chưa hiểu lỗi.
 

@@ -10,6 +10,8 @@ Vẽ hàng trăm nghìn viên cầu vẫn có thể khiến nước trông như 
 
 Mỗi hạt đóng góp một mặt cầu nhỏ trong phép dựng hình. Depth lấy giao điểm gần camera nhất. Thickness cộng độ dài đoạn tia đi qua các mặt cầu, có hệ số thể tích để giảm việc độ dày tăng vô lý khi đổi độ phân giải. Hai ảnh có mục đích khác nhau: depth dựng hình dáng bề mặt, thickness ước lượng lượng ánh sáng truyền qua.
 
+Hai ảnh thô dùng R32F. Cuối pipeline, ta đóng gói chúng vào RG32F để renderer đọc được cả hai đại lượng của cùng một pixel. Ở checkpoint 08, lượt này chỉ đóng gói, chưa làm mịn; ba lượt lọc sẽ được thêm ở Bài 9. Lớp `Target` trong bộ khung cung cấp lựa chọn `packedSurface=true` cho texture hai kênh. Đây là dữ liệu số, không phải ảnh màu RG.
+
 <InteractiveLab demo="sph-water-gpu" mode="sph3-8" />
 
 Canvas là mô hình CPU phục vụ học tập, không phải ứng dụng GPU của bài. Thời gian mô phỏng được ghi riêng và có thể chạy chậm hơn thời gian thực. Chuyển chế độ hiển thị không thay đổi phương trình SPH.
@@ -54,6 +56,9 @@ if (front < .04 || any(lessThan(hit, vec3(-.015))) || any(greaterThan(hit, vec3(
     discard;
 if (obstacle.w > 0.0 && sphereHit(ray, obstacle) < front)
     discard;
+float floorDepth = -eye.y / ray.y;
+if (floorDepth > 0.0 && floorDepth < front)
+    discard;
 gl_FragDepth = 20.0 / (20.0 - .04) - 20.0 * .04 / ((20.0 - .04) * front);
 if (pass == 0)
     result = vec4(front, 0, 0, 1);
@@ -68,8 +73,11 @@ Pass thickness tắt depth test và cộng contribution bằng GL_ONE, GL_ONE. T
 {/* snippet shaders/water/sphere.frag#thickness */}
 
 ```glsl title="shaders/water/sphere.frag — Cộng độ dày bằng blending"
-if (pass == 1)
-    result = vec4((back - front) * sqrt(a) * volumeRatio, 0, 0, 1);
+if (pass == 1) {
+    if (floorDepth > front)
+        back = min(back, floorDepth);
+    result = vec4(max(0.0, back - front) * sqrt(a) * volumeRatio, 0, 0, 1);
+}
 ```
 
 Không lấy số pixel phủ để thay độ dày world. volumeRatio là tỉ lệ thể tích phần tử spacing³ với thể tích cầu vẽ; nó giảm ảnh hưởng của việc chồng nhiều cầu để che khe hở.
@@ -115,15 +123,26 @@ void draw(Engine& engine, Camera camera, int outputWidth, int outputHeight, View
     gl_.Disable(GL_BLEND);
     filter_.use();
     filter_.setInt("source", 0);
-    filter_.setFloat("sigma", 1.2f * s.model.spacing);
-    depth_->sample(0);
-    scratch_->bind();
-    filter_.setVec2("direction", 1, 0);
-    gl_.DrawArrays(GL_TRIANGLES, 0, 3);
-    scratch_->sample(0);
-    smooth_->bind();
-    filter_.setVec2("direction", 0, 1);
-    gl_.DrawArrays(GL_TRIANGLES, 0, 3);
+    filter_.setInt("rawThickness", 1);
+    filter_.setFloat("spacing", s.model.spacing);
+    filter_.setFloat("focal", static_cast<float>(camera.focal));
+    thickness_->sample(1);
+    const int filterPasses = 1;
+    for (int pass = 0; pass < filterPasses; ++pass) {
+        if (pass == 0) {
+            depth_->sample(0);
+            smooth_->bind();
+        } else if (pass == 1) {
+            smooth_->sample(0);
+            scratch_->bind();
+        } else {
+            scratch_->sample(0);
+            smooth_->bind();
+        }
+        filter_.setInt("packedSource", static_cast<int>(pass > 0));
+        filter_.setInt("stepScale", 1 << pass);
+        gl_.DrawArrays(GL_TRIANGLES, 0, 3);
+    }
     gl_.BindFramebuffer(GL_FRAMEBUFFER, 0);
     gl_.Viewport(0, 0, outputWidth, outputHeight);
     // The output camera uses output pixels while texture coordinates use the scaled target.
@@ -131,9 +150,7 @@ void draw(Engine& engine, Camera camera, int outputWidth, int outputHeight, View
     setup(composite_, camera, engine.meta());
     camera.uniforms(composite_, outputWidth, outputHeight);
     smooth_->sample(0);
-    thickness_->sample(1);
-    composite_.setInt("surfaceDepth", 0);
-    composite_.setInt("thicknessMap", 1);
+    composite_.setInt("surfaceMap", 0);
     composite_.setInt("fluidVisible", static_cast<int>(view == View::Water));
     gl_.DrawArrays(GL_TRIANGLES, 0, 3);
     if (view != View::Water) {

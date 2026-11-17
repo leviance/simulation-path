@@ -138,8 +138,8 @@ export default function WaterWorkshop({
   useEffect(() => {
     const ctx = canvas.current?.getContext("2d");
     if (ctx && session && renderer)
-      renderer(ctx, size, session.state, camera, view, dark, dragging || !paused);
-  }, [session, version, size, camera, view, dark, dragging, paused, renderer]);
+      renderer(ctx, size, session.state, camera, view, dark, dragging || !paused, stage);
+  }, [session, version, size, camera, view, dark, dragging, paused, renderer, stage]);
   const point = (event: PointerEvent<HTMLCanvasElement>) => {
     const p = canvasPoint(event, event.currentTarget);
     const world = waterGroundPick(camera, size.width, size.height, p.x, p.y);

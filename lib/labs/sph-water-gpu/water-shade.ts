@@ -1,8 +1,17 @@
 import { waterCameraFrame, type WaterCamera } from "./lens.ts";
 import type { WaterDepth } from "./water-depth.ts";
 
-const absorption = [4.5, 1.45, 0.55];
-const scatter = [9, 148, 199];
+const absorption = [0.45, 0.12, 0.06];
+const scatter = [0.015, 0.08, 0.12];
+const environmentLow = [0.35, 0.4, 0.45];
+const environmentHigh = [1.5, 1.7, 1.9];
+const windowColor = [4, 4, 3.8];
+const linear = Float64Array.from({ length: 256 }, (_, i) => (i / 255) ** 2.2);
+const encoded = Uint8ClampedArray.from({ length: 4096 }, (_, i) => 255 * (i / 4095) ** (1 / 2.2));
+function smoothstep(low: number, high: number, value: number) {
+  const t = Math.max(0, Math.min(1, (value - low) / (high - low)));
+  return t * t * (3 - 2 * t);
+}
 // These screen-space optics affect display only, never SPH forces or density.
 export function shadeWater(surface: WaterDepth, camera: WaterCamera) {
   const { width: w, height: h, depth, thickness, rays, background: bg, rgba } = surface;
@@ -51,10 +60,15 @@ export function shadeWater(surface: WaterDepth, camera: WaterCamera) {
       }
       const cosine = Math.max(0, nx * vx + ny * vy + nz * vz);
       const fresnel = 0.0204 + 0.9796 * (1 - cosine) ** 5;
-      const sky = Math.max(0, Math.min(1, 0.5 + 0.5 * (-vy + 2 * cosine * ny)));
+      const rx = -vx + 2 * cosine * nx;
+      const ry = -vy + 2 * cosine * ny;
+      const rz = -vz + 2 * cosine * nz;
+      const sky = smoothstep(-0.15, 0.85, ry);
+      const windowLight =
+        0.92 * Math.exp(-12 * (rx + 0.45) ** 2 - 18 * (rz + 0.6) ** 2) * smoothstep(0.1, 0.65, ry);
       const nsx = nx * b.right[0] + ny * b.right[1] + nz * b.right[2];
       const nsy = nx * b.up[0] + ny * b.up[1] + nz * b.up[2];
-      const opticalDepth = Math.max(0.012, thickness[i]);
+      const opticalDepth = Math.max(0, thickness[i]);
       const xx = Math.max(
         0,
         Math.min(w - 1, Math.round(x - (nsx * opticalDepth * b.focal * 0.32) / z)),
@@ -68,19 +82,18 @@ export function shadeWater(surface: WaterDepth, camera: WaterCamera) {
         hy = vy + 0.85,
         hz = vz + 0.38,
         hl = Math.hypot(hx, hy, hz);
-      const specular = Math.max(0, (nx * hx + ny * hy + nz * hz) / hl) ** 100;
-      const diffuse = 0.45 + 0.55 * Math.max(0, -0.36 * nx + 0.85 * ny + 0.38 * nz);
+      const specular = Math.max(0, (nx * hx + ny * hy + nz * hz) / hl) ** 128;
       const coverage = 1 - Math.exp(-65 * thickness[i]);
       for (let channel = 0; channel < 3; channel++) {
         const transmission = Math.exp(-absorption[channel] * opticalDepth);
-        let reflection = 77 + 158 * sky;
-        if (channel === 1) reflection = 125 + 125 * sky;
-        if (channel === 2) reflection = 166 + 89 * sky;
+        const skyColor =
+          environmentLow[channel] + sky * (environmentHigh[channel] - environmentLow[channel]);
+        const reflection = skyColor * (1 - windowLight) + windowColor[channel] * windowLight;
         const transmitted =
-          bg[refracted + channel] * transmission + scatter[channel] * (1 - transmission) * diffuse;
-        const water = (1 - fresnel) * transmitted + fresnel * reflection + 89 * specular;
-        rgba[4 * i + channel] =
-          bg[4 * i + channel] * (1 - coverage) + Math.min(255, water) * coverage;
+          linear[bg[refracted + channel]] * transmission + scatter[channel] * (1 - transmission);
+        const water = (1 - fresnel) * transmitted + fresnel * reflection + 0.045 * specular;
+        const color = linear[bg[4 * i + channel]] * (1 - coverage) + water * coverage;
+        rgba[4 * i + channel] = encoded[Math.max(0, Math.min(4095, Math.round(color * 4095)))];
       }
     }
   return rgba;

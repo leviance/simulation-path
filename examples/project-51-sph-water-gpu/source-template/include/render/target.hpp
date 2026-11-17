@@ -12,11 +12,18 @@ class Target {
     GLuint framebuffer = 0;
     GLuint depth = 0;
 
-    Target(Gl& gl, int width, int height, bool depthBuffer)
+    Target(Gl& gl, int width, int height, bool depthBuffer, bool packedSurface = false)
         : gl_(gl) {
         gl_.GenTextures(1, &texture);
         gl_.BindTexture(GL_TEXTURE_2D, texture);
-        gl_.TexImage2D(GL_TEXTURE_2D, 0, GL_R32F, width, height, 0, GL_RED, GL_FLOAT, nullptr);
+        GLint storage = GL_R32F;
+        GLenum channels = GL_RED;
+        if (packedSurface) {
+            // Depth and optical thickness travel through the same reconstruction filter.
+            storage = GL_RG32F;
+            channels = GL_RG;
+        }
+        gl_.TexImage2D(GL_TEXTURE_2D, 0, storage, width, height, 0, channels, GL_FLOAT, nullptr);
         gl_.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         gl_.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         gl_.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);

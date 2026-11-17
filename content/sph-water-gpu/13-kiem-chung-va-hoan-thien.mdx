@@ -154,6 +154,7 @@ inline void verifyGpu(Gl& gl, const std::filesystem::path& root) {
         std::cout << "ORACLE PASS fixture=" << fixture << " N=" << count << " rhoAbs=" << rhoError << " pressureAbs=" << pressureError << " forceScaled=" << forceError << " position=" << positionError << " velocity=" << velocityError << '\n';
     }
     verifyResetReuse(gl, root);
+    verifyWaterSurface(gl, root);
 }
 ```
 
@@ -276,7 +277,9 @@ Trên Linux, dùng executable trong build thay cho thư mục Debug. Driver cầ
 
 ## Tự kiểm tra kết quả
 
-Build starter, 13 checkpoint và final; chạy CTest ở Debug/Release. ZIP phải chứa README, source, shader, tests và CMake, không chứa SDL tải về, build tree hay binary. Mã trong bài phải khớp marker của đúng checkpoint. PASS tự động không thay cho xem cảnh động và thử tương tác.
+Build starter, 13 checkpoint và final; chạy CTest ở Debug/Release. `--verify` còn chạy `verifyWaterSurface` trong `include/app/surface-verification.hpp`: một fixture 80 × 80 đi qua đúng shader và RG framebuffer trên GPU. Depth phẳng phải giữ nguyên; thickness checker phải về trung bình 0,2 ở vùng trong; pixel rỗng vẫn rỗng và bước nhảy depth 2→4 không bị trộn. GPU readback này chỉ nằm trong verifier, không được đưa vào vòng render thông thường.
+
+ZIP phải chứa README, source, shader, tests và CMake, không chứa SDL tải về, build tree hay binary. Mã trong bài phải khớp marker của đúng checkpoint. Sau các phép kiểm số, vẫn phải xem cảnh Pool/Dam/Obstacle đang chạy và thử tương tác. PASS tự động không chứng minh nước đã nhìn tự nhiên ở mọi góc.
 
 ## Bài tập mở rộng
 

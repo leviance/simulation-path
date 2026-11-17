@@ -23,13 +23,19 @@ void main() {
         discard;
     if (obstacle.w > 0.0 && sphereHit(ray, obstacle) < front)
         discard;
+    float floorDepth = -eye.y / ray.y;
+    if (floorDepth > 0.0 && floorDepth < front)
+        discard;
     gl_FragDepth = 20.0 / (20.0 - .04) - 20.0 * .04 / ((20.0 - .04) * front);
     if (pass == 0)
         result = vec4(front, 0, 0, 1);
     // [/snippet sphere-depth]
     // [snippet thickness]
-    if (pass == 1)
-        result = vec4((back - front) * sqrt(a) * volumeRatio, 0, 0, 1);
+    if (pass == 1) {
+        if (floorDepth > front)
+            back = min(back, floorDepth);
+        result = vec4(max(0.0, back - front) * sqrt(a) * volumeRatio, 0, 0, 1);
+    }
     // [/snippet thickness]
     if (pass >= 2) {
         vec3 normal = normalize(hit - center);

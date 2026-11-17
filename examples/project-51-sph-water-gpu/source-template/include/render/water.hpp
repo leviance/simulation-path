@@ -5,7 +5,12 @@
 #include <memory>
 
 namespace water51 {
-enum class View { Water, Particles, Density, Speed };
+enum class View {
+    Water,
+    Particles,
+    Density,
+    Speed
+};
 
 class WaterRenderer {
     Gl& gl_;
@@ -43,8 +48,8 @@ class WaterRenderer {
         height_ = height;
         depth_ = std::make_unique<Target>(gl_, width, height, true);
         thickness_ = std::make_unique<Target>(gl_, width, height, false);
-        scratch_ = std::make_unique<Target>(gl_, width, height, false);
-        smooth_ = std::make_unique<Target>(gl_, width, height, false);
+        scratch_ = std::make_unique<Target>(gl_, width, height, false, true);
+        smooth_ = std::make_unique<Target>(gl_, width, height, false, true);
     }
 
     // [snippet surface-passes]
@@ -82,15 +87,30 @@ class WaterRenderer {
         gl_.Disable(GL_BLEND);
         filter_.use();
         filter_.setInt("source", 0);
-        filter_.setFloat("sigma", 1.2f * s.model.spacing);
-        depth_->sample(0);
-        scratch_->bind();
-        filter_.setVec2("direction", 1, 0);
-        gl_.DrawArrays(GL_TRIANGLES, 0, 3);
-        scratch_->sample(0);
-        smooth_->bind();
-        filter_.setVec2("direction", 0, 1);
-        gl_.DrawArrays(GL_TRIANGLES, 0, 3);
+        filter_.setInt("rawThickness", 1);
+        filter_.setFloat("spacing", s.model.spacing);
+        filter_.setFloat("focal", static_cast<float>(camera.focal));
+        thickness_->sample(1);
+#if LAB_CHECKPOINT >= 9
+        const int filterPasses = 3;
+#else
+        const int filterPasses = 1;
+#endif
+        for (int pass = 0; pass < filterPasses; ++pass) {
+            if (pass == 0) {
+                depth_->sample(0);
+                smooth_->bind();
+            } else if (pass == 1) {
+                smooth_->sample(0);
+                scratch_->bind();
+            } else {
+                scratch_->sample(0);
+                smooth_->bind();
+            }
+            filter_.setInt("packedSource", static_cast<int>(pass > 0));
+            filter_.setInt("stepScale", 1 << pass);
+            gl_.DrawArrays(GL_TRIANGLES, 0, 3);
+        }
         gl_.BindFramebuffer(GL_FRAMEBUFFER, 0);
         gl_.Viewport(0, 0, outputWidth, outputHeight);
         // The output camera uses output pixels while texture coordinates use the scaled target.
@@ -98,9 +118,7 @@ class WaterRenderer {
         setup(composite_, camera, engine.meta());
         camera.uniforms(composite_, outputWidth, outputHeight);
         smooth_->sample(0);
-        thickness_->sample(1);
-        composite_.setInt("surfaceDepth", 0);
-        composite_.setInt("thicknessMap", 1);
+        composite_.setInt("surfaceMap", 0);
         composite_.setInt("fluidVisible", static_cast<int>(view == View::Water));
         gl_.DrawArrays(GL_TRIANGLES, 0, 3);
         if (view != View::Water) {

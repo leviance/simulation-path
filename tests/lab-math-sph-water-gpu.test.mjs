@@ -5,8 +5,59 @@ import { WallNeighborhood } from "../lib/labs/sph-water-gpu/walls.ts";
 import { WaterSession } from "../lib/labs/sph-water-gpu/session3d.ts";
 import { WaterDepth } from "../lib/labs/sph-water-gpu/water-depth.ts";
 import { shadeWater } from "../lib/labs/sph-water-gpu/water-shade.ts";
+import { reconstructWaterSurface } from "../lib/labs/sph-water-gpu/water-surface.ts";
 const near = (a, b, t = 1e-8) =>
   assert.ok(Number.isFinite(a) && Math.abs(a - b) < t, a + " != " + b);
+
+test("P51 surface reconstruction removes lattice-scale ripples in depth and thickness together", () => {
+  const surface = new WaterDepth(80, 80);
+  let beforeDepth = 0,
+    beforeThickness = 0;
+  for (let y = 0; y < 80; y++) {
+    for (let x = 0; x < 80; x++) {
+      const ripple = Math.cos((x * Math.PI) / 2) * Math.cos((y * Math.PI) / 2);
+      const index = x + y * 80;
+      surface.depth[index] = 2 + 0.015 * ripple;
+      surface.thickness[index] = 0.12 + 0.04 * ripple;
+      if (x >= 16 && x < 64 && y >= 16 && y < 64) {
+        beforeDepth += (surface.depth[index] - 2) ** 2;
+        beforeThickness += (surface.thickness[index] - 0.12) ** 2;
+      }
+    }
+  }
+  surface.smooth(0.05);
+  let afterDepth = 0,
+    afterThickness = 0;
+  for (let y = 16; y < 64; y++)
+    for (let x = 16; x < 64; x++) {
+      const index = x + y * 80;
+      afterDepth += (surface.depth[index] - 2) ** 2;
+      afterThickness += (surface.thickness[index] - 0.12) ** 2;
+    }
+  assert.ok(afterDepth < beforeDepth * 0.01);
+  assert.ok(afterThickness < beforeThickness * 0.01);
+});
+
+test("P51 joint filter preserves empty pixels, sharp depth separation and constant fields", () => {
+  const surface = new WaterDepth(80, 80);
+  for (let y = 8; y < 72; y++)
+    for (let x = 8; x < 72; x++) {
+      const index = x + y * 80;
+      surface.depth[index] = x < 40 ? 2 : 4;
+      surface.thickness[index] = (x + y) % 2 ? 0.1 : 0.3;
+    }
+  surface.smooth(0.05);
+  for (const x of [24, 56]) {
+    near(surface.depth[x + 40 * 80], x < 40 ? 2 : 4, 1e-5);
+    near(surface.thickness[x + 40 * 80], 0.2, 1e-5);
+  }
+  near(surface.depth[39 + 40 * 80], 2, 1e-5);
+  near(surface.depth[40 + 40 * 80], 4, 1e-5);
+  near(surface.depth[4 + 40 * 80], 0);
+  near(surface.thickness[4 + 40 * 80], 0);
+  for (const spacing of [0, -1, NaN, Infinity])
+    assert.throws(() => reconstructWaterSurface(surface, spacing));
+});
 
 test("P51 3D lattice, pool and scale preserve volume and total mass", () => {
   for (const side of [4, 8, 12, 16, 20])

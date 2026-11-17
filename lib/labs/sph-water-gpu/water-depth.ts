@@ -1,5 +1,6 @@
 import { waterCameraFrame, type WaterCamera } from "./lens.ts";
 import { tank, type FluidState } from "./state.ts";
+import { reconstructWaterSurface } from "./water-surface.ts";
 
 export class WaterDepth {
   readonly depth: Float32Array;
@@ -10,6 +11,7 @@ export class WaterDepth {
   readonly rays: Float32Array;
   readonly background: Uint8ClampedArray;
   readonly scratch: Float32Array;
+  readonly scratchThickness: Float32Array;
   readonly rgba: Uint8ClampedArray;
   submitted = 0;
   readonly width: number;
@@ -36,6 +38,7 @@ export class WaterDepth {
     this.background = new Uint8ClampedArray(pixels * 4);
     this.rgba = new Uint8ClampedArray(pixels * 4);
     this.scratch = new Float32Array(pixels);
+    this.scratchThickness = new Float32Array(pixels);
   }
   scene(state: FluidState, camera: WaterCamera, dark: boolean) {
     const { width: w, height: h, background: bg, opaque, rays } = this;
@@ -178,39 +181,6 @@ export class WaterDepth {
     }
   }
   smooth(spacing: number) {
-    const { width: w, height: h, depth, scratch } = this;
-    const sigma = spacing * 1.2;
-    const focal = h / (2 * Math.tan((25 * Math.PI) / 180));
-    for (const axis of [0, 1]) {
-      const source = axis === 0 ? depth : scratch,
-        target = axis === 0 ? scratch : depth;
-      for (let y = 0; y < h; y++)
-        for (let x = 0; x < w; x++) {
-          const index = x + y * w,
-            centre = source[index];
-          if (centre === 0) {
-            target[index] = 0;
-            continue;
-          }
-          let weight = 0,
-            value = 0;
-          // Filter one projected particle footprint instead of leaving low-N lattice ridges.
-          const radius = Math.max(3, Math.min(10, Math.ceil((spacing * focal) / centre)));
-          const spatialVariance = 2 * (radius * 0.6) ** 2;
-          for (let d = -radius; d <= radius; d++) {
-            const xx = axis === 0 ? x + d : x,
-              yy = axis === 1 ? y + d : y;
-            if (xx < 0 || xx >= w || yy < 0 || yy >= h) continue;
-            const sample = source[xx + yy * w];
-            if (sample === 0) continue;
-            const factor = Math.exp(
-              (-d * d) / spatialVariance - (sample - centre) ** 2 / (2 * sigma * sigma),
-            );
-            value += factor * sample;
-            weight += factor;
-          }
-          target[index] = value / weight;
-        }
-    }
+    reconstructWaterSurface(this, spacing);
   }
 }

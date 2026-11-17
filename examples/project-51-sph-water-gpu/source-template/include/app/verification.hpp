@@ -1,4 +1,5 @@
 #pragma once
+#include "app/surface-verification.hpp"
 #include "fluid/reference.hpp"
 #include "gpu/engine.hpp"
 #include <iostream>
@@ -192,6 +193,9 @@ inline void verifyGpu(Gl& gl, const std::filesystem::path& root) {
         std::cout << "ORACLE PASS fixture=" << fixture << " N=" << count << " rhoAbs=" << rhoError << " pressureAbs=" << pressureError << " forceScaled=" << forceError << " position=" << positionError << " velocity=" << velocityError << '\n';
     }
     verifyResetReuse(gl, root);
+#if LAB_CHECKPOINT >= 13
+    verifyWaterSurface(gl, root);
+#endif
 }
 
 // [/snippet independent-oracle]

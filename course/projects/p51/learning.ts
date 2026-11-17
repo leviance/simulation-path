@@ -189,12 +189,14 @@ const data = {
       files: [
         "shaders/water/filter.frag",
         "shaders/water/composite.frag",
+        "shaders/water/lighting.glsl",
         "include/render/water.hpp",
       ],
       steps: [
         {
           title: "Lọc depth nhưng giữ cạnh",
-          explanation: "sigma = 1,2 spacing thuộc đường vẽ.",
+          explanation:
+            "Ba lượt stencil 3 × 3 ở stride 1/2/4 lọc cả depth và thickness; sigma = 2 spacing chỉ thuộc đường vẽ.",
         },
         {
           title: "Dựng normal từ vị trí world",

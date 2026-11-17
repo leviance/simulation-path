@@ -21,6 +21,7 @@ export function renderWaterScene(
   view: WaterView,
   dark: boolean,
   interactive: boolean,
+  stage = 13,
 ) {
   setupCanvas(ctx, size);
   const w = Math.max(140, Math.round(Math.min(interactive ? 360 : 640, size.width))),
@@ -34,6 +35,7 @@ export function renderWaterScene(
     camera.distance,
     view,
     dark,
+    stage,
     w,
     h,
   ].join(",");
@@ -44,7 +46,7 @@ export function renderWaterScene(
     surface.scene(state, camera, dark);
     if (view === "water") {
       surface.particles(state, camera);
-      surface.smooth(state.spacing);
+      if (stage >= 9) surface.smooth(state.spacing);
       shadeWater(surface, camera);
     } else surface.rgba.set(surface.background);
     const image = stored?.image ?? document.createElement("canvas");

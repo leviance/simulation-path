@@ -66,7 +66,7 @@ test("P51 snapshots remove authoring branches and final C++ retains readable com
   assert.match(harness, /if \(failures != 0\)[\s\S]*?return EXIT_FAILURE;/);
   assert.match(harness, /return EXIT_SUCCESS;/);
 });
-test("P51 all 52 C++/GLSL teaching blocks match exact checkpoint markers", async () => {
+test("P51 all marked C++/GLSL teaching blocks match exact checkpoint markers", async () => {
   const files = (await readdir(path.join(root, "content/sph-water-gpu")))
     .filter((x) => /^\d{2}-.+\.mdx$/.test(x))
     .sort();
@@ -93,7 +93,7 @@ test("P51 all 52 C++/GLSL teaching blocks match exact checkpoint markers", async
       count++;
     }
   }
-  assert.ok(count >= 52);
+  assert.ok(count >= 53);
 });
 test("P51 native guarantees explicit workload, finite queues and independent references", async () => {
   const read = (file) => readFile(path.join(project, "final", file), "utf8");
@@ -113,6 +113,17 @@ test("P51 native guarantees explicit workload, finite queues and independent ref
   assert.doesNotMatch(reference, /indices|offsets|FluidGrid/);
   assert.match(reference, /model.count > 1024/);
   assert.match(await read("include/app/verification.hpp"), /fixture < 6/);
+  assert.match(await read("include/app/verification.hpp"), /verifyWaterSurface\(gl, root\)/);
+  const surfaceVerifier = await read("include/app/surface-verification.hpp");
+  assert.match(surfaceVerifier, /GL_RG, GL_FLOAT, pixels.data\(\)/);
+  assert.match(surfaceVerifier, /Surface reconstruction bridged/);
+  assert.match(renderer, /filterPasses = 3/);
+  assert.match(renderer, /packedSource/);
+  const surfaceFilter = await read("shaders/water/filter.frag");
+  assert.match(surfaceFilter, /layout\(location = 0\) out vec2 result/);
+  assert.match(surfaceFilter, /for \(int y = -1/);
+  assert.match(surfaceFilter, /for \(int x = -1/);
+  assert.match(surfaceFilter, /sum \+= weight \* sampleValue/);
   const benchmark = await read("include/app/benchmark.hpp");
   assert.match(benchmark, /warmed_ == 30/);
   assert.match(benchmark, /compute.size\(\) == 8/);
