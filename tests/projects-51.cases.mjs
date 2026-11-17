@@ -1,89 +1,61 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { workspace, authoredLessons, render } from "./site-support.mjs";
-import { isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
 import "./sph-water-gpu-content.test.mjs";
 const directory = path.join(workspace, "examples/project-51-sph-water-gpu");
-test("Project51 GLSL snippets match the shader of their teaching checkpoint", async () => {
-  const lessons = (await authoredLessons()).filter((l) => l.project === "sph-water-gpu");
-  for (const lesson of lessons) {
-    const source = await readFile(
-      path.join(workspace, "content/sph-water-gpu", lesson.file),
-      "utf8",
-    );
-    assert.match(source, new RegExp('mode="sph3-' + Number(lesson.file.slice(0, 2)) + '"'));
-    for (const [, title, snippet] of source.matchAll(
-      /```glsl title="([^"]+)"\r?\n([\s\S]*?)\r?\n```/g,
-    )) {
-      const relative = title.split(" — ")[0];
-      assert.match(relative, /^shaders\/.+\.(?:comp|vert|frag|glsl)$/);
-      const shader = await readFile(
-        path.join(directory, "checkpoints", lesson.file.slice(0, 2), relative),
-        "utf8",
-      );
-      assert.ok(isContiguousCodeExcerpt(snippet, shader), lesson.file + " drifts from " + relative);
-    }
-  }
+test("P51 lazy lab entry remains within the unchanged 24 KiB production budget", async () => {
+  const chunks = path.join(workspace, "dist/client/_next/static/chunks");
+  const entry = (await readdir(chunks)).find(
+    (file) => file.startsWith("sph-water-gpu-lab-") && file.endsWith(".js"),
+  );
+  assert.ok(entry);
+  assert.ok((await stat(path.join(chunks, entry))).size < 24 * 1024);
+  const hook = await readFile(
+    path.join(workspace, "components/labs/sph-water-gpu/use-water-renderer.ts"),
+    "utf8",
+  );
+  assert.match(hook, /import\("\.\/render-scene"\)/);
 });
-test("Project51 publishes12 progressive SPH3D lessons with full runnable sources", async () => {
+test("P51 overview and all thirteen lesson routes expose readable complete source", async () => {
   const overview = await render("/projects/sph-water-gpu");
   assert.equal(overview.status, 200);
   assert.match(await overview.text(), /THỬ SỨC TRƯỚC KHI XEM LỜI GIẢI/i);
-  const lessons = (await authoredLessons()).filter((l) => l.project === "sph-water-gpu");
-  assert.equal(lessons.length, 12);
-  for (const lesson of lessons) {
-    const response = await render(lesson.route),
+  const lessons = (await authoredLessons()).filter((x) => x.project === "sph-water-gpu");
+  assert.equal(lessons.length, 13);
+  for (const l of lessons) {
+    const response = await render(l.route),
       html = await response.text();
     assert.equal(response.status, 200);
-    assert.ok(Buffer.byteLength(html) < 450 * 1024, lesson.route);
+    assert.ok(Buffer.byteLength(html) < 450 * 1024, l.route);
     assert.match(html, /one-dark-pro/);
     assert.match(html, /ma-chay-duoc-sau-bai/);
     assert.doesNotMatch(html, /katex-error/);
   }
 });
-test("Project51 introduces GPU rendering,SPH,CSR,reduction and scale at the taught checkpoints", async () => {
+test("P51 checkpoint source genuinely introduces kernel and GPU passes at the taught stage", async () => {
   for (const [step, file, symbol] of [
-    [1, "include/model.hpp", "initialPosition("],
-    [4, "include/kernel.hpp", "kernel("],
-    [5, "include/reference.hpp", "evaluate("],
-    [6, "shaders/force.comp", "pairAcceleration("],
-    [7, "include/reference.hpp", "integrate("],
-    [8, "include/passes.hpp", "buildGrid("],
-    [9, "include/passes.hpp", "reduceStats("],
-    [12, "include/validation.hpp", "validateGpu("],
+    [2, "include/fluid/kernel.hpp", "inline double kernel3"],
+    [3, "shaders/sph/initialize.comp", "position[i] ="],
+    [4, "shaders/sph/density.comp", "float density ="],
+    [5, "shaders/sph/force.comp", "vec3 pairForce"],
+    [6, "shaders/sph/scan.comp", "shared uint"],
+    [6, "include/gpu/passes.hpp", "for (std::size_t level"],
   ]) {
     const now = await readFile(
         path.join(directory, "checkpoints", String(step).padStart(2, "0"), file),
         "utf8",
       ),
       before = await readFile(
-        path.join(
-          directory,
-          step === 1 ? "starter" : "checkpoints/" + String(step - 1).padStart(2, "0"),
-          file,
-        ),
+        path.join(directory, "checkpoints", String(step - 1).padStart(2, "0"), file),
         "utf8",
       );
-    assert.ok(now.includes(symbol));
-    assert.ok(!before.includes(symbol));
+    assert.ok(now.includes(symbol), file);
+    assert.ok(!before.includes(symbol), file + " appeared too early");
   }
-  const early = await readFile(path.join(directory, "checkpoints/10/include/controls.hpp"), "utf8");
-  assert.ok(!early.includes("case Command::Confirm:"));
-  assert.match(
-    await readFile(path.join(directory, "final/include/controls.hpp"), "utf8"),
-    /case Command::Confirm:[\s\S]*?engine\.reset\(gl, requested\)/,
-  );
-});
-test("Project51 documents CPU versus GPU,volume units,bounded work and verification limits", async () => {
-  const lesson = (file) => readFile(path.join(workspace, "content/sph-water-gpu", file), "utf8");
-  assert.match(await lesson("04-kernel-ba-chieu.mdx"), /kg\/m³/);
-  assert.match(await lesson("08-csr-grid-ba-chieu.mdx"), /không.*cắt ngầm/);
-  assert.match(await lesson("10-fence-va-ngan-sach.mdx"), /không thu hồi compute/);
-  assert.match(await lesson("11-tang-quy-mo.mdx"), /không.*allocation trên GPU của browser/);
-  const final = await lesson("12-kiem-chung-va-hoan-thien.mdx");
-  assert.match(final, /không chứng nhận solver nước/);
-  assert.match(final, /--tail-case/);
-  assert.match(final, /-C Release/);
+  const starter = await readFile(path.join(directory, "starter/src/main.cpp"), "utf8");
+  assert.doesNotMatch(starter, /Engine engine/);
+  const final = await readFile(path.join(directory, "final/include/fluid/model.hpp"), "utf8");
+  assert.match(final, /lessonStage = 13|lessonStage=13/);
 });

@@ -1,0 +1,162 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chạy 110.592 hạt và đo từng phần
+
+## Vấn đề cần giải quyết
+
+Một ảnh chụp đẹp ở 512 hạt không chứng minh sản phẩm đã đạt quy mô. Ngược lại, chỉ in N = 1.000.000 cũng chưa chứng minh GPU cập nhật và vẽ đủ số đó. Ta phải kiểm allocation, workload thật, thời gian mô hình và thời gian GPU bằng các phép đo tách biệt.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mốc bắt buộc là 48³ = 110.592 hạt. 80³ = 512.000 và 100³ = 1.000.000 là các lựa chọn nâng cao theo phần cứng, không phải lời hứa FPS. Thay side đổi độ phân giải, không đổi khối lượng khối nước. Profiler dùng timestamp GPU; CPU enqueue và thời gian từ submit tới completion là hai số khác.
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-12" />
+
+Canvas là mô hình CPU phục vụ học tập, không phải ứng dụng GPU của bài. Thời gian mô phỏng được ghi riêng và có thể chạy chậm hơn thời gian thực. Chuyển chế độ hiển thị không thay đổi phương trình SPH.
+
+## Viết code từng bước
+
+### 1. Dự toán trước khi cấp phát
+
+Kế hoạch gồm ba bank, acceleration, CSR và reduction scratch. Dùng kiểu size_t và kiểm overflow trước phép nhân.
+
+{/* snippet include/fluid/model.hpp#memory-plan */}
+
+```cpp title="include/fluid/model.hpp — Dự toán trước khi cấp phát"
+inline std::size_t plannedBytes(const Model& m) {
+    // Three banks keep the committed scene untouched while a finite batch is pending.
+    const auto particles = checkedProduct(m.count, 3 * (2 * sizeof(Float4) + sizeof(DensityPressure)) + sizeof(Float4) + sizeof(std::uint32_t));
+    const auto grid = checkedProduct(m.cellCount + 1, 4 * sizeof(std::uint32_t));
+    const auto reductions = checkedProduct((m.count + 127) / 128, 2 * sizeof(Float4));
+    return particles + grid + reductions + 4096;
+}
+```
+
+Đây là ước lượng simulation buffers, không phải đo tổng VRAM đang dùng. Render targets và driver overhead là khoản riêng; không gọi plannedBytes là VRAM thật.
+
+### 2. Đối chiếu với giới hạn GL
+
+Kiểm kích thước SSBO lớn nhất, số workgroup và peak memory trước khi tạo Storage mới.
+
+{/* snippet include/gpu/capabilities.hpp#limits */}
+
+```cpp title="include/gpu/capabilities.hpp — Đối chiếu với giới hạn GL"
+void validateModel(const Model& model, std::size_t previousBytes = 0) const {
+    const auto largest = std::max<std::size_t>(model.count * sizeof(Float4), (model.cellCount + 1) * sizeof(std::uint32_t));
+    if (largest > static_cast<std::size_t>(maximumBlock))
+        throw std::length_error("SSBO block limit exceeded");
+    const std::uint32_t dispatch = std::max((model.count + 127) / 128, (model.cellCount + 255) / 256);
+    if (dispatch > static_cast<std::uint32_t>(groups))
+        throw std::length_error("Workgroup limit exceeded");
+    if (plannedBytes(model) > bufferBudget || previousBytes > bufferBudget - plannedBytes(model))
+        throw std::length_error("192 MiB simulation-buffer peak budget exceeded");
+}
+```
+
+Budget 192 MiB là giới hạn chủ động của ứng dụng. N nằm trong UI chưa có nghĩa allocation sẽ thành công. Người dùng phải Apply để nhận workload mới; không tự tăng N sau mỗi lần chạy.
+
+### 3. Đo một phiên có điểm dừng
+
+Benchmark giữ nguyên cấu hình, chạy 30 warm-up tick, đo 8 tick compute rồi 8 frame của state đóng băng. Nó có deadline 50 giây và có thể hủy bằng Esc.
+
+{/* snippet include/app/benchmark.hpp#benchmark */}
+
+```cpp title="include/app/benchmark.hpp — Đo một phiên có điểm dừng"
+void service(Engine& e) {
+    if (!active())
+        return;
+    if (std::chrono::steady_clock::now() - started_ > std::chrono::seconds(50)) {
+        cancel();
+        throw std::runtime_error("Benchmark exceeded 50 seconds");
+    }
+    if (e.pending())
+        return;
+    if (e.ticks != lastTick_) {
+        if (e.ticks - lastTick_ != 1)
+            throw std::runtime_error("Benchmark sample must contain exactly one tick");
+        lastTick_ = e.ticks;
+        if (phase == BenchmarkPhase::Warmup) {
+            warmed_++;
+            if (warmed_ == 30)
+                phase = BenchmarkPhase::Compute;
+        } else if (phase == BenchmarkPhase::Compute) {
+            compute.push_back(e.timing.total);
+            enqueue.push_back(e.enqueueMs);
+            completion.push_back(e.completionMs);
+            for (std::size_t i = 0; i < 5; ++i)
+                passes[i].push_back(e.timing.milliseconds[i]);
+            if (compute.size() == 8)
+                phase = BenchmarkPhase::Render;
+        }
+    }
+    if (phase == BenchmarkPhase::Warmup || phase == BenchmarkPhase::Compute)
+        e.submit(1);
+}
+
+void rendered(double milliseconds) {
+    if (phase != BenchmarkPhase::Render)
+        return;
+    render.push_back(milliseconds);
+    if (render.size() == 8) {
+        phase = BenchmarkPhase::Complete;
+        const auto c = distribution(compute), r = distribution(render);
+        std::cout << "BENCHMARK PASS warmup=30 compute=8 renderFrozen=8 GPU-compute median/min/max=" << c.median << '/' << c.minimum << '/' << c.maximum << " ms GPU-render=" << r.median << '/' << r.minimum << '/' << r.maximum << " ms CPU-enqueue-median=" << distribution(enqueue).median << " ms full-completion-median=" << distribution(completion).median << " ms\n";
+        for (std::size_t i = 0; i < 5; ++i) {
+            const auto values = distribution(passes[i]);
+            std::cout << phaseNames[i] << " median/min/max=" << values.median << '/' << values.minimum << '/' << values.maximum << " ms\n";
+        }
+    }
+}
+```
+
+Không chia thời gian một lượt tám tick cho tám rồi gọi đó là median. Mỗi sample compute có đúng một tick; render được đo riêng và không tiến physics. Bảng điều khiển không nằm trong GPU water-render timer.
+
+### 4. Báo median cùng khoảng dao động
+
+Sắp xếp một bản sao samples để lấy median/min/max. Từ chối mảng rỗng, số âm và NaN/Inf.
+
+{/* snippet include/fluid/statistics.hpp#distribution */}
+
+```cpp title="include/fluid/statistics.hpp — Báo median cùng khoảng dao động"
+inline Distribution distribution(std::vector<double> samples) {
+    if (samples.empty())
+        throw std::invalid_argument("Benchmark has no samples");
+    for (double value : samples)
+        if (!std::isfinite(value) || value < 0)
+            throw std::invalid_argument("Invalid timing sample");
+    std::sort(samples.begin(), samples.end());
+    double median = samples[samples.size() / 2];
+    if (samples.size() % 2 == 0)
+        median = (median + samples[samples.size() / 2 - 1]) * .5;
+    return {samples.front(), median, samples.back()};
+}
+```
+
+Median không thay thế thông tin về scene, N, GPU/driver, cấu hình build và độ phân giải render. Benchmark ở một state nước chưa đại diện cho mọi thời điểm của dam-break.
+
+## Ghép các phần lại
+
+Gói ZIP trên trang tổng quan đã chứa đầy đủ file của mỗi checkpoint. Nếu muốn tự viết, bắt đầu từ bản cuối bài trước, thêm những phần vừa giải thích rồi đối chiếu bản dưới đây; không ghép các mảnh code thành một file main tùy ý.
+
+```powershell title="Terminal — checkpoint 12"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_51_checkpoint_12 --parallel 1
+.\build\Debug\project_51_checkpoint_12.exe
+```
+
+Trên Linux, dùng executable trong build thay cho thư mục Debug. Driver cần hỗ trợ OpenGL 4.3 compute; lỗi thiếu khả năng phải được báo rõ, không chuyển sang một animation giả.
+
+## Thử làm sai để hiểu đúng
+
+1. Build Release, chọn 110.592 rồi Apply và chạy. Dự đoán bốn count: allocated/alive/updated/drawn phải bằng nhau sau integration. Chuyển sang Hạt để đối chiếu; buffer lớn được cấp phát không có nghĩa là toàn bộ N đã được tính và vẽ.
+2. Pause rồi bấm B để đo hữu hạn; thử Esc ngay khi vừa yêu cầu benchmark. Lần bấm đó phải hủy yêu cầu nhưng giữ cửa sổ mở. Sau đó đo lại từ cảnh reset để có đầy đủ mẫu; phiên đã hủy không phải benchmark hợp lệ.
+
+## Tự kiểm tra kết quả
+
+Bản chuẩn phải thật sự chạy cảnh động với ít nhất 100.000 hạt, model time tăng, updated và drawn bằng N. Ghi rhoMin/rhoMax/leakage/invalid riêng với profiler. Chỉ ghi nhận 512.000/một triệu đã đạt khi có kiểm thực tế trên phần cứng tương ứng.
+
+## Bài tập mở rộng
+
+So sánh chi phí khi đổi độ phân giải render mà giữ nguyên N và state. Sau đó đổi N nhưng giữ viewport. Phân tích phần nào phụ thuộc số hạt, phần nào phụ thuộc số pixel.
+
+Tiếp theo: [Kiểm chứng rồi đóng gói bể nước hoàn chỉnh](/projects/sph-water-gpu/13-kiem-chung-va-hoan-thien).

@@ -1,0 +1,145 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cho nước chuyển động từ lực SPH
+
+## Vấn đề cần giải quyết
+
+Đến đây hạt có density và pressure nhưng vẫn đứng yên. Ta cần lực làm khối nước lan ra dưới gravity, đồng thời phải giữ quy tắc mọi hạt cùng đọc một state cũ. Đây là bài đầu tiên thật sự tiến thời gian mô phỏng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Pressure giữa hai hạt xuất hiện ở cả hai phía của biểu thức đối xứng. Artificial viscosity phụ thuộc vận tốc tương đối và chỉ có khi hai hạt tiến lại gần nhau. Sau khi hoàn tất density và force cho toàn hệ, semi-implicit Euler cập nhật velocity trước, position sau. dt là thời gian vật lý, không phải khoảng cách giữa hai lần browser vẽ.
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-5" />
+
+Canvas là mô hình CPU phục vụ học tập, không phải ứng dụng GPU của bài. Thời gian mô phỏng được ghi riêng và có thể chạy chậm hơn thời gian thực. Chuyển chế độ hiển thị không thay đổi phương trình SPH.
+
+## Viết code từng bước
+
+### 1. Viết lực pressure và viscosity
+
+pairForce được gọi từ vòng hàng xóm cho từng j khác i. Nó trả acceleration contribution, không ghi trực tiếp velocity.
+
+{/* snippet shaders/sph/force.comp#pressure-force */}
+
+```glsl title="shaders/sph/force.comp — Viết lực pressure và viscosity"
+float pressureTerm = field[i].y / (rhoi * rhoi) + field[j].y / (rhoj * rhoj);
+float viscosity = artificialViscosity(displacement, velocity[i].xyz - velocity[j].xyz, rhoi, rhoj);
+return -particleMass * (pressureTerm + viscosity) * gradient3(displacement);
+```
+
+Hai density ở mẫu số đều cần thiết để giữ biểu thức đối xứng. Đảo displacement hoặc gradient mà không đổi toàn bộ quy ước sẽ làm lực hút thay vì đẩy. Gravity được cộng đúng một lần cho mỗi i, ngoài vòng j.
+
+### 2. Kiểm lại dấu của vận tốc tương đối
+
+Đối chiếu hàm double này với GLSL artificialViscosity. dot(relativeVelocity, displacement) âm nghĩa hai hạt đang tiến lại gần nhau.
+
+{/* snippet include/fluid/reference.hpp#viscosity */}
+
+```cpp title="include/fluid/reference.hpp — Kiểm lại dấu của vận tốc tương đối"
+inline double artificialViscosity(Vec3 displacement, Vec3 relativeVelocity, double rhoi, double rhoj, const Model& m, const Parameters& p) {
+    const double approach = dot(relativeVelocity, displacement);
+    if (approach >= 0)
+        return 0;
+    const double mu = m.h * approach / (dot(displacement, displacement) + 0.01 * m.h * m.h);
+    return -p.alpha * p.soundSpeed * mu / (0.5 * (rhoi + rhoj));
+}
+```
+
+Một cặp tách xa không nhận artificial viscosity. Test power không dương kiểm tra cơ chế này thực sự tiêu hao chuyển động tương đối, thay vì bơm thêm năng lượng.
+
+### 3. Tích phân sang bank khác
+
+Integration đọc sourcePosition/sourceVelocity và acceleration, ghi targetPosition/targetVelocity. Đoạn này cũng xử lý tiếp xúc với sáu mặt của bể.
+
+{/* snippet shaders/sph/integrate.comp#gpu-integrate */}
+
+```glsl title="shaders/sph/integrate.comp — Tích phân sang bank khác"
+vec3 v = sourceVelocity[i].xyz + acceleration[i].xyz * dt;
+vec3 p = sourcePosition[i].xyz + v * dt;
+float margin = 0.5 * spacing;
+vec3 limits = vec3(1.65, 0.825, 1.1);
+for (int axis = 0; axis < 3; axis++) {
+    if (p[axis] < margin) {
+        p[axis] = margin;
+        if (v[axis] < 0.0)
+            v[axis] *= -0.1;
+    }
+    if (p[axis] > limits[axis] - margin) {
+        p[axis] = limits[axis] - margin;
+        if (v[axis] > 0.0)
+            v[axis] *= -0.1;
+    }
+}
+vec3 bodyPosition = body.xyz + bodyVelocity.xyz * dt;
+vec3 delta = p - bodyPosition;
+float distance = length(delta);
+if (body.w > 0.0 && distance < body.w + margin) {
+    vec3 normal = vec3(0, 1, 0);
+    if (distance > 1e-12)
+        normal = delta / distance;
+    p = bodyPosition + normal * (body.w + margin);
+    float outward = dot(v - bodyVelocity.xyz, normal);
+    if (outward < 0.0)
+        v -= 1.1 * outward * normal;
+}
+```
+
+Chỉ phản xạ thành phần velocity hướng ra ngoài. Nếu nhân toàn bộ vector với một hệ số ở mỗi va chạm, ta sẽ thêm ma sát toàn cục không có trong mô hình. Vật cản cầu dùng vận tốc tương đối với bề mặt chuyển động.
+
+### 4. Nối đúng buffer nguồn và đích
+
+Sau density → force → extrema, host bind bank nguồn và bank đích riêng rồi dispatch integration. finish chỉ tăng model time khi toàn bộ count đã được cập nhật.
+
+{/* snippet include/gpu/passes.hpp#integrate-pass */}
+
+```cpp title="include/gpu/passes.hpp — Nối đúng buffer nguồn và đích"
+void integrate(Storage& s, int source, int target) {
+
+    s.banks[source].position.bind(0);
+    s.banks[source].velocity.bind(1);
+    s.acceleration.bind(2);
+    s.banks[target].position.bind(3);
+    s.banks[target].velocity.bind(4);
+    s.banks[source].field.bind(5);
+    s.banks[target].field.bind(6);
+    s.meta.bind(7);
+    integrate_.use();
+    integrate_.setUnsigned("particleCount", s.model.count);
+    integrate_.setFloat("spacing", s.model.spacing);
+    dispatch(s.model.count);
+    finish_.use();
+    finish_.setUnsigned("particleCount", s.model.count);
+    dispatch(1, 1);
+
+}
+```
+
+Không swap bank ngay khi vừa gửi lệnh. Ứng dụng sẽ nhận bank mới sau fence và kiểm cờ lỗi ở Bài 11. Field được sao chép cùng state để renderer không đọc vùng chưa khởi tạo; density hiển thị thuộc đầu tick vừa hoàn tất.
+
+## Ghép các phần lại
+
+Gói ZIP trên trang tổng quan đã chứa đầy đủ file của mỗi checkpoint. Nếu muốn tự viết, bắt đầu từ bản cuối bài trước, thêm những phần vừa giải thích rồi đối chiếu bản dưới đây; không ghép các mảnh code thành một file main tùy ý.
+
+```powershell title="Terminal — checkpoint 05"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_51_checkpoint_5 --parallel 1
+.\build\Debug\project_51_checkpoint_5.exe
+```
+
+Trên Linux, dùng executable trong build thay cho thư mục Debug. Driver cần hỗ trợ OpenGL 4.3 compute; lỗi thiếu khả năng phải được báo rõ, không chuyển sang một animation giả.
+
+## Thử làm sai để hiểu đúng
+
+1. Chạy Dam với 512 hạt, dừng rồi tiến từng bước. Dự đoán hạt nào chạm sàn trước, sau đó quan sát đáy khối bị nén và nước lan sang vùng trống. Nếu position đổi trước khi tất cả lực được tính, hãy kiểm việc đọc/ghi bank thay vì chỉnh tham số để che lỗi.
+2. So alpha=0 với alpha=0,5 trong hai lần reset riêng, giữ nguyên c và thời điểm mô hình cần so. Artificial viscosity phải giảm dao động tương đối, nhưng đó không phải bằng chứng hội tụ. Trả alpha về 0,25 rồi Reset để bài sau bắt đầu từ cùng cảnh.
+
+## Tự kiểm tra kết quả
+
+CPU/GPU integration phải khớp ở một bước từ cùng position, velocity, density và dt. Kiểm mass/count không đổi, không NaN/Inf, không hạt nằm ngoài bể sau contact. Ở checkpoint này còn all-pairs; giới hạn 512 hạt là chủ ý của bước học.
+
+## Bài tập mở rộng
+
+Viết thêm test hai hạt có pressure bằng nhau, gravity = 0 và không gần thành. Tổng lực nội phải gần 0. Sau đó thử tích phân ngay trong force pass để giải thích vì sao cách làm đó không an toàn trên GPU.
+
+Tiếp theo: [Tìm hàng xóm bằng grid 3D trên GPU](/projects/sph-water-gpu/06-grid-va-scan).

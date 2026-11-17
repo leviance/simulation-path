@@ -279,7 +279,7 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
     },
     summary: "Dựng bể nước SPH 3D thật trên GPU, nhìn dòng chảy từ nhiều phía và đo từng pass.",
     outcome:
-      "Ứng dụng C++/SDL3/OpenGL có sphere impostor với depth/shading, camera perspective, profiler và thống kê mô hình tách riêng.",
+      "Bể nước C++/SDL3/OpenGL có mặt nước dựng từ depth/thickness của hạt SPH, camera orbit, quả cầu có thể kéo, profiler và thống kê mô hình tách riêng.",
     question:
       "Làm sao hàng trăm nghìn hạt vừa tạo thành khối nước, vừa được tính lực và vẽ mà không đưa state về CPU mỗi frame?",
     interactions: [

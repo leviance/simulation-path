@@ -2,289 +2,305 @@ import type { ProjectLearningAssets } from "../../learning/types";
 const data = {
   guides: {
     "p51-l01": {
-      focus: "Vẽ 64 hạt CPU trong hộp 3D, orbit và resize.",
-      expected: "Nhìn khối hạt từ nhiều hướng trước khi viết solver",
-      files: ["include/model.hpp", "include/camera.hpp", "include/view.hpp", "src/main.cpp"],
+      focus: "Dựng bể và nhìn rõ từng lớp hạt",
+      expected: "Build target project_51_checkpoint_1.",
+      files: [
+        "src/main.cpp",
+        "include/fluid/model.hpp",
+        "include/app/camera.hpp",
+        "shaders/water/sphere.vert",
+      ],
       steps: [
         {
-          title: "Dựng vị trí theo ba chỉ số",
-          explanation:
-            "i%side, (i/side)%side và i/side² chọn tâm ô của lattice; preview chỉ 64 hạt.",
+          title: "Giữ đúng vòng đời cửa sổ OpenGL",
+          explanation: "run() chứa vòng sự kiện và tài nguyên GL.",
         },
         {
-          title: "Đổi world sang camera",
-          explanation:
-            "Đổi world sang eye space, xoay yaw/pitch và chia theo -z cho perspective; camera không sửa position.",
+          title: "Đặt hạt vào tâm từng ô",
+          explanation: "x thay nhanh nhất, rồi y, cuối cùng z.",
         },
         {
-          title: "Vẽ preview nhỏ và xử lý input",
-          explanation:
-            "Scissor vẽ chấm trên framebuffer thật; capture/blur quản lý drag, Home đặt lại camera.",
+          title: "Tính vị trí người quan sát",
+          explanation: "forward trỏ về khối nước; right và up nằm trên mặt phẳng ảnh.",
         },
       ],
     },
     "p51-l02": {
-      focus: "Layout vec4/std430 và initialization shader tạo 512 hạt.",
-      expected: "Đưa dữ liệu hạt lên GPU bằng SSBO",
-      files: ["include/storage.hpp", "include/engine.hpp", "shaders/initialize.comp"],
+      focus: "Đổi SPH từ diện tích sang thể tích",
+      expected:
+        "Chạy CTest của bản cuối để kiểm chuẩn hóa 3D và gradient bằng finite difference; đọc các ca trong tests/tests.cpp.",
+      files: ["include/fluid/model.hpp", "include/fluid/kernel.hpp", "include/fluid/reference.hpp"],
       steps: [
         {
-          title: "Khóa layout CPU/GLSL",
-          explanation:
-            "Float4 có kích thước và alignment 16 byte để khớp GLSL; Vec3 dùng double chỉ để tính đáp án CPU.",
+          title: "Chốt đơn vị và độ phân giải",
+          explanation: "side = 48 cho 110.592 hạt.",
         },
         {
-          title: "Tính bộ nhớ trước allocation",
-          explanation:
-            "Plan đếm hai bank, density/acceleration, CSR và scratch; limit/BufferData failure đều được báo.",
+          title: "Viết kernel và gradient bằng double",
+          explanation: "Đạo hàm theo q cần thêm hệ số 1/h.",
         },
         {
-          title: "Khởi tạo trên GPU và chờ fence",
+          title: "Giữ một cách tính chậm nhưng dễ kiểm",
           explanation:
-            "Initialization shader tạo 512 hạt với guard tail; ready chỉ bật sau fence, preview CPU chưa phải hình SSBO.",
+            "Tất cả lực đều đọc cùng một state cũ và cùng một mảng density đã tính xong.",
         },
       ],
     },
     "p51-l03": {
-      focus: "Perspective, sphere impostor có normal/depth và vertex shader đọc SSBO.",
-      expected: "Vẽ hạt có chiều sâu trực tiếp từ GPU",
+      focus: "Tạo dữ liệu hạt trực tiếp trên GPU",
+      expected: "Build project_51_checkpoint_3 và kiểm không có lỗi compile/link shader.",
       files: [
-        "include/view.hpp",
-        "shaders/camera.glsl",
-        "shaders/particle.vert",
-        "shaders/particle.frag",
+        "include/fluid/model.hpp",
+        "include/gpu/storage.hpp",
+        "shaders/sph/initialize.comp",
+        "include/gpu/passes.hpp",
       ],
       steps: [
         {
-          title: "Đọc đúng bank hiện tại",
-          explanation:
-            "Vertex shader lấy position từ SSBO của bank đã commit, không readback mảng.",
+          title: "Khóa layout bằng static_assert",
+          explanation: "alignas bảo đảm điểm bắt đầu record, static_assert bảo đảm stride.",
         },
         {
-          title: "Xoay camera thay vì state",
-          explanation:
-            "Yaw/pitch/zoom nằm trong view; depth test xử lý che khuất, resize giữ world.",
+          title: "Giữ thống kê nhỏ tách khỏi mảng hạt",
+          explanation: "offsetof(body) phải bằng 48.",
         },
         {
-          title: "Vẽ thể tích thay vì đĩa phẳng",
-          explanation:
-            "Tia camera cắt sphere, normal dùng cho shading và gl_FragDepth dùng độ sâu mặt cầu. uStride=1 vẽ toàn N, không giảm workload ngầm.",
+          title: "Cho mỗi invocation khởi tạo một hạt",
+          explanation: "Workgroup cuối có thể không đủ 128 hạt.",
         },
       ],
     },
     "p51-l04": {
-      focus: "Cubic spline 3D, gradient và support sphere.",
-      expected: "Đổi kernel từ diện tích sang thể tích",
-      files: ["include/kernel.hpp", "shaders/common.glsl"],
+      focus: "Tính density và pressure mà chưa di chuyển hạt",
+      expected: "N = 257 và 512 phải khớp CPU trong tolerance được ghi trong verification.hpp.",
+      files: ["shaders/shared/physics.glsl", "shaders/sph/density.comp", "include/gpu/passes.hpp"],
       steps: [
         {
-          title: "Kiểm đơn vị của density/mass",
-          explanation: "rho0 là kg/m³, m=rho0*s³; refinement giữ khối 0.4 m và 64 kg.",
+          title: "Đưa đúng kernel 3D sang GLSL",
+          explanation: "GPU dùng float nên không yêu cầu từng bit giống CPU double.",
         },
         {
-          title: "Chuẩn hóa kernel 3D",
-          explanation: "Dùng 1/(πh³), kiểm 4π∫r²Wdr độc lập; không mang normalization 2D sang.",
+          title: "Mỗi invocation tự cộng density của mình",
+          explanation: "Self term có r = 0 và W(0) hữu hạn.",
         },
         {
-          title: "Đạo hàm và xử lý r=0",
-          explanation:
-            "Lấy derivative theo q rồi nhân 1/h và displacement/r; r=0/support xử lý riêng.",
+          title: "Tính pressure từ kết quả vừa cộng",
+          explanation: "Không gán rho = rho0 để làm màu hiển thị đẹp hơn.",
         },
       ],
     },
     "p51-l05": {
-      focus: "All-pairs có self, một invocation ghi một hạt và barrier.",
-      expected: "Tính density trên GPU với một ca nhỏ",
+      focus: "Cho nước chuyển động từ lực SPH",
+      expected:
+        "CPU/GPU integration phải khớp ở một bước từ cùng position, velocity, density và dt.",
       files: [
-        "include/reference.hpp",
-        "include/passes.hpp",
-        "include/engine.hpp",
-        "shaders/density.comp",
+        "shaders/sph/force.comp",
+        "include/fluid/reference.hpp",
+        "shaders/sph/integrate.comp",
+        "include/gpu/passes.hpp",
       ],
       steps: [
         {
-          title: "Giữ bản CPU làm oracle",
-          explanation: "CPU oracle trực tiếp cộng mW có self và từ chối N>512.",
+          title: "Viết lực pressure và viscosity",
+          explanation: "Hai density ở mẫu số đều cần thiết để giữ biểu thức đối xứng.",
         },
         {
-          title: "Ghi density vào buffer riêng",
-          explanation:
-            "Một invocation ghi một density record; rho/pressure/error không alias position.",
+          title: "Kiểm lại dấu của vận tốc tương đối",
+          explanation: "Một cặp tách xa không nhận artificial viscosity.",
         },
         {
-          title: "Đọc density sau batch hoàn tất",
-          explanation:
-            "N chỉ tính density; barrier cho GPU consumer, fence mới cho phép CPU kiểm. L chuyển water/density để quan sát, position chưa đổi.",
+          title: "Tích phân sang bank khác",
+          explanation: "Chỉ phản xạ thành phần velocity hướng ra ngoài.",
         },
       ],
     },
     "p51-l06": {
-      focus: "EOS, lực đối xứng 3D và thứ tự density→force.",
-      expected: "Thêm pressure và artificial viscosity",
+      focus: "Tìm hàng xóm bằng grid 3D trên GPU",
+      expected: "Offsets bắt đầu bằng 0, không giảm và kết thúc bằng N.",
       files: [
-        "include/kernel.hpp",
-        "include/reference.hpp",
-        "shaders/force.comp",
-        "shaders/density.comp",
+        "shaders/sph/count.comp",
+        "shaders/sph/scan.comp",
+        "include/gpu/passes.hpp",
+        "shaders/sph/scatter.comp",
       ],
       steps: [
         {
-          title: "Đổi density thành pressure",
-          explanation: "EOS clamp p>=0, cùng rho/c cho đáp án được tính bằng tay.",
+          title: "Đếm occupancy của từng cell",
+          explanation: "Atomic ở đây chỉ bảo vệ bộ đếm; nó không quyết định thứ tự ID cuối cùng.",
         },
         {
-          title: "Cộng lực theo vector 3D",
-          explanation: "Coefficient đối xứng đọc cả hai hạt, gradient 3D odd; self chỉ bỏ ở force.",
+          title: "Biến counts thành khoảng lưu trữ",
+          explanation: "Không return sớm ở tail trước barrier.",
         },
         {
-          title: "Tách pressure khỏi tiêu tán số",
-          explanation: "Monaghan chỉ bật khi vij·rij âm; alpha không phải độ nhớt vật lý.",
+          title: "Ghép scan nhiều tầng trên host",
+          explanation: "counts được tái sử dụng làm cursors sau khi scan đã đọc xong.",
         },
       ],
     },
     "p51-l07": {
-      focus: "Gravity, semi-implicit Euler, sáu thành và ping-pong.",
-      expected: "Cho khối nước chuyển động mà không ghi đè state",
-      files: ["include/reference.hpp", "include/engine.hpp", "shaders/integrate.comp"],
+      focus: "Chọn timestep từ dữ liệu của chính tick hiện tại",
+      expected:
+        "Fixture có vmax lớn phải kích hoạt acoustic bound; fixture có acceleration lớn phải kích hoạt force bound.",
+      files: [
+        "include/fluid/reference.hpp",
+        "shaders/sph/reduce.comp",
+        "include/gpu/passes.hpp",
+        "include/fluid/model.hpp",
+      ],
       steps: [
         {
-          title: "Tính toàn bộ force từ state cũ",
-          explanation: "Force hoàn tất cho cả state cũ rồi mới thêm gravity/integrate.",
+          title: "Viết đáp án dt trước khi port",
+          explanation: "Floor 1e−7 là điểm dừng an toàn.",
         },
         {
-          title: "Viết sang bank kế tiếp",
-          explanation: "vNew trước xNew, collision sáu mặt chỉ phản xạ normal hướng ra.",
+          title: "Thu gọn trong một workgroup",
+          explanation: "Mọi lane phải đến mọi barrier.",
         },
         {
-          title: "Commit bank sau fence",
-          explanation: "Host đổi current và tăng tick/time sau fence; thất bại không commit bank.",
+          title: "Lặp reduction tới một record",
+          explanation: "Không đọc kết quả về CPU giữa các tầng.",
         },
       ],
     },
     "p51-l08": {
-      focus: "Count→scan→scatter, 27 cell và oracle all-pairs.",
-      expected: "Dựng spatial grid 3D hoàn toàn trên GPU",
-      files: [
-        "include/passes.hpp",
-        "shaders/count.comp",
-        "shaders/scan.comp",
-        "shaders/scatter.comp",
-        "shaders/density.comp",
-        "shaders/force.comp",
-      ],
+      focus: "Dựng độ sâu và độ dày từ các hạt nước",
+      expected: "Không có readback position trên đường render thông thường.",
+      files: ["shaders/water/sphere.vert", "shaders/water/sphere.frag", "include/render/water.hpp"],
       steps: [
         {
-          title: "Đếm cell và exclusive scan",
-          explanation:
-            "Clear/count bằng atomic; scan các block sums tới một block rồi uniform-add đi xuống.",
+          title: "Vẽ một quad đủ che mặt cầu",
+          explanation: "Bán kính vẽ 1,15 spacing khác smoothingLength h.",
         },
         {
-          title: "Scatter ID vào đoạn liên tiếp",
-          explanation: "Cursors khởi từ offsets, atomic scatter lưu ID mỗi hạt đúng một lần.",
+          title: "Ghi độ sâu mặt cầu thật",
+          explanation:
+            "Nếu ghi depth của tâm quad, hạt trước/sau sẽ che nhau sai và normal tái dựng sẽ có mảng phẳng.",
         },
         {
-          title: "Duyệt 27 cell và lọc support thật",
-          explanation:
-            "Duyệt 27 cell rồi lọc theo khoảng cách support. Nếu vượt 4096 ứng viên, báo lỗi thay vì trả lực từ một danh sách bị cắt cụt.",
+          title: "Cộng độ dày bằng blending",
+          explanation: "Không lấy số pixel phủ để thay độ dày world.",
         },
       ],
     },
     "p51-l09": {
-      focus: "Reduction nhiều tầng cho vmax/amax, lỗi và dt.",
-      expected: "Chọn timestep từ dữ liệu đang nằm trên GPU",
+      focus: "Biến ảnh độ sâu thành mặt nước có chiều sâu",
+      expected: "Camera/resize không đổi model time hoặc positions.",
       files: [
-        "include/model.hpp",
-        "include/passes.hpp",
-        "include/engine.hpp",
-        "shaders/stats.comp",
-        "shaders/max.comp",
-        "shaders/integrate.comp",
+        "shaders/water/filter.frag",
+        "shaders/water/composite.frag",
+        "include/render/water.hpp",
       ],
       steps: [
         {
-          title: "Gom extrema và cờ lỗi",
-          explanation:
-            "Stats record chứa vmax/amax/rhoMax/error; lane đuôi pad 0 nhưng vẫn tới barrier.",
+          title: "Lọc depth nhưng giữ cạnh",
+          explanation: "sigma = 1,2 spacing thuộc đường vẽ.",
         },
         {
-          title: "Thu các block tới một record",
-          explanation:
-            "Hai scratch buffers thu record bằng max tới một; không CPU-reduce block sums.",
+          title: "Dựng normal từ vị trí world",
+          explanation: "cross(dx,dy) cho hướng pháp tuyến nhưng có thể quay lưng về camera.",
         },
         {
-          title: "Dùng dt của chính force hiện tại",
+          title: "Kết hợp độ dày và góc nhìn",
           explanation:
-            "Integration đọc root của force vừa tính, chọn acoustic/force bound; dt < 1e−6 từ chối.",
+            "Đây là screen-space approximation: không có ray tracing nhiều lần trong thể tích, không có caustics chính xác và không giải quang học vật lý đầy đủ.",
         },
       ],
     },
     "p51-l10": {
-      focus: "Một batch pending, poll không chặn, pause và benchmark hữu hạn.",
-      expected: "Giữ ứng dụng phản hồi khi GPU đang tính",
+      focus: "Kéo vật cản để tạo dòng chảy 3D",
+      expected: "Camera drag không đổi target/position; paddle drag không đổi camera.",
       files: [
-        "include/queue.hpp",
-        "include/gpu-error.hpp",
-        "include/benchmark.hpp",
-        "include/controls.hpp",
-        "src/main.cpp",
+        "include/fluid/reference.hpp",
+        "shaders/sph/force.comp",
+        "include/app/camera.hpp",
+        "include/app/input.hpp",
       ],
       steps: [
         {
-          title: "Poll fence thay vì chờ đồng bộ",
+          title: "Cấp support ở vùng rắn",
           explanation:
-            "Timeout 0 là poll trạng thái. Lỗi fence/deadline mang kiểu GpuBatchError, đi qua UI/oracle tới main để dừng mọi submit, không bị biến thành lỗi nút bấm có thể bỏ qua.",
+            "Ở thành tĩnh, boundary velocity bằng 0; trong quả cầu, nó bằng velocity của quả cầu.",
         },
         {
-          title: "Dừng submit khi pause/mất focus",
-          explanation: "Pause/blur/cancel ngăn work tương lai, không preempt GPU command đã gửi.",
+          title: "Dùng cùng điều kiện biên trên GPU",
+          explanation: "Pressure của ghost dùng pressure của hạt đang xét, density biên dùng rho0.",
         },
         {
-          title: "Warm-up, đo rồi dừng",
+          title: "Đổi con trỏ thành target world",
           explanation:
-            "B reset cùng N, warm-up 30 tick, lấy 8 compute và 8 frozen-render samples; báo median/min/max. GPU pass, CPU enqueue, commit và model time có nhãn riêng.",
+            "Camera gần song song mặt phẳng có thể không tạo điểm hợp lệ; phải bỏ thao tác thay vì tạo target rất lớn.",
         },
       ],
     },
     "p51-l11": {
-      focus: "48³ là mốc chuẩn, 80³/100³ nâng cao; kiểm tài nguyên trước allocation.",
-      expected: "Tăng số hạt sau khi kiểm tra tài nguyên",
-      files: ["include/model.hpp", "include/storage.hpp", "include/view.hpp", "src/main.cpp"],
+      focus: "Giữ cửa sổ phản hồi khi GPU đang tính",
+      expected:
+        "Không dùng glFinish, không spin loop chờ query, không có hai simulation batch pending.",
+      files: ["include/gpu/storage.hpp", "include/gpu/engine.hpp"],
       steps: [
         {
-          title: "Giữ mass/thể tích khi tinh hạt",
-          explanation: "Side tăng thì spacing/mass giảm, tổng 64 kg giữ nguyên cho preset đầy đủ.",
+          title: "Đọc một báo cáo nhỏ sau batch",
+          explanation: "Không dùng timer như dấu hiệu state hợp lệ.",
         },
         {
-          title: "Kiểm giới hạn GL và budget bộ nhớ",
-          explanation:
-            "Kiểm SSBO/groups/shared/peak budget 192 MiB; allocation mới thất bại giữ workload cũ.",
+          title: "Gửi một lượng công việc hữu hạn",
+          explanation: "Mỗi submit nhận 1–4 tick, không xếp backlog theo số frame bị chậm.",
         },
         {
-          title: "Xác nhận rồi mới cấp phát workload lớn",
-          explanation:
-            "Final mở paused ở 110.592; phím 1–5 chỉ chọn, Enter mới allocate. Vẽ toàn N, không draw cap/stride ngầm; 512k/1M chưa mặc nhiên được nghiệm thu.",
+          title: "Poll không khóa event loop",
+          explanation: "Sau năm giây chưa hoàn tất, ứng dụng dừng submit và báo lỗi.",
         },
       ],
     },
     "p51-l12": {
-      focus: "257/512 hạt, CSR permutation, force, integration và source đầy đủ.",
-      expected: "Kiểm chứng CPU↔GPU và chạy khối nước hoàn chỉnh",
-      files: ["include/validation.hpp", "tests/tests.cpp", "src/main.cpp"],
+      focus: "Chạy 110.592 hạt và đo từng phần",
+      expected:
+        "Bản chuẩn phải thật sự chạy cảnh động với ít nhất 100.000 hạt, model time tăng, updated và drawn bằng N.",
+      files: [
+        "include/fluid/model.hpp",
+        "include/gpu/capabilities.hpp",
+        "include/app/benchmark.hpp",
+        "include/fluid/statistics.hpp",
+      ],
       steps: [
         {
-          title: "Kiểm công thức bằng ca độc lập",
-          explanation:
-            "Volume normalization, finite difference, pair power và active timestep có oracle độc lập.",
+          title: "Dự toán trước khi cấp phát",
+          explanation: "Đây là ước lượng simulation buffers, không phải đo tổng VRAM đang dùng.",
         },
         {
-          title: "So buffer trước/sau với CPU oracle",
-          explanation:
-            "Sáu fixture kiểm initialization, tail, pressure/viscosity khác 0, scan nhiều tầng, extrema/dt CPU độc lập và integration hai tick.",
+          title: "Đối chiếu với giới hạn GL",
+          explanation: "Budget 192 MiB là giới hạn chủ động của ứng dụng.",
         },
         {
-          title: "Chạy tests nhỏ trước workload lớn",
+          title: "Đo một phiên có điểm dừng",
+          explanation: "Không chia thời gian một lượt tám tick cho tám rồi gọi đó là median.",
+        },
+      ],
+    },
+    "p51-l13": {
+      focus: "Kiểm chứng rồi đóng gói bể nước hoàn chỉnh",
+      expected: "Build starter, 13 checkpoint và final; chạy CTest ở Debug/Release.",
+      files: [
+        "include/app/verification.hpp",
+        "include/fluid/reference.hpp",
+        "include/app/report.hpp",
+      ],
+      steps: [
+        {
+          title: "So sánh trên cùng input, không cùng implementation",
           explanation:
-            "ZIP tự build, CTest giữ checks trong Release; PASS nhỏ không chứng nhận workload triệu hạt.",
+            "Sáu fixture có tail 257, khối nén có pressure khác 0, vận tốc tương đối, vật cản và sparse grid đủ lớn cho scan nhiều tầng.",
+        },
+        {
+          title: "Giữ reference không phụ thuộc CSR",
+          explanation:
+            "Tolerance nằm trong verifier: rho tuyệt đối 0,05 kg/m³, pressure 25 Pa, force scaled 0,003, position 2e−5 m và velocity 0,002 m/s.",
+        },
+        {
+          title: "Kiểm một bước từ state cũ",
+          explanation:
+            "Kiểm acceleration trước integration giúp tách lỗi force khỏi lỗi dt/contact.",
         },
       ],
     },
@@ -313,8 +329,8 @@ const data = {
     ],
     "p51-l04": [
       {
-        label: "Cubic spline 3D",
-        href: "https://pysph.readthedocs.io/en/main/reference/kernels.html",
+        label: "SPH 3D GPU pipeline",
+        href: "/glossary#sph-gpu-pipeline",
         kind: "Thuật ngữ",
       },
     ],
@@ -368,6 +384,13 @@ const data = {
       },
     ],
     "p51-l12": [
+      {
+        label: "SPH 3D GPU pipeline",
+        href: "/glossary#sph-gpu-pipeline",
+        kind: "Thuật ngữ",
+      },
+    ],
+    "p51-l13": [
       {
         label: "SPH 3D GPU pipeline",
         href: "/glossary#sph-gpu-pipeline",

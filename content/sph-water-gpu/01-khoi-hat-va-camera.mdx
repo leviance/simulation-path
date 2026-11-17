@@ -1,124 +1,157 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Nhìn khối hạt từ nhiều hướng trước khi viết solver
+# Dựng bể và nhìn rõ từng lớp hạt
 
 ## Vấn đề cần giải quyết
 
-Trong Project 50, hạt chỉ cần x và y. Lần này, nước phải có chiều sâu thật: một hạt nằm sau hạt khác, có thể bị che và đổi kích thước biểu kiến khi camera tới gần. Ta chưa vội viết solver. Trước hết, cần một khối hạt đứng yên để biết rằng hệ tọa độ và góc nhìn đã đúng.
-
-Starter cung cấp cửa sổ SDL3 với OpenGL 4.3 core, bộ nạp hàm GL và vòng `SDL_PollEvent`. Khác Project 50, ở đây **không tạo SDL_Renderer** trong cửa sổ OpenGL. Phần khung được kế thừa từ Project 33–38 và có sẵn trong ZIP; bạn không cần ghép mã từ các ZIP khác. Bài này thêm 4×4×4 = 64 điểm CPU. Bài 02 mới đưa state 512 hạt lên GPU.
+Project 50 đã cho ta một bể nước trên mặt phẳng. Lần này, bể có cả chiều sâu: nước có thể chảy vòng qua một vật cản, một hạt có thể che hạt khác và cùng một cảnh phải nhìn đúng từ nhiều phía. Ta chưa thêm lực ngay. Mục tiêu đầu tiên là dựng một khối 4 × 4 × 4 hạt đứng yên và điều khiển góc nhìn mà không làm thay đổi chúng.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Hãy tưởng tượng khối hạt gồm nhiều lớp: x thay đổi trong một hàng, y chọn hàng, z chọn lớp. Với chỉ số `i`, ba tọa độ nguyên lần lượt là `i % side`, `(i / side) % side`, `i / (side * side)`. Thêm 0,5 để đặt hạt ở tâm ô rồi nhân với spacing. Khối ban đầu rộng 0,4 m, nằm trong hộp [0,1]³, y hướng lên.
-
-Camera không làm các hạt quay trong bể. Nó chỉ đổi từ tọa độ world sang tọa độ của người quan sát: dịch điểm nhìn về quanh (0,5; 0,4; 0,5), quay theo yaw/pitch rồi lùi camera ra. Trong hệ camera, các điểm phía trước có z âm. Phép chiếu perspective chia x và y cho `-z`; vì thế cùng một vật ở xa trông nhỏ hơn. Zoom thay khoảng cách camera, không thay spacing hoặc mass.
+Bể dùng mét, không dùng pixel: x chạy dọc bể, y hướng lên và z là chiều sâu. Kích thước bể là 1,65 × 0,825 × 1,10 m. Khối nước ban đầu có cạnh 0,55 m. Camera chỉ quyết định cách nhìn khối ấy; kéo camera không được sửa position, spacing hay mass. Trong ZIP, starter đã có cửa sổ OpenGL, bộ nạp hàm GL và các tiện ích quản lý tài nguyên. Đây là bộ khung được cung cấp để ta không phải chép lại Project 33. Hãy build starter, thấy cửa sổ trống rồi mới chuyển sang checkpoint 01.
 
 <InteractiveLab demo="sph-water-gpu" mode="sph3-1" />
 
-Trước khi kéo, hãy chọn một góc nhìn khiến vài hạt chồng lên nhau. Sau đó kéo để thấy chúng thuộc các lớp z khác nhau. Canvas dùng hệ nhỏ để quan sát; nó không chạy compute shader hoặc đo tốc độ GPU.
+Canvas là mô hình CPU phục vụ học tập, không phải ứng dụng GPU của bài. Thời gian mô phỏng được ghi riêng và có thể chạy chậm hơn thời gian thực. Chuyển chế độ hiển thị không thay đổi phương trình SPH.
 
 ## Viết code từng bước
 
-### 1. Tạo các lớp hạt trong world space
+### 1. Giữ đúng vòng đời cửa sổ OpenGL
 
-`Plan` đã giữ side và spacing. Thêm hàm tạo vị trí trong `include/model.hpp`; hàm này không biết kích thước cửa sổ:
+Mở src/main.cpp và giữ phần khởi tạo dưới đây trong main. Cửa sổ này dùng OpenGL nên không tạo thêm SDL_Renderer cho cùng cửa sổ. Renderer dùng cho chữ ở bảng điều khiển là software renderer trên một SDL_Surface riêng.
 
-{/* snippet include/model.hpp#initial-position */}
+{/* snippet src/main.cpp#context */}
 
-```cpp title="include/model.hpp — vị trí lattice"
-inline Vec3 initialPosition(const Plan& plan, std::uint32_t i) {
-    return {0.08 + (i % plan.side + 0.5) * plan.spacing, ((i / plan.side) % plan.side + 0.5) * plan.spacing, 0.3 + (i / (plan.side * plan.side) + 0.5) * plan.spacing};
+```cpp title="src/main.cpp — Giữ đúng vòng đời cửa sổ OpenGL"
+// Setup: create the SDL window and OpenGL context before any GL resources.
+if (!SDL_Init(SDL_INIT_VIDEO))
+    throw std::runtime_error(SDL_GetError());
+SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+if (options.hidden)
+    flags |= SDL_WINDOW_HIDDEN;
+window = SDL_CreateWindow("Project 51 - SPH Water 3D", 1280, 800, flags);
+if (!window)
+    throw std::runtime_error(SDL_GetError());
+SDL_SetWindowMinimumSize(window, 800, 600);
+context = SDL_GL_CreateContext(window);
+if (!context)
+    throw std::runtime_error(SDL_GetError());
+SDL_GL_SetSwapInterval(0);
+// Cleanup: run() destroys GL objects before their context and SDL window are destroyed.
+auto shaderRoot = std::filesystem::path(COURSE_SHADER_DIRECTORY);
+if (!std::filesystem::exists(shaderRoot)) {
+    const char* base = SDL_GetBasePath();
+    if (base == nullptr)
+        throw std::runtime_error(SDL_GetError());
+    shaderRoot = std::filesystem::path(base) / COURSE_SHADER_FALLBACK_SUBDIRECTORY;
 }
+const int result = water51::run(window, options, shaderRoot);
+SDL_GL_DestroyContext(context);
+SDL_DestroyWindow(window);
+SDL_Quit();
 ```
 
-Sau mỗi `side` hạt, ta sang hàng mới; sau `side * side` hạt, ta sang lớp mới. X lệch 0,08 m và z lệch 0,3 m để chừa khoảng trống cho dòng chảy. Hàng dưới cách sàn đúng spacing/2. Khi có gravity ở Bài 07, đáy khối bắt đầu bị nén rồi nước lan ra, không cần chờ cả khối rơi từ trên cao.
+run() chứa vòng sự kiện và tài nguyên GL. Khi run trả về, các object GL đã bị hủy; sau đó mới hủy context và window. Nếu đảo thứ tự, destructor có thể gọi GL vào context không còn tồn tại.
 
-### 2. Giữ camera tách khỏi hạt
+### 2. Đặt hạt vào tâm từng ô
 
-Camera nằm trong header riêng; thay các giá trị dưới đây không ghi vào state SPH:
+Một chỉ số liên tiếp phải xác định được ba chỉ số nguyên. Viết seedPoint trong model.hpp. Dù cửa sổ đang rộng hay hẹp, hàm vẫn trả cùng một vị trí world.
 
-{/* snippet include/camera.hpp#camera-state */}
+{/* snippet include/fluid/model.hpp#seed-point */}
 
-```cpp title="include/camera.hpp — state của camera"
-struct Camera {
-    float yaw = 0.65F;
-    float pitch = 0.45F;
-    float zoom = 1;
-};
-```
-
-Đổi world sang eye space theo đúng thứ tự dịch → yaw → pitch → lùi camera:
-
-{/* snippet include/camera.hpp#camera-point */}
-
-```cpp title="include/camera.hpp — world sang eye space"
-inline Vec3 cameraPoint(Vec3 position, const Camera& camera) {
-    const auto p = subtract(position, {0.5, 0.4, 0.5});
-    const double x = std::cos(camera.yaw) * p.x + std::sin(camera.yaw) * p.z;
-    const double depth = -std::sin(camera.yaw) * p.x + std::cos(camera.yaw) * p.z;
-    const double y = std::cos(camera.pitch) * p.y - std::sin(camera.pitch) * depth;
-    const double z = std::sin(camera.pitch) * p.y + std::cos(camera.pitch) * depth;
-    return {x, y, z - 1.75 / camera.zoom};
-}
-```
-
-Hai góc đều đo bằng radian. `1.75 / camera.zoom` là khoảng cách nhìn tới điểm ngắm; dấu trừ đặt khối trước camera theo hướng -Z. Đây là scaffold camera dùng lại kiến thức projection trước đó, không phải một phần của phương trình chất lưu.
-
-### 3. Chiếu và vẽ preview
-
-Preview chỉ dùng `gl.Scissor`/`gl.Clear` để vẽ các ô nhỏ. Bài 03 sẽ thay đường vẽ này bằng vertex/fragment shader; hiện tại chưa có buffer hạt trên GPU:
-
-{/* snippet include/view.hpp#preview */}
-
-```cpp title="include/view.hpp — vẽ preview CPU"
-inline void drawPreview(lab::GlApi& gl, const Camera& camera, int width, int height, int viewportX = 0, int viewportY = 0) {
-    // Bài đầu chỉ vẽ 64 hạt CPU bằng scaffold; chưa chạy solver GPU.
-    gl.Enable(GL_SCISSOR_TEST);
-    gl.ClearColor(0.25F, 0.7F, 0.95F, 1);
-    const auto plan = makePlan(4);
-    for (std::uint32_t i = 0; i < std::min(plan.count, 64U); ++i) {
-        const auto p = cameraPoint(initialPosition(plan, i), camera);
-        if (p.z >= -nearPlane) {
-            continue;
-        }
-        const double scale = height * 0.5 * focalLength / -p.z;
-        const int x = static_cast<int>(width / 2 + scale * p.x);
-        const int y = static_cast<int>(height / 2 + scale * p.y);
-        gl.Scissor(viewportX + x - 2, viewportY + y - 2, 4, 4);
-        gl.Clear(GL_COLOR_BUFFER_BIT);
+```cpp title="include/fluid/model.hpp — Đặt hạt vào tâm từng ô"
+inline Vec3 seedPoint(const Model& m, std::uint32_t id) {
+    if (id >= m.count)
+        throw std::out_of_range("Seed id");
+    int nx = m.side;
+    int ny = m.side;
+    Vec3 origin{0, 0, blockWidth / 2};
+    if (m.preset == Preset::Pool) {
+        nx = 2 * m.side;
+        ny = m.side / 4;
+        origin = {blockWidth / 2, 0, 0};
     }
-    gl.Disable(GL_SCISSOR_TEST);
+    const int x = static_cast<int>(id) % nx;
+    const int y = (static_cast<int>(id) / nx) % ny;
+    const int z = static_cast<int>(id) / (nx * ny);
+    return {origin.x + (x + 0.5) * m.spacing, origin.y + (y + 0.5) * m.spacing, origin.z + (z + 0.5) * m.spacing};
 }
 ```
 
-`focalLength = 1 / tan(25°)` tương ứng FOV dọc 50°. Scale phụ thuộc chiều cao framebuffer và `-p.z`, không nhân zoom thêm lần nữa. Điểm ở sau near plane bị bỏ trước khi chia. Scissor dùng gốc dưới-trái nên y được cộng; Canvas dùng gốc trên-trái nên đường vẽ web trừ y.
+x thay nhanh nhất, rồi y, cuối cùng z. Thêm 0,5 đặt hạt vào tâm ô, tránh đặt tâm đúng trên thành bể. Preset Pool đổi số hàng và lớp nhưng không đổi tổng số hạt hoặc tổng khối lượng. Ở bài này hãy dùng Dam.
+
+### 3. Tính vị trí người quan sát
+
+Camera giữ yaw, pitch và distance. Mỗi khi resize hoặc kéo chuột, gọi update với chiều cao viewport để dựng lại eye và ba vector cơ sở.
+
+{/* snippet include/app/camera.hpp#camera-frame */}
+
+```cpp title="include/app/camera.hpp — Tính vị trí người quan sát"
+void update(int height) {
+    pitch = std::clamp(pitch, 0.10, 1.25);
+    distance = std::clamp(distance, 1.35, 4.5);
+    const double sy = std::sin(yaw), cy = std::cos(yaw), sp = std::sin(pitch), cp = std::cos(pitch);
+    eye = add(target, scale({sy * cp, sp, cy * cp}, distance));
+    forward = {-sy * cp, -sp, -cy * cp};
+    right = {cy, 0, -sy};
+    up = {-sy * sp, cp, -cy * sp};
+    focal = height / (2 * std::tan(25 * std::numbers::pi / 180));
+}
+```
+
+forward trỏ về khối nước; right và up nằm trên mặt phẳng ảnh. focal phụ thuộc chiều cao cửa sổ. Đây là phép chiếu perspective, không phải xoay tọa độ của hạt để giả làm 3D.
+
+### 4. Dùng đường vẽ được cung cấp để kiểm vị trí
+
+Bộ khung có sẵn đường vẽ sphere impostor. Đoạn vertex shader sau cho thấy vị trí world được đọc và chiếu ra màn hình ở đâu; lúc này ta chỉ dùng nó để kiểm dữ liệu tạo trên CPU.
+
+{/* snippet shaders/water/sphere.vert#billboard */}
+
+```glsl title="shaders/water/sphere.vert — Dùng đường vẽ được cung cấp để kiểm vị trí"
+void main() {
+    const vec2 quad[6] = vec2[6](vec2(-1, -1), vec2(1, -1), vec2(1, 1), vec2(-1, -1), vec2(1, 1), vec2(-1, 1));
+    uint i = uint(gl_InstanceID);
+    center = position[i].xyz;
+    diagnostic = vec2(field[i].x, length(velocity[i].xyz));
+    vec3 delta = center - eye;
+    float z = dot(delta, forward);
+    vec2 pixel = vec2(dot(delta, right), dot(delta, up)) * focal / max(z, .04);
+    float pixels = radius * focal / max(z - radius, .04);
+    vec2 ndc = (pixel + quad[gl_VertexID] * pixels) * 2.0 / viewport;
+    gl_Position = vec4(ndc, 0, 1);
+}
+```
+
+Checkpoint 01 ghi vị trí CPU vào buffer dùng để vẽ; chưa có GPU SPH. Mỗi instance ứng với một hạt, không giảm số hạt theo góc nhìn. Bài 03 sẽ thay việc nạp vị trí CPU bằng initialization compute shader.
 
 ## Ghép các phần lại
 
-Trong vòng lặp của `main.cpp`, lấy kích thước bằng `SDL_GetWindowSizeInPixels`, clear color/depth rồi gọi preview trước `SDL_GL_SwapWindow`. Ở checkpoint 1, nhánh render thực sự chạy là:
+Gói ZIP trên trang tổng quan đã chứa đầy đủ file của mỗi checkpoint. Nếu muốn tự viết, bắt đầu từ bản cuối bài trước, thêm những phần vừa giải thích rồi đối chiếu bản dưới đây; không ghép các mảnh code thành một file main tùy ý.
 
-{/* snippet src/main.cpp#render-call */}
-
-```cpp title="src/main.cpp — gọi preview trong frame"
-view.drawn = 64;
-drawPreview(gl, view.camera, width, height, sceneX, sceneY);
+```powershell title="Terminal — checkpoint 01"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_51_checkpoint_1 --parallel 1
+.\build\Debug\project_51_checkpoint_1.exe
 ```
 
-Main đã nối drag với yaw/pitch, wheel với zoom, Home để đặt lại và release capture khi thả chuột/mất focus. Build target `project_51_checkpoint_1`; `starter` vẫn là cửa sổ nền trống. Mã hoàn chỉnh bên dưới chứa cả khung và vị trí gọi, không chỉ các helper trong bài.
+Trên Linux, dùng executable trong build thay cho thư mục Debug. Driver cần hỗ trợ OpenGL 4.3 compute; lỗi thiếu khả năng phải được báo rõ, không chuyển sang một animation giả.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi lớp z thành `i / side`. Dự đoán khối sẽ kéo dài theo hướng nào rồi chạy và khôi phục `side * side`.
-2. Thay mẫu số `-p.z` bằng một hằng số. Hình vẫn quay được nhưng hạt xa/gần không còn đổi kích thước biểu kiến: bạn vừa trở lại phép chiếu trực giao.
-3. Thay đổi position trong state mỗi lần kéo. Sau vài vòng quay, so tọa độ hạt với lúc đầu; khôi phục việc xoay chỉ trong camera.
+1. Giữ mô phỏng đứng yên, kéo góc nhìn rồi resize cửa sổ. Dự đoán cái gì được đổi và cái gì phải giữ nguyên: hình chiếu có thể đổi, nhưng vẫn phải có 64 hạt và khối vẫn có cạnh 0,55 m trong world space. Nếu khối bị kéo dài, hãy kiểm focal và aspect ratio, đừng sửa vị trí hạt để bù lỗi camera.
+2. Trong một bản nháp của seedPoint, tạm cho mọi hạt có cùng z. Nhìn chính diện có thể chưa rõ lỗi, nhưng nhìn bên hông sẽ thấy khối bị ép thành một mặt phẳng. Khôi phục cách tính z trước khi sang bài sau; thay đổi góc nhìn không thể tạo lại chiều sâu đã mất trong dữ liệu.
 
 ## Tự kiểm tra kết quả
 
-- Có 64 vị trí khác nhau theo cả ba trục; đổi góc nhìn giúp tách các hạt đang chồng hình.
-- Kéo/zoom không đổi vị trí world của hạt, spacing hoặc số hạt. Home khôi phục góc nhìn.
-- Resize không kéo dẹt khối. Không có gravity, density hoặc tick tự tiến trong bài này.
+Build target project_51_checkpoint_1. Phải có đúng 64 hạt, camera xoay được và khối giữ nguyên kích thước world sau resize. Starter chỉ mở cửa sổ trống. Checkpoint này chưa chạy lực; đừng dùng việc hạt đứng yên để kết luận solver sai.
 
 ## Bài tập mở rộng
 
-So hai điểm có cùng x/y nhưng khác z: điểm nào có scale lớn hơn? Thử FOV 40° và phân biệt nó với việc thay khoảng cách camera. Sau đó học [SSBO và initialization shader](/projects/sph-water-gpu/02-ssbo-va-khoi-tao).
+Đổi góc nhìn ban đầu nhưng giữ nguyên seedPoint. Sau đó đổi side từ 4 lên 8 trong một nhánh thử và kiểm số hạt tăng từ 64 lên 512, không phải chỉ tăng số điểm vẽ trên cùng một mặt phẳng.
+
+Tiếp theo: [Đổi SPH từ diện tích sang thể tích](/projects/sph-water-gpu/02-mo-hinh-sph-ba-chieu).

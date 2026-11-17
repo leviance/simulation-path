@@ -1,0 +1,145 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chọn timestep từ dữ liệu của chính tick hiện tại
+
+## Vấn đề cần giải quyết
+
+Khi nước va vào thành hoặc vật cản, vận tốc và lực có thể tăng rất nhanh. Một dt chỉ hợp ở cảnh ban đầu có thể làm hệ nổ sau đó. CPU không nên tải toàn bộ mảng về chỉ để tìm giá trị lớn nhất; ta dùng GPU reduction.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ba giới hạn cùng áp dụng: dt không vượt 0,00075 s; acoustic bound là 0,25h/(c + vmax + 1); force bound là 0,25√(h/amax). Ta lấy giá trị nhỏ nhất. vmax và amax phải đến từ state/force vừa tính, không dùng thống kê cũ của frame trước. Số 1 trong mẫu số là safety offset 1 m/s của mô hình này.
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-7" />
+
+Canvas là mô hình CPU phục vụ học tập, không phải ứng dụng GPU của bài. Thời gian mô phỏng được ghi riêng và có thể chạy chậm hơn thời gian thực. Chuyển chế độ hiển thị không thay đổi phương trình SPH.
+
+## Viết code từng bước
+
+### 1. Viết đáp án dt trước khi port
+
+Hàm CPU dưới đây tính extrema rồi áp dụng cùng các bound. Nó được dùng để kiểm GPU, không phải để điều khiển workload lớn.
+
+{/* snippet include/fluid/reference.hpp#timestep */}
+
+```cpp title="include/fluid/reference.hpp — Viết đáp án dt trước khi port"
+const double acoustic = 0.25 * model.h / (parameters.soundSpeed + vmax + 1);
+const double force = 0.25 * std::sqrt(model.h / std::max(1e-12, amax));
+const double dt = std::min({maximumDt, acoustic, force});
+if (!std::isfinite(dt) || dt < 1e-7)
+    throw std::runtime_error("Timestep below safety limit");
+return dt;
+```
+
+Floor 1e−7 là điểm dừng an toàn. Không ép dt lên floor rồi tiếp tục khi bound yêu cầu nhỏ hơn; làm vậy vi phạm chính điều kiện ổn định mình vừa tính.
+
+### 2. Thu gọn trong một workgroup
+
+Mỗi record mang vmax, amax, rhoMin và rhoMax. Lane dư dùng phần tử trung hòa: max nhận 0, min nhận giá trị rất lớn.
+
+{/* snippet shaders/sph/reduce.comp#reduction */}
+
+```glsl title="shaders/sph/reduce.comp — Thu gọn trong một workgroup"
+partial[lane] = value;
+barrier();
+for (uint stride = 64u; stride > 0u; stride /= 2u) {
+    if (lane < stride) {
+        vec4 other = partial[lane + stride];
+        partial[lane] = vec4(max(partial[lane].xy, other.xy), min(partial[lane].z, other.z), max(partial[lane].w, other.w));
+    }
+    barrier();
+}
+if (lane == 0u) {
+    outputValue[gl_WorkGroupID.x] = partial[0];
+    if (lastLevel) {
+        maximumSpeed = partial[0].x;
+        maximumAcceleration = partial[0].y;
+        minimumDensity = partial[0].z;
+        maximumDensity = partial[0].w;
+        dt = min(0.00075, min(0.25 * h / (c + maximumSpeed + 1.0), 0.25 * sqrt(h / max(maximumAcceleration, 1e-12))));
+        if (isnan(dt) || isinf(dt) || dt < 1e-7)
+            atomicOr(flags, 64u);
+    }
+}
+```
+
+Mọi lane phải đến mọi barrier. Nhánh lastLevel chỉ ghi dt sau khi reduction thực sự còn một record; workgroup 0 của tầng đầu không đại diện cho toàn GPU.
+
+### 3. Lặp reduction tới một record
+
+Host luân phiên hai buffer tạm, giảm entries bằng ceil(entries/128) sau mỗi dispatch.
+
+{/* snippet include/gpu/passes.hpp#extrema-hierarchy */}
+
+```cpp title="include/gpu/passes.hpp — Lặp reduction tới một record"
+void extrema(Storage& s, int source, const Parameters& p) {
+
+    s.banks[source].velocity.bind(0);
+    s.acceleration.bind(1);
+    s.banks[source].field.bind(2);
+    s.meta.bind(7);
+    std::uint32_t entries = s.model.count;
+    int output = 0;
+    bool first = true;
+    do {
+        s.reduction[1 - output].bind(3);
+        s.reduction[output].bind(4);
+        reduce_.use();
+        reduce_.setUnsigned("entries", entries);
+        reduce_.setInt("firstLevel", static_cast<int>(first));
+        reduce_.setInt("lastLevel", static_cast<int>(entries <= 128));
+        reduce_.setFloat("h", s.model.h);
+        reduce_.setFloat("c", p.soundSpeed);
+        dispatch(entries);
+        entries = (entries + 127) / 128;
+        output = 1 - output;
+        first = false;
+    } while (entries > 1);
+
+}
+```
+
+Không đọc kết quả về CPU giữa các tầng. Barriers bảo đảm dispatch sau đọc dữ liệu dispatch trước. Giữ rhoMin/rhoMax để phân tích mô hình, không dùng chúng để đổi màu rồi bỏ qua lỗi.
+
+### 4. Giới hạn tham số trước khi gửi công việc
+
+validate từ chối NaN/Inf và tham số ngoài miền đã thiết kế. UI slider không thay thế kiểm tra này vì tham số còn có thể đến từ code hoặc fixture.
+
+{/* snippet include/fluid/model.hpp#parameter-bounds */}
+
+```cpp title="include/fluid/model.hpp — Giới hạn tham số trước khi gửi công việc"
+inline void validate(const Parameters& p) {
+    if (!std::isfinite(p.soundSpeed) || p.soundSpeed < 10 || p.soundSpeed > 40 || !std::isfinite(p.alpha) || p.alpha < 0 || p.alpha > 1 || !std::isfinite(p.gravity) || p.gravity < 0 || p.gravity > 20) {
+        throw std::invalid_argument("c=10..40 m/s, alpha=0..1, gravity=0..20 m/s2");
+    }
+}
+```
+
+c nằm trong 10–40 m/s, alpha trong 0–1 và gravity trong 0–20 m/s². Tăng c có thể giảm compression nhưng cũng làm dt nhỏ hơn; không diễn giải đó là một tối ưu hiệu năng miễn phí.
+
+## Ghép các phần lại
+
+Gói ZIP trên trang tổng quan đã chứa đầy đủ file của mỗi checkpoint. Nếu muốn tự viết, bắt đầu từ bản cuối bài trước, thêm những phần vừa giải thích rồi đối chiếu bản dưới đây; không ghép các mảnh code thành một file main tùy ý.
+
+```powershell title="Terminal — checkpoint 07"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_51_checkpoint_7 --parallel 1
+.\build\Debug\project_51_checkpoint_7.exe
+```
+
+Trên Linux, dùng executable trong build thay cho thư mục Debug. Driver cần hỗ trợ OpenGL 4.3 compute; lỗi thiếu khả năng phải được báo rõ, không chuyển sang một animation giả.
+
+## Thử làm sai để hiểu đúng
+
+1. Giữ cùng cảnh ban đầu, reset rồi so c=10 với c=40. Dự đoán acoustic bound trước khi tiến một bước: c lớn hơn thường buộc dt nhỏ hơn. Đọc Model time và dt, đừng dùng tốc độ animation hoặc FPS để suy ra timestep.
+2. Ở fixture nhỏ, đặt vận tốc lớn nhất vào ID cuối của N=257 rồi tạm chỉ thu gọn workgroup đầu. dt GPU sẽ lệch đáp án CPU vì record cực trị bị bỏ sót. Khôi phục reduction nhiều tầng và c=18; không sửa lỗi bằng cách ép dt lên mức lớn hơn.
+
+## Tự kiểm tra kết quả
+
+Fixture có vmax lớn phải kích hoạt acoustic bound; fixture có acceleration lớn phải kích hoạt force bound. GPU dt phải khớp CPU trong tolerance tuyệt đối 1e−7 s. NaN/Inf hoặc dt dưới floor phải dừng, không tiếp tục submit.
+
+## Bài tập mở rộng
+
+Thêm một ca tail N = 257, đặt vận tốc lớn nhất ở ID cuối. Nếu reduction chỉ lấy workgroup đầu, test này phải bắt được lỗi.
+
+Tiếp theo: [Dựng độ sâu và độ dày từ các hạt nước](/projects/sph-water-gpu/08-depth-va-thickness).

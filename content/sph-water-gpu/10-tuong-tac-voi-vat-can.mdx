@@ -1,0 +1,164 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kéo vật cản để tạo dòng chảy 3D
+
+## Vấn đề cần giải quyết
+
+Một bể nước chỉ chạy tự động chưa đủ để học tương tác. Ta thêm một quả cầu có thể kéo qua nước. Đồng thời cần tránh lỗi dễ gây khó chịu: người dùng muốn khuấy nước nhưng lại xoay cả camera, hoặc muốn nhìn quanh nhưng vô tình chèn vật rắn vào khối chất lỏng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hai công cụ tách biệt: Orbit chỉ đổi camera; Move obstacle chỉ đổi target của quả cầu. Solver đưa quả cầu tới target với vận tốc không quá 1 m/s. Boundary samples nằm ngoài thành và trong quả cầu cung cấp support/lực; va chạm giải tích là lớp chống xuyên sau integration. Đây là kinematic body, không phải rigid body nhận phản lực hai chiều.
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-10" />
+
+Canvas là mô hình CPU phục vụ học tập, không phải ứng dụng GPU của bài. Thời gian mô phỏng được ghi riêng và có thể chạy chậm hơn thời gian thực. Chuyển chế độ hiển thị không thay đổi phương trình SPH.
+
+## Viết code từng bước
+
+### 1. Cấp support ở vùng rắn
+
+Các tâm lattice ngoài bể hoặc trong quả cầu được xem là volume samples của biên. Chỉ xét chúng khi hạt đủ gần thành/vật cản và trong support 2h.
+
+{/* snippet include/fluid/reference.hpp#wall-samples */}
+
+```cpp title="include/fluid/reference.hpp — Cấp support ở vùng rắn"
+inline std::vector<BoundarySample> boundarySamples(const Model& model, Vec3 point, const Body& body) {
+    const double radius = 2 * model.h;
+    bool nearWall = false;
+    for (int a = 0; a < 3; ++a)
+        if (point[a] < radius || point[a] > tank[a] - radius)
+            nearWall = true;
+    const bool nearBody = body.enabled && length(subtract(point, body.position)) < body.radius + radius;
+    if (!nearWall && !nearBody)
+        return {};
+    const int nx = 3 * model.side;
+    const int ny = 3 * model.side / 2;
+    const int nz = 2 * model.side;
+    const int cx = static_cast<int>(std::floor(point.x / model.spacing));
+    const int cy = static_cast<int>(std::floor(point.y / model.spacing));
+    const int cz = static_cast<int>(std::floor(point.z / model.spacing));
+    std::vector<BoundarySample> samples;
+    for (int z = cz - 3; z <= cz + 3; ++z) {
+        for (int y = cy - 3; y <= cy + 3; ++y) {
+            for (int x = cx - 3; x <= cx + 3; ++x) {
+                const Vec3 sample{(x + 0.5) * model.spacing, (y + 0.5) * model.spacing, (z + 0.5) * model.spacing};
+                const bool outside = x < 0 || x >= nx || y < 0 || y >= ny || z < 0 || z >= nz;
+                const bool insideBody = body.enabled && length(subtract(sample, body.position)) < body.radius;
+                if (!outside && !insideBody)
+                    continue;
+                if (length(subtract(point, sample)) >= radius)
+                    continue;
+                Vec3 velocity{};
+                if (insideBody && !outside)
+                    velocity = body.velocity;
+                samples.push_back({sample, velocity});
+            }
+        }
+    }
+    return samples;
+}
+```
+
+Ở thành tĩnh, boundary velocity bằng 0; trong quả cầu, nó bằng velocity của quả cầu. Góc bể không được cộng trùng cùng một sample. Mặt thoáng không có ghost samples vì bên ngoài là không khí, không phải tường.
+
+### 2. Dùng cùng điều kiện biên trên GPU
+
+GPU tạo cùng lattice biên và thêm pressure/viscosity contribution. Không tải cả mảng boundary từ CPU mỗi frame.
+
+{/* snippet shaders/sph/force.comp#ghost-force */}
+
+```glsl title="shaders/sph/force.comp — Dùng cùng điều kiện biên trên GPU"
+if (nearBoundary(point)) {
+    ivec3 centre = ivec3(floor(point / spacing));
+    for (int z = -3; z <= 3; z++)
+        for (int y = -3; y <= 3; y++)
+            for (int x = -3; x <= 3; x++) {
+                ivec3 node = centre + ivec3(x, y, z);
+                vec3 boundaryVelocity;
+                if (!boundaryNode(node, boundaryVelocity))
+                    continue;
+                vec3 displacement = point - (vec3(node) + .5) * spacing;
+                if (dot(displacement, displacement) >= 4.0 * smoothingLength * smoothingLength)
+                    continue;
+                float rhoi = field[i].x;
+                float pressureTerm = field[i].y / (rhoi * rhoi) + field[i].y / (rho0 * rho0);
+                float viscosity = artificialViscosity(displacement, velocity[i].xyz - boundaryVelocity, rhoi, rho0);
+                result -= particleMass * (pressureTerm + viscosity) * gradient3(displacement);
+            }
+}
+```
+
+Pressure của ghost dùng pressure của hạt đang xét, density biên dùng rho0. Đây là một lựa chọn boundary đơn giản, chưa chứng minh hydrostatic convergence. Các test cần đo density/leakage, không chỉ nhìn thấy hạt bật khỏi quả cầu.
+
+### 3. Đổi con trỏ thành target world
+
+Ray từ camera cắt mặt phẳng y = 0,22 m. Đó là mặt phẳng kéo có chủ ý, không phải phép chiếu chuột vào z = 0. Khoảng cách này cũng chừa đủ chỗ cho bán kính tiếp xúc ở preset ít hạt.
+
+{/* snippet include/app/camera.hpp#ground-pick */}
+
+```cpp title="include/app/camera.hpp — Đổi con trỏ thành target world"
+Vec3 groundPick(double x, double y, int width, int height) const {
+    const auto ray = add(forward, add(scale(right, (x - width / 2.0) / focal), scale(up, (height / 2.0 - y) / focal)));
+    if (std::abs(ray.y) < 1e-9)
+        throw std::runtime_error("Ray is parallel to the drag plane");
+    const double t = (0.22 - eye.y) / ray.y;
+    if (t <= 0)
+        throw std::runtime_error("Drag plane is behind the camera");
+    return add(eye, scale(ray, t));
+}
+```
+
+Camera gần song song mặt phẳng có thể không tạo điểm hợp lệ; phải bỏ thao tác thay vì tạo target rất lớn. Giới hạn target giữ quả cầu đủ xa sáu thành.
+
+### 4. Giữ công cụ cố định suốt lượt kéo
+
+Khi pointer down, lưu tool đang chọn và capture pointer. Motion sau đó chỉ đi theo một nhánh: đổi target hoặc đổi yaw/pitch.
+
+{/* snippet include/app/input.hpp#pointer-tools */}
+
+```cpp title="include/app/input.hpp — Giữ công cụ cố định suốt lượt kéo"
+inline void pointerMotion(Pointer& pointer, Camera& camera, Engine& engine, float x, float y, int width, int height) {
+    if (!pointer.active)
+        return;
+    if (pointer.stir) {
+        camera.update(height);
+        if (engine.model().preset == Preset::Obstacle)
+            engine.target(camera.groundPick(x, y, width, height));
+    } else {
+        camera.yaw -= (x - pointer.x) * .006;
+        camera.pitch += (y - pointer.y) * .006;
+    }
+    pointer.x = x;
+    pointer.y = y;
+}
+```
+
+Thả chuột ngoài cửa sổ, mất focus và cancel phải kết thúc lượt kéo. Arrow keys khi chọn Move obstacle điều khiển target; Ctrl+arrow vẫn điều khiển camera. Chỉ cảnh Obstacle bật tương tác này, không đột ngột nhét quả cầu vào nước của cảnh Dam.
+
+## Ghép các phần lại
+
+Gói ZIP trên trang tổng quan đã chứa đầy đủ file của mỗi checkpoint. Nếu muốn tự viết, bắt đầu từ bản cuối bài trước, thêm những phần vừa giải thích rồi đối chiếu bản dưới đây; không ghép các mảnh code thành một file main tùy ý.
+
+```powershell title="Terminal — checkpoint 10"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_51_checkpoint_10 --parallel 1
+.\build\Debug\project_51_checkpoint_10.exe
+```
+
+Trên Linux, dùng executable trong build thay cho thư mục Debug. Driver cần hỗ trợ OpenGL 4.3 compute; lỗi thiếu khả năng phải được báo rõ, không chuyển sang một animation giả.
+
+## Thử làm sai để hiểu đúng
+
+1. Chọn Nước qua vật cản. Khi paused, kéo bằng công cụ Khuấy nước và dự đoán target/position sẽ đổi thế nào. Target đổi ngay, nhưng cầu chỉ bắt đầu tiến tới đó khi chạy hoặc tiến một bước, không teleport qua nước. Chạy rồi kéo chậm để thấy dòng nước đi vòng quanh cầu.
+2. Chuyển sang Orbit và kéo cùng quãng đường chuột. Camera phải đổi nhưng target giữ nguyên; Ctrl+mũi tên cũng luôn điều khiển camera. Dùng Reset để đưa nước và cầu về đầu trước khi thử lại, tránh so hai thao tác trên hai state khác nhau.
+
+## Tự kiểm tra kết quả
+
+Camera drag không đổi target/position; paddle drag không đổi camera. Không overshoot target, vận tốc vật cản không quá 1 m/s. Tiếp xúc tại đúng tâm cầu vẫn có normal hữu hạn. Không hạt thoát bể sau contact.
+
+## Bài tập mở rộng
+
+Ghi lực phản ứng của nước lên quả cầu như một phép đo mở rộng, nhưng chưa dùng nó để đổi chuyển động quả cầu. Muốn rigid body hai chiều cần thêm mass/inertia và một bài toán coupling khác.
+
+Tiếp theo: [Giữ cửa sổ phản hồi khi GPU đang tính](/projects/sph-water-gpu/11-hang-doi-va-vong-doi).

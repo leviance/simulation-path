@@ -1,0 +1,109 @@
+#if LAB_CHECKPOINT >= 5
+#version 430 core
+layout(local_size_x = 128) in;
+#include "shared/meta.glsl"
+#include "shared/physics.glsl"
+
+layout(std430, binding = 0) readonly buffer Positions {
+    vec4 position[];
+};
+
+layout(std430, binding = 1) readonly buffer Velocities {
+    vec4 velocity[];
+};
+
+layout(std430, binding = 2) readonly buffer Fields {
+    vec2 field[];
+};
+
+layout(std430, binding = 3) writeonly buffer Accelerations {
+    vec4 acceleration[];
+};
+
+layout(std430, binding = 5) readonly buffer Offsets {
+    uint offsets[];
+};
+
+layout(std430, binding = 6) readonly buffer Indices {
+    uint indices[];
+};
+
+vec3 pairForce(uint i, uint j) {
+    vec3 displacement = position[i].xyz - position[j].xyz;
+    if (dot(displacement, displacement) >= 4.0 * smoothingLength * smoothingLength)
+        return vec3(0.0);
+    float rhoi = field[i].x, rhoj = field[j].x;
+    // [snippet pressure-force]
+    float pressureTerm = field[i].y / (rhoi * rhoi) + field[j].y / (rhoj * rhoj);
+    float viscosity = artificialViscosity(displacement, velocity[i].xyz - velocity[j].xyz, rhoi, rhoj);
+    return -particleMass * (pressureTerm + viscosity) * gradient3(displacement);
+    // [/snippet pressure-force]
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= particleCount || flags != 0u)
+        return;
+    vec3 point = position[i].xyz, result = vec3(0, -gravity, 0);
+    uint visited = 0u;
+    if (useGrid) {
+        ivec3 centre = ivec3(floor(point / (2.0 * smoothingLength)));
+        for (int z = -1; z <= 1; z++)
+            for (int y = -1; y <= 1; y++)
+                for (int x = -1; x <= 1; x++) {
+                    ivec3 cell = centre + ivec3(x, y, z);
+                    if (!validCell(cell))
+                        continue;
+                    uint id = cellId(cell);
+                    for (uint k = offsets[id]; k < offsets[id + 1u]; k++) {
+                        visited++;
+                        if (visited > 1024u) {
+                            atomicOr(flags, 4u);
+                            return;
+                        }
+                        uint j = indices[k];
+                        if (j != i)
+                            result += pairForce(i, j);
+                    }
+                }
+    } else {
+        if (particleCount > 512u) {
+            atomicOr(flags, 8u);
+            return;
+        }
+        for (uint j = 0u; j < particleCount; j++)
+            if (j != i)
+                result += pairForce(i, j);
+    }
+    // [snippet ghost-force]
+    if (nearBoundary(point)) {
+        ivec3 centre = ivec3(floor(point / spacing));
+        for (int z = -3; z <= 3; z++)
+            for (int y = -3; y <= 3; y++)
+                for (int x = -3; x <= 3; x++) {
+                    ivec3 node = centre + ivec3(x, y, z);
+                    vec3 boundaryVelocity;
+                    if (!boundaryNode(node, boundaryVelocity))
+                        continue;
+                    vec3 displacement = point - (vec3(node) + .5) * spacing;
+                    if (dot(displacement, displacement) >= 4.0 * smoothingLength * smoothingLength)
+                        continue;
+                    float rhoi = field[i].x;
+                    float pressureTerm = field[i].y / (rhoi * rhoi) + field[i].y / (rho0 * rho0);
+                    float viscosity = artificialViscosity(displacement, velocity[i].xyz - boundaryVelocity, rhoi, rho0);
+                    result -= particleMass * (pressureTerm + viscosity) * gradient3(displacement);
+                }
+    }
+    // [/snippet ghost-force]
+    if (!finite3(result)) {
+        atomicOr(flags, 32u);
+        return;
+    }
+    acceleration[i] = vec4(result, 0.0);
+}
+#else
+#version 430 core
+layout(local_size_x = 128) in;
+
+void main() {}
+#endif

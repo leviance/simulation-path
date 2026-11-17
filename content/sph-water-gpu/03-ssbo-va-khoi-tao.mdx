@@ -1,0 +1,142 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tạo dữ liệu hạt trực tiếp trên GPU
+
+## Vấn đề cần giải quyết
+
+Đáp án CPU giúp kiểm công thức, nhưng không phải nơi giữ hàng trăm nghìn hạt của sản phẩm cuối. Ta chuyển position và velocity sang SSBO, tạo dữ liệu bằng compute shader và để renderer đọc trực tiếp buffer đó. Không copy toàn bộ position về CPU sau mỗi frame.
+
+## Hiểu ý tưởng trước khi viết code
+
+CPU và GPU phải thống nhất kích thước từng record. Vec3 double của đáp án CPU không thể đưa nguyên byte vào một mảng vec3 GLSL rồi hy vọng chúng khớp nhau. Ở đường GPU, position và velocity là vec4 16 byte; density/pressure là vec2 8 byte. Ba bank giữ một state đang được hiển thị và hai bank làm việc cho batch mới.
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-3" />
+
+Canvas là mô hình CPU phục vụ học tập, không phải ứng dụng GPU của bài. Thời gian mô phỏng được ghi riêng và có thể chạy chậm hơn thời gian thực. Chuyển chế độ hiển thị không thay đổi phương trình SPH.
+
+## Viết code từng bước
+
+### 1. Khóa layout bằng static_assert
+
+Thêm các kiểu record GPU vào model.hpp. Float4 không thay thế Vec3 double trong đáp án CPU; hai kiểu phục vụ hai mục đích khác nhau.
+
+{/* snippet include/fluid/model.hpp#layout */}
+
+```cpp title="include/fluid/model.hpp — Khóa layout bằng static_assert"
+// The GPU buffer has vec4 records, not packed C++ Vec3 objects.
+struct alignas(16) Float4 {
+    float x = 0;
+    float y = 0;
+    float z = 0;
+    float w = 0;
+};
+
+struct alignas(8) DensityPressure {
+    float density = 0;
+    float pressure = 0;
+};
+
+static_assert(sizeof(Float4) == 16);
+static_assert(sizeof(DensityPressure) == 8);
+```
+
+alignas bảo đảm điểm bắt đầu record, static_assert bảo đảm stride. Nếu muốn thêm dữ liệu vào record, hãy cập nhật cả C++ lẫn GLSL và kiểm lại offsets, không chỉ đổi một bên.
+
+### 2. Giữ thống kê nhỏ tách khỏi mảng hạt
+
+GpuMeta là vùng giao tiếp 96 byte cho cờ lỗi, dt, extrema và vật cản. Nó không chứa toàn bộ position; CPU chỉ đọc vùng nhỏ này sau khi GPU hoàn tất.
+
+{/* snippet include/gpu/storage.hpp#meta-layout */}
+
+```cpp title="include/gpu/storage.hpp — Giữ thống kê nhỏ tách khỏi mảng hạt"
+struct alignas(16) GpuMeta {
+    std::uint32_t flags = 0;
+    std::uint32_t updated = 0;
+    std::uint32_t leakage = 0;
+    std::uint32_t invalid = 0;
+    float dt = 0;
+    float elapsed = 0;
+    float maximumSpeed = 0;
+    float maximumAcceleration = 0;
+    float minimumDensity = 0;
+    float maximumDensity = 0;
+    std::uint32_t ticks = 0;
+    std::uint32_t padding = 0;
+    Float4 body{0.92f, 0.22f, 0.55f, 0};
+    Float4 target = body;
+    Float4 bodyVelocity{};
+};
+
+static_assert(sizeof(GpuMeta) == 96);
+static_assert(offsetof(GpuMeta, body) == 48);
+```
+
+offsetof(body) phải bằng 48. Các uint tương ứng với uint GLSL, không dùng bool C++ trong std430. Khi mới khởi tạo, updated bằng 0 là đúng: chưa có bước integration nào.
+
+### 3. Cho mỗi invocation khởi tạo một hạt
+
+Giữ guard i >= particleCount ở đầu main trong shader. Phần dưới thay vòng tạo vị trí CPU; công thức index vẫn giống bài trước.
+
+{/* snippet shaders/sph/initialize.comp#initialize */}
+
+```glsl title="shaders/sph/initialize.comp — Cho mỗi invocation khởi tạo một hạt"
+int x = int(i) % nx;
+int y = (int(i) / nx) % ny;
+int z = int(i) / (nx * ny);
+position[i] = vec4(origin + (vec3(x, y, z) + .5) * spacing, 1.0);
+velocity[i] = vec4(0.0);
+field[i] = vec2(1000.0, 0.0);
+```
+
+Workgroup cuối có thể không đủ 128 hạt. Invocation dư phải return trước khi ghi buffer. Không dùng phép modulo count để ép chúng vào một hạt hợp lệ, vì như vậy sẽ có nhiều invocation ghi cùng record.
+
+### 4. Nối shader vào ứng dụng
+
+Host phải bind ba buffer đúng binding trước dispatch. Đây là caller của shader vừa viết; thiếu bước này thì một shader đúng vẫn có thể ghi vào nhầm tài nguyên.
+
+{/* snippet include/gpu/passes.hpp#initialize-pass */}
+
+```cpp title="include/gpu/passes.hpp — Nối shader vào ứng dụng"
+void initialize(Storage& s, int targetBank = 0) {
+
+    initialize_.use();
+    initialize_.setUnsigned("particleCount", s.model.count);
+    initialize_.setInt("latticeSide", s.model.side);
+    initialize_.setInt("preset", static_cast<int>(s.model.preset));
+    initialize_.setFloat("spacing", s.model.spacing);
+    s.banks[targetBank].position.bind(0);
+    s.banks[targetBank].velocity.bind(1);
+    s.banks[targetBank].field.bind(2);
+    dispatch(s.model.count);
+
+}
+```
+
+Sau dispatch có shader-storage barrier cho pass GPU đọc tiếp. Fence phục vụ một việc khác: xác định lúc CPU được đọc kết quả. Bài 11 sẽ giải thích kỹ cách ứng dụng chờ mà vẫn nhận input.
+
+## Ghép các phần lại
+
+Gói ZIP trên trang tổng quan đã chứa đầy đủ file của mỗi checkpoint. Nếu muốn tự viết, bắt đầu từ bản cuối bài trước, thêm những phần vừa giải thích rồi đối chiếu bản dưới đây; không ghép các mảnh code thành một file main tùy ý.
+
+```powershell title="Terminal — checkpoint 03"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_51_checkpoint_3 --parallel 1
+.\build\Debug\project_51_checkpoint_3.exe
+```
+
+Trên Linux, dùng executable trong build thay cho thư mục Debug. Driver cần hỗ trợ OpenGL 4.3 compute; lỗi thiếu khả năng phải được báo rõ, không chuyển sang một animation giả.
+
+## Thử làm sai để hiểu đúng
+
+1. Chạy checkpoint 03 với --side 4 rồi --side 8. Dự đoán số record: 64 và 512. N=64 không lấp đầy workgroup 128 lane, nên lane dư phải dừng ở guard. Hình vẫn giống lattice CPU, nhưng vị trí lần này được tạo bởi compute shader.
+2. Tạm cho công thức khởi tạo z trong shader trả về một giá trị cố định. Xoay camera để thấy khối bị dẹt rồi khôi phục công thức. Không bỏ tail guard hoặc ghi ngoài SSBO. Canvas dùng TypeScript/CPU riêng nên không thể phát hiện shader C++ của bạn bị sửa sai.
+
+## Tự kiểm tra kết quả
+
+Build project_51_checkpoint_3 và kiểm không có lỗi compile/link shader. Khởi tạo 512 record position/velocity/field; mỗi record có giá trị hữu hạn. Không gọi GetBufferSubData trên toàn bộ position trong vòng vẽ thông thường.
+
+## Bài tập mở rộng
+
+Khi đến phần verifier ở Bài 13, đọc fixture N=257 và giải thích vì sao cần kiểm tail. Không dùng truy cập ngoài SSBO làm thí nghiệm: kết quả không được bảo đảm và có thể ảnh hưởng driver.
+
+Tiếp theo: [Tính density và pressure mà chưa di chuyển hạt](/projects/sph-water-gpu/04-density-tren-gpu).

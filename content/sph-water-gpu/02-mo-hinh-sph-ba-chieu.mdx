@@ -1,0 +1,174 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đổi SPH từ diện tích sang thể tích
+
+## Vấn đề cần giải quyết
+
+Thêm tọa độ z vào Project 50 vẫn chưa tạo ra SPH 3D đúng. Kernel 2D có đơn vị nghịch đảo diện tích; dùng nó trong thể tích sẽ làm density đổi theo độ phân giải một cách vô nghĩa. Trước khi viết shader tính lực, ta cần một đáp án CPU nhỏ, dễ kiểm từng số.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trong 3D, rho có đơn vị kg/m³ và mass = rho0 × spacing³. Khối cạnh 0,55 m với rho0 = 1000 kg/m³ chứa 166,375 kg nước. Tăng side làm từng hạt nhẹ hơn, không tạo thêm nước. Với q = r/h, cubic spline có hệ số 1/(πh³), support 2h. Điều kiện chuẩn hóa là 4π∫ r²W(r,h)dr = 1. Hãy so sánh với phép tích phân theo diện tích ở Project 50: chính thừa số r² tạo ra khác biệt quan trọng.
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-2" />
+
+Với $q=r/h$, công thức được dùng trong cả C++ lẫn GLSL là:
+
+$$
+W(r,h)=\frac{1}{\pi h^3}\begin{cases}
+1-\frac32 q^2+\frac34 q^3 & 0\le q<1,\\
+\frac14(2-q)^3 & 1\le q<2,\\
+0 & q\ge2.
+\end{cases}
+$$
+
+Density được tính bằng $\rho_i=\sum_j m_jW(\lVert\mathbf x_i-\mathbf x_j\rVert,h)$. Đường cam trong đồ thị bên trên cho thấy vì sao chuẩn hóa theo **thể tích** không giống chuẩn hóa theo một đường thẳng hoặc một mặt phẳng.
+
+Canvas là mô hình CPU phục vụ học tập, không phải ứng dụng GPU của bài. Thời gian mô phỏng được ghi riêng và có thể chạy chậm hơn thời gian thực. Chuyển chế độ hiển thị không thay đổi phương trình SPH.
+
+## Viết code từng bước
+
+### 1. Chốt đơn vị và độ phân giải
+
+makeModel tính count, spacing, h và mass cùng lúc. Giữ chúng trong một Model thay vì để mỗi shader tự suy đoán. side phải là bội của bốn để các preset có cùng số hạt.
+
+{/* snippet include/fluid/model.hpp#model */}
+
+```cpp title="include/fluid/model.hpp — Chốt đơn vị và độ phân giải"
+inline Model makeModel(int side, Preset preset = Preset::Dam, std::uint32_t partialCount = 0) {
+    if (side < 4 || side > 100 || side % 4 != 0)
+        throw std::invalid_argument("Side must be a multiple of four in [4,100]");
+    Model model;
+    model.side = side;
+    model.count = static_cast<std::uint32_t>(side * side * side);
+    if (partialCount > model.count)
+        throw std::invalid_argument("Fixture exceeds its lattice");
+    if (partialCount > 0)
+        model.count = partialCount;
+    model.spacing = static_cast<float>(blockWidth / side);
+    model.h = 1.3f * model.spacing;
+    model.mass = static_cast<float>(referenceDensity) * model.spacing * model.spacing * model.spacing;
+    model.preset = preset;
+    std::size_t cellCount = 1;
+    for (int axis = 0; axis < 3; ++axis) {
+        model.cells[axis] = static_cast<int>(std::ceil(tank[axis] / (2 * model.h)));
+        cellCount = checkedProduct(cellCount, static_cast<std::size_t>(model.cells[axis]));
+    }
+    if (cellCount > 2000000)
+        throw std::length_error("Grid budget exceeded");
+    model.cellCount = static_cast<std::uint32_t>(cellCount);
+    return model;
+}
+```
+
+side = 48 cho 110.592 hạt. Đây là mốc của bản cuối, không phải workload CPU của bài này. Bản đáp án all-pairs chỉ nhận hệ nhỏ; bước học dùng side = 8.
+
+### 2. Viết kernel và gradient bằng double
+
+Tạo kernel.hpp rồi viết cả giá trị kernel lẫn gradient. Gradient trả vector theo displacement; không chỉ trả đạo hàm theo khoảng cách.
+
+{/* snippet include/fluid/kernel.hpp#kernel */}
+
+```cpp title="include/fluid/kernel.hpp — Viết kernel và gradient bằng double"
+inline double kernel3(double distance, double h) {
+    const double q = distance / h;
+    if (q >= 2)
+        return 0;
+    const double normalization = 1 / (std::numbers::pi * h * h * h);
+    if (q < 1)
+        return normalization * (1 - 1.5 * q * q + 0.75 * q * q * q);
+    return normalization * 0.25 * std::pow(2 - q, 3);
+}
+
+inline Vec3 kernelGradient(Vec3 displacement, double h) {
+    const double distance = length(displacement);
+    if (distance < 1e-12 || distance >= 2 * h)
+        return {};
+    const double q = distance / h;
+    double derivative = -0.75 * (2 - q) * (2 - q);
+    if (q < 1)
+        derivative = -3 * q + 2.25 * q * q;
+    const double factor = derivative / (std::numbers::pi * std::pow(h, 4) * distance);
+    return scale(displacement, factor);
+}
+```
+
+Đạo hàm theo q cần thêm hệ số 1/h. Sau đó nhân displacement/r để đổi từ độ lớn thành hướng. r = 0 phải xử lý riêng, nếu không phép chia sẽ tạo NaN ngay tại self term.
+
+### 3. Giữ một cách tính chậm nhưng dễ kiểm
+
+referenceFields cộng density trước, sau đó mới tính acceleration của toàn bộ hạt. Đoạn dưới là vòng force CPU dùng làm đáp án; các hàm kernel và viscosity đã nằm trong header riêng.
+
+{/* snippet include/fluid/reference.hpp#reference-force */}
+
+```cpp title="include/fluid/reference.hpp — Giữ một cách tính chậm nhưng dễ kiểm"
+for (std::uint32_t i = 0; i < model.count; ++i) {
+    Vec3 acceleration{0, -parameters.gravity, 0};
+    for (std::uint32_t j = 0; j < model.count; ++j) {
+        if (i == j)
+            continue;
+        const Vec3 displacement = subtract(state.position[i], state.position[j]);
+        if (length(displacement) >= 2 * model.h)
+            continue;
+        const double viscosity = artificialViscosity(displacement, subtract(state.velocity[i], state.velocity[j]), state.density[i], state.density[j], model, parameters);
+        const double pressureTerm = state.pressure[i] / (state.density[i] * state.density[i]) + state.pressure[j] / (state.density[j] * state.density[j]);
+        acceleration = add(acceleration, scale(kernelGradient(displacement, model.h), -model.mass * (pressureTerm + viscosity)));
+    }
+    for (const auto& sample : boundarySamples(model, state.position[i], body)) {
+        const Vec3 displacement = subtract(state.position[i], sample.position);
+        const double viscosity = artificialViscosity(displacement, subtract(state.velocity[i], sample.velocity), state.density[i], referenceDensity, model, parameters);
+        const double pressureTerm = state.pressure[i] / (state.density[i] * state.density[i]) + state.pressure[i] / (referenceDensity * referenceDensity);
+        acceleration = add(acceleration, scale(kernelGradient(displacement, model.h), -model.mass * (pressureTerm + viscosity)));
+    }
+    state.acceleration[i] = acceleration;
+}
+```
+
+Tất cả lực đều đọc cùng một state cũ và cùng một mảng density đã tính xong. Không tích phân hạt i ngay trong vòng này: làm vậy khiến hạt sau đọc state khác hạt trước. Boundary samples bù support ở thành; mặt thoáng vẫn có density thấp và phải báo thật.
+
+### 4. Phân biệt viscosity với giảm vận tốc tùy ý
+
+Monaghan artificial viscosity chỉ tác động khi hai hạt tiến lại gần nhau. Nó giúp hạn chế dao động và ổn định dòng chảy, không phải một hệ số nhân velocity sau mỗi frame.
+
+{/* snippet include/fluid/reference.hpp#viscosity */}
+
+```cpp title="include/fluid/reference.hpp — Phân biệt viscosity với giảm vận tốc tùy ý"
+inline double artificialViscosity(Vec3 displacement, Vec3 relativeVelocity, double rhoi, double rhoj, const Model& m, const Parameters& p) {
+    const double approach = dot(relativeVelocity, displacement);
+    if (approach >= 0)
+        return 0;
+    const double mu = m.h * approach / (dot(displacement, displacement) + 0.01 * m.h * m.h);
+    return -p.alpha * p.soundSpeed * mu / (0.5 * (rhoi + rhoj));
+}
+```
+
+alpha là tham số không thứ nguyên trong mô hình giảng dạy này; không gọi nó là độ nhớt vật lý đo bằng Pa·s. Ta không thêm global damping để che sai số lực hoặc timestep.
+
+## Ghép các phần lại
+
+Gói ZIP trên trang tổng quan đã chứa đầy đủ file của mỗi checkpoint. Nếu muốn tự viết, bắt đầu từ bản cuối bài trước, thêm những phần vừa giải thích rồi đối chiếu bản dưới đây; không ghép các mảnh code thành một file main tùy ý.
+
+```powershell title="Terminal — checkpoint 02"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_51_checkpoint_2 --parallel 1
+.\build\Debug\project_51_checkpoint_2.exe
+```
+
+Trên Linux, dùng executable trong build thay cho thư mục Debug. Driver cần hỗ trợ OpenGL 4.3 compute; lỗi thiếu khả năng phải được báo rõ, không chuyển sang một animation giả.
+
+## Thử làm sai để hiểu đúng
+
+1. Trên Canvas, chọn 512 rồi 1.728 hạt và xem Density. Dự đoán tổng mass trước khi đổi N: nó vẫn phải bằng 166,375 kg vì kích thước khối không đổi. Hạt phía trong và hạt ở mặt thoáng không nhất thiết có cùng density; gán thẳng rho0 cho mọi hạt sẽ che mất sự thiếu support.
+2. Trong bản nháp CPU, đổi hệ số chuẩn hóa từ h³ sang h² rồi chạy CTest. Tích phân cầu không còn bằng 1 và đơn vị của kernel cũng sai. Khôi phục h³ và chạy lại test. Kéo q trên đồ thị chỉ giúp đọc hàm kernel, không được tiến thời gian của bể.
+
+## Tự kiểm tra kết quả
+
+Chạy CTest của bản cuối để kiểm chuẩn hóa 3D và gradient bằng finite difference; đọc các ca trong tests/tests.cpp. Công thức tích phân phải dùng 4πr²dr. Kiểm riêng r = 0, r = h và r = 2h. Không đưa hệ 110.592 hạt vào vòng all-pairs CPU.
+
+## Bài tập mở rộng
+
+Tạm thay normalization bằng h² và ghi lại đơn vị cùng kết quả tích phân. Khôi phục h³ trước khi tiếp tục. Giải thích tại sao nhân mass với spacing² cũng sai ngay cả khi hình chụp ban đầu còn giống một khối nước.
+
+Tiếp theo: [Tạo dữ liệu hạt trực tiếp trên GPU](/projects/sph-water-gpu/03-ssbo-va-khoi-tao).
+
+Tham khảo công thức chuẩn hóa: [PySPH — CubicSpline kernel](https://pysph.readthedocs.io/en/main/reference/kernels.html).

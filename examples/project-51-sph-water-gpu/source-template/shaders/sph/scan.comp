@@ -1,0 +1,47 @@
+#if LAB_CHECKPOINT >= 6
+#version 430 core
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer Input {
+    uint inputValue[];
+};
+
+layout(std430, binding = 1) writeonly buffer Output {
+    uint outputValue[];
+};
+
+layout(std430, binding = 2) writeonly buffer Sums {
+    uint blockSum[];
+};
+
+uniform uint entries;
+shared uint data[256];
+
+void main() {
+    // [snippet scan]
+    uint local = gl_LocalInvocationID.x, index = gl_GlobalInvocationID.x;
+    uint original = 0u;
+    if (index < entries)
+        original = inputValue[index];
+    data[local] = original;
+    barrier();
+    for (uint offset = 1u; offset < 256u; offset *= 2u) {
+        uint addend = 0u;
+        if (local >= offset)
+            addend = data[local - offset];
+        barrier();
+        data[local] += addend;
+        barrier();
+    }
+    if (index < entries)
+        outputValue[index] = data[local] - original;
+    if (local == 255u)
+        blockSum[gl_WorkGroupID.x] = data[local];
+    // [/snippet scan]
+}
+#else
+#version 430 core
+layout(local_size_x = 128) in;
+
+void main() {}
+#endif

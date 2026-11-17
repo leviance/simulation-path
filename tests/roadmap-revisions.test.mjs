@@ -108,7 +108,7 @@ test("published replacements keep their lessons visible with or without an accep
   assert.equal(water.status, "published");
   assert.equal(water.slug, "sph-water-gpu");
   assert.equal(water.title, roadmapSeed[50].title);
-  assert.equal(water.lessonCount, 12);
+  assert.equal(water.lessonCount, 13);
   assert.equal(water.download, "/downloads/project-51-sph-water-gpu.zip");
   assert.equal(water.acceptanceNote, undefined);
   assert.ok(!("previous" in water));

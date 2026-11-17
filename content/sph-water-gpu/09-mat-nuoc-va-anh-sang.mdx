@@ -1,0 +1,187 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Biến ảnh độ sâu thành mặt nước có chiều sâu
+
+## Vấn đề cần giải quyết
+
+Ảnh depth thô vẫn để lộ từng mặt cầu và các gợn theo lattice. Bài này nối những đóng góp ấy thành một mặt nước đọc được: có normal, phản xạ thay đổi theo góc nhìn, hấp thụ theo độ dày và khúc xạ gần đúng. Ta cải thiện cách nhìn dữ liệu, không sửa kết quả vật lý để làm đẹp.
+
+## Hiểu ý tưởng trước khi viết code
+
+Lọc Gaussian thông thường sẽ kéo cả nền trống vào mặt nước. Bilateral filter giảm trọng số khi depth chênh quá lớn, nhờ vậy giữ đường biên tốt hơn. Từ depth đã lọc, dựng lại vị trí world của các pixel kề nhau rồi lấy tích có hướng để tìm normal. Thickness quyết định mức hấp thụ; Fresnel tăng phản xạ khi nhìn sát bề mặt.
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-9" />
+
+Canvas là mô hình CPU phục vụ học tập, không phải ứng dụng GPU của bài. Thời gian mô phỏng được ghi riêng và có thể chạy chậm hơn thời gian thực. Chuyển chế độ hiển thị không thay đổi phương trình SPH.
+
+## Viết code từng bước
+
+### 1. Lọc depth nhưng giữ cạnh
+
+Chạy một pass ngang rồi một pass dọc qua hai texture khác nhau. Bỏ mẫu depth bằng 0 vì đó là nền, không phải một mặt nước ở camera.
+
+{/* snippet shaders/water/filter.frag#bilateral */}
+
+```glsl title="shaders/water/filter.frag — Lọc depth nhưng giữ cạnh"
+float sum = 0.0, weights = 0.0;
+for (int d = -6; d <= 6; d++) {
+    ivec2 q = clamp(pixel + ivec2(direction * float(d)), ivec2(0), size - 1);
+    float sampleDepth = texelFetch(source, q, 0).r;
+    if (sampleDepth == 0.0)
+        continue;
+    float difference = (sampleDepth - centre) / sigma;
+    float weight = exp(-float(d * d) / 18.0 - .5 * difference * difference);
+    sum += weight * sampleDepth;
+    weights += weight;
+}
+result = sum / weights;
+```
+
+sigma = 1,2 spacing thuộc đường vẽ. Thay sigma không được thay dt hay vị trí hạt. Lọc quá mạnh làm mặt nước giống sáp; lọc quá yếu khiến người xem chỉ thấy các hạt ghép lại.
+
+### 2. Dựng normal từ vị trí world
+
+dx và dy là sai phân vị trí world tái dựng từ ray × depth. Khi một phía qua đường biên hoặc có bước nhảy depth lớn, chọn phía còn lại.
+
+{/* snippet shaders/water/composite.frag#water-normal */}
+
+```glsl title="shaders/water/composite.frag — Dựng normal từ vị trí world"
+vec3 normal = normalize(cross(dx, dy));
+vec3 view = normalize(eye - p);
+if (dot(normal, view) < 0.0)
+    normal = -normal;
+```
+
+cross(dx,dy) cho hướng pháp tuyến nhưng có thể quay lưng về camera. Kiểm dot với view để thống nhất hướng. Không lấy gradient trực tiếp từ giá trị depth rồi dùng như một vector world.
+
+### 3. Kết hợp độ dày và góc nhìn
+
+Fresnel, transmission và refraction cùng dùng dữ liệu của bề mặt. Đoạn dưới tạo màu nước từ nền nhìn xuyên qua và ánh sáng phản xạ.
+
+{/* snippet shaders/water/composite.frag#water-optics */}
+
+```glsl title="shaders/water/composite.frag — Kết hợp độ dày và góc nhìn"
+float fresnel = .0204 + .9796 * pow(1.0 - cosine, 5.0);
+vec3 reflected = reflect(-view, normal);
+vec3 sky = mix(vec3(.30, .49, .65), vec3(.92, .98, 1), clamp(.5 + .5 * reflected.y, 0.0, 1.0));
+vec2 bend = vec2(dot(normal, right), dot(normal, up)) * path * focal * .32 / z;
+vec3 behind = backgroundAt(clamp(pixel - bend, vec2(0), viewport - 1.0));
+vec3 transmission = exp(-vec3(4.5, 1.45, .55) * path);
+vec3 scatter = vec3(.035, .58, .78);
+float diffuse = .45 + .55 * max(dot(normal, normalize(vec3(-.36, .85, .38))), 0.0);
+color = mix(behind * transmission + scatter * (1.0 - transmission) * diffuse, sky, fresnel);
+vec3 halfVector = normalize(view + normalize(vec3(-.36, .85, .38)));
+color += vec3(.35) * pow(max(dot(normal, halfVector), 0.0), 100.0);
+// Subpixel spray has partial coverage. This changes display only, not N or SPH.
+float coverage = 1.0 - exp(-65.0 * texture(thicknessMap, uv).r);
+color = mix(backgroundAt(pixel), color, coverage);
+```
+
+Đây là screen-space approximation: không có ray tracing nhiều lần trong thể tích, không có caustics chính xác và không giải quang học vật lý đầy đủ. coverage của tia rất mảnh giúp spray không biến thành hàng loạt viền trắng; mọi hạt vẫn được gửi tới renderer.
+
+### 4. Đặt composite sau các pass ảnh
+
+Đọc lại thứ tự trong WaterRenderer. Composite chỉ chạy sau khi depth, thickness và filtering đã hoàn tất trên GPU.
+
+{/* snippet include/render/water.hpp#surface-passes */}
+
+```cpp title="include/render/water.hpp — Đặt composite sau các pass ảnh"
+void draw(Engine& engine, Camera camera, int outputWidth, int outputHeight, View view) {
+    resize(outputWidth, outputHeight);
+    camera.update(height_);
+    gl_.BindVertexArray(vao_);
+    gl_.Viewport(0, 0, width_, height_);
+    auto& s = engine.storage();
+    const int bank = engine.bank();
+    s.banks[bank].position.bind(0);
+    s.banks[bank].velocity.bind(1);
+    s.banks[bank].field.bind(2);
+    depth_->bind();
+    gl_.Disable(GL_BLEND);
+    gl_.Enable(GL_DEPTH_TEST);
+    gl_.DepthMask(GL_TRUE);
+    const float zero[4]{};
+    gl_.ClearBufferfv(GL_COLOR, 0, zero);
+    gl_.Clear(GL_DEPTH_BUFFER_BIT);
+    setup(sphere_, camera, engine.meta());
+    sphere_.setFloat("radius", 1.15f * s.model.spacing);
+    sphere_.setInt("pass", 0);
+    gl_.DrawArraysInstanced(GL_TRIANGLES, 0, 6, static_cast<GLsizei>(s.model.count));
+    thickness_->bind();
+    gl_.ClearBufferfv(GL_COLOR, 0, zero);
+    gl_.Disable(GL_DEPTH_TEST);
+    gl_.Enable(GL_BLEND);
+    gl_.BlendEquation(GL_FUNC_ADD);
+    gl_.BlendFunc(GL_ONE, GL_ONE);
+    sphere_.setInt("pass", 1);
+    constexpr double sphereVolume = 4.0 * std::numbers::pi / 3;
+    sphere_.setFloat("volumeRatio", static_cast<float>(1 / (sphereVolume * 1.15 * 1.15 * 1.15)));
+    gl_.DrawArraysInstanced(GL_TRIANGLES, 0, 6, static_cast<GLsizei>(s.model.count));
+    gl_.Disable(GL_BLEND);
+    filter_.use();
+    filter_.setInt("source", 0);
+    filter_.setFloat("sigma", 1.2f * s.model.spacing);
+    depth_->sample(0);
+    scratch_->bind();
+    filter_.setVec2("direction", 1, 0);
+    gl_.DrawArrays(GL_TRIANGLES, 0, 3);
+    scratch_->sample(0);
+    smooth_->bind();
+    filter_.setVec2("direction", 0, 1);
+    gl_.DrawArrays(GL_TRIANGLES, 0, 3);
+    gl_.BindFramebuffer(GL_FRAMEBUFFER, 0);
+    gl_.Viewport(0, 0, outputWidth, outputHeight);
+    // The output camera uses output pixels while texture coordinates use the scaled target.
+    camera.update(outputHeight);
+    setup(composite_, camera, engine.meta());
+    camera.uniforms(composite_, outputWidth, outputHeight);
+    smooth_->sample(0);
+    thickness_->sample(1);
+    composite_.setInt("surfaceDepth", 0);
+    composite_.setInt("thicknessMap", 1);
+    composite_.setInt("fluidVisible", static_cast<int>(view == View::Water));
+    gl_.DrawArrays(GL_TRIANGLES, 0, 3);
+    if (view != View::Water) {
+        gl_.Clear(GL_DEPTH_BUFFER_BIT);
+        gl_.Enable(GL_DEPTH_TEST);
+        setup(sphere_, camera, engine.meta());
+        camera.uniforms(sphere_, outputWidth, outputHeight);
+        sphere_.setFloat("radius", .42f * s.model.spacing);
+        sphere_.setInt("pass", static_cast<int>(view) + 1);
+        gl_.DrawArraysInstanced(GL_TRIANGLES, 0, 6, static_cast<GLsizei>(s.model.count));
+    }
+    gl_.Disable(GL_DEPTH_TEST);
+    gl_.check("Render water surface");
+}
+```
+
+Chế độ Particles/Density/Speed bỏ bề mặt liền để soi dữ liệu. Nếu showcase đẹp nhưng debug cho thấy hạt bay vô hạn hoặc density bất thường, lỗi solver vẫn phải sửa. Renderer không phải một phép kiểm correctness.
+
+## Ghép các phần lại
+
+Gói ZIP trên trang tổng quan đã chứa đầy đủ file của mỗi checkpoint. Nếu muốn tự viết, bắt đầu từ bản cuối bài trước, thêm những phần vừa giải thích rồi đối chiếu bản dưới đây; không ghép các mảnh code thành một file main tùy ý.
+
+```powershell title="Terminal — checkpoint 09"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_51_checkpoint_9 --parallel 1
+.\build\Debug\project_51_checkpoint_9.exe
+```
+
+Trên Linux, dùng executable trong build thay cho thư mục Debug. Driver cần hỗ trợ OpenGL 4.3 compute; lỗi thiếu khả năng phải được báo rõ, không chuyển sang một animation giả.
+
+## Thử làm sai để hiểu đúng
+
+1. Dừng ở cùng một state, nhìn từ trên xuống rồi nhìn xiên. Dự đoán vùng phản xạ mạnh: Fresnel làm phản xạ rõ hơn ở góc xiên. Chuyển sang Hạt và thử light/dark theme để kiểm chiều sâu vẫn đọc được ở cả hai giao diện.
+2. Tạm bỏ trọng số chênh lệch depth trong bilateral filter, chỉ giữ khoảng cách pixel. Cạnh khối và nền dễ bị trộn, tạo quầng hoặc normal sai. Khôi phục trọng số bảo toàn cạnh; không dùng ảnh depth đã lọc làm vị trí cho solver.
+
+## Tự kiểm tra kết quả
+
+Camera/resize không đổi model time hoặc positions. Ảnh không có NaN/Inf tại đường biên, không lấy nền depth = 0 để dựng một mặt phẳng giả. Mặt nước phải đọc được ở cảnh động, không chỉ ở khối lattice đứng yên.
+
+## Bài tập mở rộng
+
+Thêm chế độ xem raw depth và thickness để so sánh trước/sau filtering. Không dùng ảnh depth đã lọc cho neighbor search: hãy giải thích tại sao hai khái niệm smoothing này không thay thế nhau.
+
+Tiếp theo: [Kéo vật cản để tạo dòng chảy 3D](/projects/sph-water-gpu/10-tuong-tac-voi-vat-can).
+
+Tham khảo hướng tiếp cận: [van der Laan, Green và Sainz — Screen Space Fluid Rendering](https://wstahw.win.tue.nl/edu/2IV06/andrei/particle_rendering/provided/p91-van_der_laan.pdf). Bài này dùng bilateral filtering cơ bản, không triển khai đầy đủ curvature-flow của bài báo.

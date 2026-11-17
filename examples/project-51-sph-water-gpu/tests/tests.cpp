@@ -1,181 +1,158 @@
-#include "benchmark-data.hpp"
-#include "camera.hpp"
-#include "diagnostics.hpp"
-#include "gpu-error.hpp"
-#include "oracle-stats.hpp"
-#include "reference.hpp"
-#include "ui-layout.hpp"
+#include "fluid/reference.hpp"
+#include "fluid/statistics.hpp"
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <numbers>
 #include <string_view>
 
-// Tests remain active with NDEBUG; no window/driver or large allocation is required.
+// These checks remain active in Release. No SDL, window or driver is needed.
 int failures = 0;
 
-void check(bool condition, std::string_view label) {
+void check(bool condition, std::string_view message) {
     if (!condition) {
-        ++failures;
-        std::cerr << "FAIL " << label << '\n';
+        failures++;
+        std::cerr << "FAIL: " << message << '\n';
     }
 }
 
-bool near(double actual, double expected, double tolerance = 1e-9) {
-    return std::isfinite(actual) && std::abs(actual - expected) < tolerance;
-}
-
-int main() {
-    bool fatalGpuError = false;
-    try {
-        throw water3::GpuBatchError("synthetic fence failure - no GPU command submitted");
-    } catch (const water3::GpuBatchError&) {
-        fatalGpuError = true;
-    } catch (const std::exception&) {
-        // UI/reporting errors may be recoverable; GPU failure keeps its own type.
-    }
-    check(fatalGpuError, "GPU failure keeps its fatal exception type");
-
-    const auto ordered = water3::distribution({8, 1, 7, 2, 6, 3, 5, 4});
-    check(near(ordered.minimum, 1) && near(ordered.median, 4.5) && near(ordered.maximum, 8), "benchmark even median and extrema");
-    check(near(water3::distribution({3, 1, 2}).median, 2), "benchmark odd median");
-    for (const auto& samples : {std::vector<double>{}, std::vector<double>{-1}, std::vector<double>{std::numeric_limits<double>::infinity()}}) {
-        bool rejected = false;
-        try {
-            water3::distribution(samples);
-        } catch (const std::invalid_argument&) {
-            rejected = true;
-        }
-        check(rejected, "invalid benchmark samples rejected");
-    }
-    for (const int width : {900, 1280, 1920}) {
-        const water3::Layout layout(width, 820);
-        check(layout.scene.x + layout.scene.width < layout.panel.x, "scene and UI do not overlap");
-        check(layout.cell(118, 2).x + layout.cell(118, 2).width < width, "last button stays inside window");
-        check(!layout.panel.contains(layout.panel.x - 1, layout.panel.y), "panel hit excludes scene side");
-    }
-    // Oracle phối cảnh tính trực tiếp với camera không xoay, không gọi shader để tạo đáp án.
-    const water3::Camera camera{0, 0, 1};
-    const auto center = water3::cameraPoint({0.5, 0.4, 0.5}, camera);
-    check(near(center.x, 0) && near(center.y, 0) && near(center.z, -1.75), "camera eye coordinates");
-    const auto closer = water3::cameraPoint({0.6, 0.4, 0.8}, camera);
-    check(near(closer.x, 0.1) && near(closer.z, -1.45), "camera depth does not change world scale");
-    check(water3::focalLength / -closer.z > water3::focalLength / -center.z, "perspective grows toward camera");
-    water3::Diagnostics histogram;
-    histogram.values[1] = 257;
-    histogram.values[8 + 39] = 257;
-    check(near(histogram.quantile(0.5), 0.9875), "histogram quantile uses documented bin center");
-    check(sizeof(histogram) == 288, "compact GPU readback layout");
-    for (const auto side : {4U, 8U, 32U, 48U, 100U}) {
-        const auto plan = water3::makePlan(side);
-        check(plan.count == side * side * side, "cubic particle count");
-        check(near(plan.mass * plan.count, 64), "mass stays64kg when refining particles");
-        check(plan.residentBytes < 192ULL * 1024 * 1024, "resident budget for advertised presets");
-        check(plan.levels.back().groups == 1, "scan hierarchy ends in one block");
-        const auto stride = std::max(1U, water3::ceilDivide(plan.count, 100000));
-        check((water3::ceilDivide(plan.count, stride) - 1) * stride < plan.count, "render stride never fetches outside SSBO");
-    }
-    const auto plan = water3::makePlan();
-    // A wrong finite GPU reduction must fail even if integration used its wrong dt.
-    const water3::OracleStats extrema{500, 9.81, 1000};
-    const double dtCPU = water3::chooseDt(plan, extrema.speed, extrema.acceleration, 12);
-    check(water3::matchesOracleStats(500, 9.81, 1000, 0, dtCPU, extrema, plan, 12), "independent reduction baseline");
-    check(!water3::matchesOracleStats(0, 9.81, 1000, 0, water3::maxDt, extrema, plan, 12), "forged velocity reduction rejected");
-    check(!water3::matchesOracleStats(500, 0, 1000, 0, dtCPU, extrema, plan, 12), "forged force reduction rejected");
-    check(!water3::matchesOracleStats(500, 9.81, 900, 0, dtCPU, extrema, plan, 12), "forged density reduction rejected");
-    check(!water3::matchesOracleStats(500, 9.81, 1000, 1, dtCPU, extrema, plan, 12), "GPU error flag rejected");
-    check(!water3::matchesOracleStats(500, 9.81, 1000, 0, water3::maxDt, extrema, plan, 12), "shared wrong timestep rejected");
-    for (const auto fixture : {water3::VerifyCase::acoustic}) {
-        std::vector<water3::Float4> positions;
-        for (std::uint32_t i = 0; i < plan.count; ++i) {
-            const auto p = water3::initialPosition(plan, i);
-            positions.push_back({static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z), 1});
-        }
-        std::vector<water3::Float4> velocities(plan.count);
-        water3::prepareVerifyCase(fixture, positions, velocities);
-        const auto reference = water3::evaluate(plan, positions, velocities, {});
-        const auto statistics = water3::oracleStats(velocities, reference);
-        const double acoustic = 0.25 * plan.h / (12 + statistics.speed);
-        const double forceBound = 0.25 * std::sqrt(plan.h / std::max(statistics.acceleration, 1e-12));
-        check(acoustic < std::min(water3::maxDt, forceBound), "small GPU fixture activates acoustic bound");
-    }
-    const auto prescribed = water3::forceTimestepReference(plan.count);
-    const auto forceStats = water3::oracleStats(std::vector<water3::Float4>(plan.count), prescribed);
-    const double forceDt = water3::chooseDt(plan, forceStats.speed, forceStats.acceleration, 12);
-    check(forceDt < std::min(water3::maxDt, 0.25 * plan.h / 12), "prescribed fixture activates force bound");
-    check(sizeof(water3::Float4) == 16 && alignof(water3::Float4) == 16, "std430 record ABI");
-    check(water3::cellId(plan, {1, 1, 1}) == plan.cells - 1, "world endpoint clamped to last cell");
-    check(water3::kernel(2 * plan.h, plan.h) == 0, "support cutoff");
-    double integral = 0;
-    const double dr = 2 * plan.h / 10000;
-    for (int i = 0; i < 10000; ++i) {
-        const double r = (i + 0.5) * dr;
-        integral += 4 * std::numbers::pi * r * r * water3::kernel(r, plan.h) * dr;
-    }
-    check(near(integral, 1, 1e-6), "independent spherical volume normalization");
-    check(water3::gradient({}, plan.h).x == 0, "finite gradient at origin");
-    const water3::Vec3 d{0.03, 0.02, 0.04};
-    const auto g = water3::gradient(d, plan.h);
-    const auto opposite = water3::gradient({-d.x, -d.y, -d.z}, plan.h);
-    check(near(g.x, -opposite.x) && near(g.y, -opposite.y) && near(g.z, -opposite.z), "odd3Dgradient");
-    const double e = 1e-6;
-    const double derivative = (water3::kernel(water3::length({d.x + e, d.y, d.z}), plan.h) - water3::kernel(water3::length({d.x - e, d.y, d.z}), plan.h)) / (2 * e);
-    check(near(g.x, derivative, 0.001), "analytic gradient matches independent finite difference");
-    const double pi = water3::viscosity({-0.06, 0, 0}, {0.6, 0, 0}, 1100, 1200, plan.h, 12, 0.15);
-    check(pi > 0 && water3::viscosity({-0.06, 0, 0}, {-0.6, 0, 0}, 1100, 1200, plan.h, 12, 0.15) == 0, "viscosity only approaches");
-    const auto grad = water3::gradient({-0.06, 0, 0}, plan.h);
-    const double forceA = -plan.mass * plan.mass * pi * grad.x;
-    const double forceB = -forceA;
-    check(near(forceA + forceB, 0) && 0.3 * forceA - 0.3 * forceB < 0, "opposite viscosity force and dissipative power");
-    // A deliberately compressed small fixture makes pressure positive without overriding density.
-    std::vector<water3::Float4> compressed;
-    for (int i = 0; i < 12; ++i) {
-        compressed.push_back({0.4F + i * 0.001F, 0.45F + i * 0.0006F, 0.5F + i * 0.0008F, 1});
-    }
-    water3::Settings internal;
-    internal.gravity = 0;
-    internal.alpha = 0;
-    const auto pressure = water3::evaluate(plan, compressed, std::vector<water3::Float4>(12), internal);
-    water3::Vec3 netForce;
-    for (std::size_t i = 0; i < compressed.size(); ++i) {
-        check(pressure.pressure[i] > 0, "compressed fixture has positive EOS pressure");
-        netForce.x += plan.mass * pressure.acceleration[i].x;
-        netForce.y += plan.mass * pressure.acceleration[i].y;
-        netForce.z += plan.mass * pressure.acceleration[i].z;
-    }
-    check(pressure.acceleration.front().x < 0 && pressure.acceleration.back().x > 0, "pressure repels compressed endpoints");
-    check(near(netForce.x, 0, 1e-8) && near(netForce.y, 0, 1e-8) && near(netForce.z, 0, 1e-8), "balanced internal pressure force in3D");
-
-    auto position = water3::Vec3{-0.1, 0.5, 0.5};
-    auto velocity = water3::Vec3{-2, 3, 4};
-    water3::integrate(position, velocity, {}, 0.0005, plan.spacing / 2);
-    check(near(position.x, plan.spacing / 2) && near(velocity.x, 0.2) && near(velocity.y, 3) && near(velocity.z, 4), "collision preserves tangents");
-    const auto fine = water3::makePlan(100);
-    check(near(water3::chooseDt(fine, 0, 0, 20), 0.25 * fine.h / 20), "active acoustic bound");
-    check(near(water3::chooseDt(fine, 0, 1e6, 12), 0.25 * std::sqrt(fine.h / 1e6)), "active force bound");
-    for (const double force : {1e12, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()}) {
-        bool rejected = false;
-        try {
-            water3::chooseDt(fine, 0, force, 12);
-        } catch (const std::exception&) {
-            rejected = true;
-        }
-        check(rejected, "invalid or too-small timestep fails");
-    }
-    std::vector<water3::Float4> single{{0.5F, 0.5F, 0.5F, 1}};
-    std::vector<water3::Float4> zero(1);
-    const auto density = water3::evaluate(plan, single, zero, water3::Settings{});
-    check(near(density.density[0], plan.mass * water3::kernel(0, plan.h)), "density includes self");
-    single[0].x = std::numeric_limits<float>::quiet_NaN();
+template <class Function>
+void rejects(Function action, std::string_view message) {
     bool rejected = false;
     try {
-        water3::evaluate(plan, single, zero, water3::Settings{});
+        action();
     } catch (const std::exception&) {
         rejected = true;
     }
-    check(rejected, "nonfinite oracle input rejected");
-    std::cout << "SPH3D tests: " << failures << " failure(s)\n";
-    if (failures != 0) {
-        return EXIT_FAILURE;
+    check(rejected, message);
+}
+
+bool close(double a, double b, double tolerance = 1e-6) {
+    return std::isfinite(a) && std::abs(a - b) < tolerance;
+}
+
+int main() {
+    using namespace water51;
+    const auto m = makeModel(48);
+    check(m.count == 110592, "required scale");
+    check(close(m.count * static_cast<double>(m.mass), 166.375, 1e-3), "3D mass independent of resolution");
+    for (int side : {4, 8, 32, 48, 80, 100}) {
+        const auto model = makeModel(side);
+        check(model.count == static_cast<std::uint32_t>(side * side * side), "N is the actual lattice allocation");
+        check(plannedBytes(model) < bufferBudget, "scale ladder has a finite resource plan");
+        for (auto preset : {Preset::Dam, Preset::Pool, Preset::Obstacle}) {
+            const auto plan = makeModel(side, preset);
+            for (std::uint32_t i : {0u, plan.count / 2, plan.count - 1}) {
+                const auto p = seedPoint(plan, i);
+                check(p.x > 0 && p.y > 0 && p.z > 0 && p.x < tank.x && p.y < tank.y && p.z < tank.z, "seed stays inside six walls");
+            }
+        }
     }
+    rejects([] {
+        makeModel(3);
+    },
+            "reject invalid side");
+    rejects([] {
+        makeModel(1000);
+    },
+            "bound large allocation");
+    rejects([] {
+        makeModel(4, Preset::Dam, 65);
+    },
+            "reject oversized fixture");
+    rejects([] {
+        checkedProduct(std::numeric_limits<std::size_t>::max(), 2);
+    },
+            "allocation overflow");
+    Parameters invalid;
+    invalid.soundSpeed = std::numeric_limits<float>::quiet_NaN();
+    rejects([&] {
+        validate(invalid);
+    },
+            "reject NaN parameters");
+
+    // Integrate in spherical coordinates, not by summing the implementation's own samples.
+    const double h = .07, step = 2 * h / 10000;
+    double integral = 0;
+    for (int i = 0; i <= 10000; i++) {
+        const double radius = i * step;
+        double weight = 2;
+        if (i == 0 || i == 10000)
+            weight = 1;
+        else if (i % 2 == 1)
+            weight = 4;
+        integral += weight * 4 * std::numbers::pi * radius * radius * kernel3(radius, h);
+    }
+    integral *= step / 3;
+    check(close(integral, 1, 1e-8), "3D kernel integrates to one");
+    check(kernel3(2 * h, h) == 0 && kernel3(3 * h, h) == 0, "compact support");
+    check(length(kernelGradient({}, h)) == 0, "zero-distance gradient");
+    for (double q : {.2, .7, 1.2, 1.8}) {
+        const double r = q * h, epsilon = 1e-7;
+        const double derivative = (kernel3(r + epsilon, h) - kernel3(r - epsilon, h)) / (2 * epsilon);
+        const double actual = kernelGradient({r, 0, 0}, h).x;
+        check(std::abs(derivative - actual) / (1 + std::abs(derivative)) < 1e-7, "analytic gradient versus finite difference");
+    }
+
+    auto pairModel = makeModel(8, Preset::Dam, 2);
+    pairModel.mass *= 10;
+    auto pair = makeReference(pairModel);
+    pair.position = {{.79, .41, .55}, {.85, .41, .55}};
+    pair.velocity = {{.2, 0, 0}, {-.2, 0, 0}};
+    Parameters p;
+    p.gravity = 0;
+    Body body;
+    referenceFields(pairModel, p, body, pair);
+    check(pair.pressure[0] > 0, "compressed pair exercises nonzero pressure");
+    check(length(add(pair.acceleration[0], pair.acceleration[1])) < 1e-8, "internal force is antisymmetric");
+    check(artificialViscosity({-.06, 0, 0}, {.4, 0, 0}, 1000, 1000, pairModel, p) > 0, "approaching pair dissipates");
+    check(artificialViscosity({-.06, 0, 0}, {-.4, 0, 0}, 1000, 1000, pairModel, p) == 0, "separating pair has no artificial viscosity");
+    const auto visc = artificialViscosity({-.06, 0, 0}, {.4, 0, 0}, 1000, 1000, pairModel, p);
+    const auto viscForce = scale(kernelGradient({-.06, 0, 0}, pairModel.h), -pairModel.mass * visc);
+    check(dot({.4, 0, 0}, viscForce) <= 0, "viscosity power is nonpositive");
+    const auto dt = referenceTimestep(pairModel, p, pair);
+    check(dt > 0 && dt <= maximumDt, "adaptive timestep bounds");
+    pair.acceleration[0] = {1e8, 0, 0};
+    check(referenceTimestep(pairModel, p, pair) < dt, "force limit uses current acceleration");
+    pair.velocity[0] = {1e9, 0, 0};
+    rejects([&] {
+        referenceTimestep(pairModel, p, pair);
+    },
+            "timestep floor fails safely");
+
+    const auto small = makeModel(8);
+    auto state = makeReference(small);
+    Parameters parameters;
+    for (int tick = 0; tick < 3; tick++) {
+        referenceFields(small, parameters, body, state);
+        const auto stepDt = referenceTimestep(small, parameters, state);
+        referenceIntegrate(small, body, state, stepDt);
+        check(state.position.size() == small.count, "integration conserves particle count");
+        for (auto point : state.position)
+            check(finite(point) && point.x >= 0 && point.y >= 0 && point.z >= 0 && point.x <= tank.x && point.y <= tank.y && point.z <= tank.z, "finite closed-box state");
+    }
+    Vec3 point{-.1, .2, 1.3}, velocity{-2, 0, 3};
+    collide(small, body, point, velocity);
+    check(point.x > 0 && point.z < tank.z && velocity.x > 0 && velocity.z < 0, "outward-only plane response");
+    body.enabled = true;
+    point = body.position;
+    velocity = {};
+    collide(small, body, point, velocity);
+    check(close(length(subtract(point, body.position)), body.radius + .5 * small.spacing), "sphere center degeneracy has a finite normal");
+    check(boundarySamples(small, {.82, .40, .55}, Body{}).empty(), "interior has no wall samples");
+    check(!boundarySamples(small, {.03, .03, .55}, Body{}).empty(), "corner has wall support");
+    const auto median = distribution({8, 1, 7, 2, 6, 3, 5, 4});
+    check(median.minimum == 1 && median.median == 4.5 && median.maximum == 8, "benchmark median and extrema");
+    rejects([] {
+        distribution({});
+    },
+            "empty benchmark rejected");
+    rejects([] {
+        distribution({-1});
+    },
+            "negative timing rejected");
+    if (failures != 0)
+        return EXIT_FAILURE;
+    std::cout << "P51 CPU PASS: units, kernel, gradient, forces, boundaries, dt, count, budgets, statistics\n";
     return EXIT_SUCCESS;
 }

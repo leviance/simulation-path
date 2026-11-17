@@ -1,0 +1,180 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng độ sâu và độ dày từ các hạt nước
+
+## Vấn đề cần giải quyết
+
+Vẽ hàng trăm nghìn viên cầu vẫn có thể khiến nước trông như một thùng bi thủy tinh. Ta cần một biểu diễn bề mặt chung nhưng không được thay solver bằng một animation có sẵn. Đầu vào của renderer vẫn là position SPH thật; đầu ra trung gian là hai ảnh depth và thickness.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi hạt đóng góp một mặt cầu nhỏ trong phép dựng hình. Depth lấy giao điểm gần camera nhất. Thickness cộng độ dài đoạn tia đi qua các mặt cầu, có hệ số thể tích để giảm việc độ dày tăng vô lý khi đổi độ phân giải. Hai ảnh có mục đích khác nhau: depth dựng hình dáng bề mặt, thickness ước lượng lượng ánh sáng truyền qua.
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-8" />
+
+Canvas là mô hình CPU phục vụ học tập, không phải ứng dụng GPU của bài. Thời gian mô phỏng được ghi riêng và có thể chạy chậm hơn thời gian thực. Chuyển chế độ hiển thị không thay đổi phương trình SPH.
+
+## Viết code từng bước
+
+### 1. Vẽ một quad đủ che mặt cầu
+
+Vertex shader tạo sáu đỉnh từ gl_VertexID cho mỗi instance. Quad chỉ là vùng được rasterize; hình dạng thật được fragment shader xác định bằng ray–sphere intersection.
+
+{/* snippet shaders/water/sphere.vert#billboard */}
+
+```glsl title="shaders/water/sphere.vert — Vẽ một quad đủ che mặt cầu"
+void main() {
+    const vec2 quad[6] = vec2[6](vec2(-1, -1), vec2(1, -1), vec2(1, 1), vec2(-1, -1), vec2(1, 1), vec2(-1, 1));
+    uint i = uint(gl_InstanceID);
+    center = position[i].xyz;
+    diagnostic = vec2(field[i].x, length(velocity[i].xyz));
+    vec3 delta = center - eye;
+    float z = dot(delta, forward);
+    vec2 pixel = vec2(dot(delta, right), dot(delta, up)) * focal / max(z, .04);
+    float pixels = radius * focal / max(z - radius, .04);
+    vec2 ndc = (pixel + quad[gl_VertexID] * pixels) * 2.0 / viewport;
+    gl_Position = vec4(ndc, 0, 1);
+}
+```
+
+Bán kính vẽ 1,15 spacing khác smoothingLength h. Nó là tham số của biểu diễn bề mặt, không được đưa ngược vào density hoặc force. Vẽ toàn N instance, kể cả hạt bị depth test che.
+
+### 2. Ghi độ sâu mặt cầu thật
+
+Từ ray camera, giải phương trình bậc hai lấy front/back. gl_FragDepth phải tương ứng với front, không phải tâm hạt.
+
+{/* snippet shaders/water/sphere.frag#sphere-depth */}
+
+```glsl title="shaders/water/sphere.frag — Ghi độ sâu mặt cầu thật"
+float root = sqrt(discriminant);
+float front = (-b - root) / a;
+float back = (-b + root) / a;
+vec3 hit = eye + front * ray;
+if (front < .04 || any(lessThan(hit, vec3(-.015))) || any(greaterThan(hit, vec3(1.665, .84, 1.115))))
+    discard;
+if (obstacle.w > 0.0 && sphereHit(ray, obstacle) < front)
+    discard;
+gl_FragDepth = 20.0 / (20.0 - .04) - 20.0 * .04 / ((20.0 - .04) * front);
+if (pass == 0)
+    result = vec4(front, 0, 0, 1);
+```
+
+Nếu ghi depth của tâm quad, hạt trước/sau sẽ che nhau sai và normal tái dựng sẽ có mảng phẳng. Near plane, giới hạn bể và vật cản phải được xử lý trước khi ghi ảnh depth.
+
+### 3. Cộng độ dày bằng blending
+
+Pass thickness tắt depth test và cộng contribution bằng GL_ONE, GL_ONE. Tia không đi qua mặt cầu thì fragment đã bị discard.
+
+{/* snippet shaders/water/sphere.frag#thickness */}
+
+```glsl title="shaders/water/sphere.frag — Cộng độ dày bằng blending"
+if (pass == 1)
+    result = vec4((back - front) * sqrt(a) * volumeRatio, 0, 0, 1);
+```
+
+Không lấy số pixel phủ để thay độ dày world. volumeRatio là tỉ lệ thể tích phần tử spacing³ với thể tích cầu vẽ; nó giảm ảnh hưởng của việc chồng nhiều cầu để che khe hở.
+
+### 4. Tách các render target
+
+Host vẽ depth và thickness vào hai target R32F. Sau đó mới lọc depth và composite. Không vừa đọc vừa ghi cùng một texture trong một draw.
+
+{/* snippet include/render/water.hpp#surface-passes */}
+
+```cpp title="include/render/water.hpp — Tách các render target"
+void draw(Engine& engine, Camera camera, int outputWidth, int outputHeight, View view) {
+    resize(outputWidth, outputHeight);
+    camera.update(height_);
+    gl_.BindVertexArray(vao_);
+    gl_.Viewport(0, 0, width_, height_);
+    auto& s = engine.storage();
+    const int bank = engine.bank();
+    s.banks[bank].position.bind(0);
+    s.banks[bank].velocity.bind(1);
+    s.banks[bank].field.bind(2);
+    depth_->bind();
+    gl_.Disable(GL_BLEND);
+    gl_.Enable(GL_DEPTH_TEST);
+    gl_.DepthMask(GL_TRUE);
+    const float zero[4]{};
+    gl_.ClearBufferfv(GL_COLOR, 0, zero);
+    gl_.Clear(GL_DEPTH_BUFFER_BIT);
+    setup(sphere_, camera, engine.meta());
+    sphere_.setFloat("radius", 1.15f * s.model.spacing);
+    sphere_.setInt("pass", 0);
+    gl_.DrawArraysInstanced(GL_TRIANGLES, 0, 6, static_cast<GLsizei>(s.model.count));
+    thickness_->bind();
+    gl_.ClearBufferfv(GL_COLOR, 0, zero);
+    gl_.Disable(GL_DEPTH_TEST);
+    gl_.Enable(GL_BLEND);
+    gl_.BlendEquation(GL_FUNC_ADD);
+    gl_.BlendFunc(GL_ONE, GL_ONE);
+    sphere_.setInt("pass", 1);
+    constexpr double sphereVolume = 4.0 * std::numbers::pi / 3;
+    sphere_.setFloat("volumeRatio", static_cast<float>(1 / (sphereVolume * 1.15 * 1.15 * 1.15)));
+    gl_.DrawArraysInstanced(GL_TRIANGLES, 0, 6, static_cast<GLsizei>(s.model.count));
+    gl_.Disable(GL_BLEND);
+    filter_.use();
+    filter_.setInt("source", 0);
+    filter_.setFloat("sigma", 1.2f * s.model.spacing);
+    depth_->sample(0);
+    scratch_->bind();
+    filter_.setVec2("direction", 1, 0);
+    gl_.DrawArrays(GL_TRIANGLES, 0, 3);
+    scratch_->sample(0);
+    smooth_->bind();
+    filter_.setVec2("direction", 0, 1);
+    gl_.DrawArrays(GL_TRIANGLES, 0, 3);
+    gl_.BindFramebuffer(GL_FRAMEBUFFER, 0);
+    gl_.Viewport(0, 0, outputWidth, outputHeight);
+    // The output camera uses output pixels while texture coordinates use the scaled target.
+    camera.update(outputHeight);
+    setup(composite_, camera, engine.meta());
+    camera.uniforms(composite_, outputWidth, outputHeight);
+    smooth_->sample(0);
+    thickness_->sample(1);
+    composite_.setInt("surfaceDepth", 0);
+    composite_.setInt("thicknessMap", 1);
+    composite_.setInt("fluidVisible", static_cast<int>(view == View::Water));
+    gl_.DrawArrays(GL_TRIANGLES, 0, 3);
+    if (view != View::Water) {
+        gl_.Clear(GL_DEPTH_BUFFER_BIT);
+        gl_.Enable(GL_DEPTH_TEST);
+        setup(sphere_, camera, engine.meta());
+        camera.uniforms(sphere_, outputWidth, outputHeight);
+        sphere_.setFloat("radius", .42f * s.model.spacing);
+        sphere_.setInt("pass", static_cast<int>(view) + 1);
+        gl_.DrawArraysInstanced(GL_TRIANGLES, 0, 6, static_cast<GLsizei>(s.model.count));
+    }
+    gl_.Disable(GL_DEPTH_TEST);
+    gl_.check("Render water surface");
+}
+```
+
+Bộ target được giới hạn 1024 × 768 để chi phí ảnh không tăng vô hạn theo màn hình. Đây là giới hạn độ phân giải render, không phải giới hạn số hạt mô phỏng hoặc số instance nộp vẽ.
+
+## Ghép các phần lại
+
+Gói ZIP trên trang tổng quan đã chứa đầy đủ file của mỗi checkpoint. Nếu muốn tự viết, bắt đầu từ bản cuối bài trước, thêm những phần vừa giải thích rồi đối chiếu bản dưới đây; không ghép các mảnh code thành một file main tùy ý.
+
+```powershell title="Terminal — checkpoint 08"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_51_checkpoint_8 --parallel 1
+.\build\Debug\project_51_checkpoint_8.exe
+```
+
+Trên Linux, dùng executable trong build thay cho thư mục Debug. Driver cần hỗ trợ OpenGL 4.3 compute; lỗi thiếu khả năng phải được báo rõ, không chuyển sang một animation giả.
+
+## Thử làm sai để hiểu đúng
+
+1. Khi paused, chuyển giữa Hạt và Mặt nước rồi orbit sang bên hông. Dự đoán vùng bị che trước khi đổi góc nhìn. Cả hai phải dùng cùng position; đổi cách vẽ không được tiến physics hoặc dịch chuyển khối nước.
+2. Trong bản nháp shader, dùng depth của tâm thay cho giao điểm phía trước mặt cầu. Ở góc xiên, bề mặt và quan hệ che khuất sẽ sai. Khôi phục front depth trước bài sau; thickness phải tính từ đoạn ray đi qua hạt, không từ màu đã tô.
+
+## Tự kiểm tra kết quả
+
+Không có readback position trên đường render thông thường. Depth có giá trị tuyến tính theo khoảng cách dọc forward, còn gl_FragDepth dùng công thức depth buffer. Hai đại lượng không được trộn lẫn. N nộp vẽ phải bằng N allocated/alive.
+
+## Bài tập mở rộng
+
+Tạm dùng depth của tâm thay cho front ở một nhánh thử. Ghi lại lỗi che khuất ở góc nhìn xiên rồi khôi phục. So sánh thickness trước/sau khi đổi side để thấy vì sao cần volumeRatio.
+
+Tiếp theo: [Biến ảnh độ sâu thành mặt nước có chiều sâu](/projects/sph-water-gpu/09-mat-nuoc-va-anh-sang).

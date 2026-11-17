@@ -1,0 +1,103 @@
+#if LAB_CHECKPOINT >= 5
+#version 430 core
+layout(local_size_x = 128) in;
+#include "shared/meta.glsl"
+
+layout(std430, binding = 0) readonly buffer SourcePositions {
+    vec4 sourcePosition[];
+};
+
+layout(std430, binding = 1) readonly buffer SourceVelocities {
+    vec4 sourceVelocity[];
+};
+
+layout(std430, binding = 2) readonly buffer Accelerations {
+    vec4 acceleration[];
+};
+
+layout(std430, binding = 3) writeonly buffer TargetPositions {
+    vec4 targetPosition[];
+};
+
+layout(std430, binding = 4) writeonly buffer TargetVelocities {
+    vec4 targetVelocity[];
+};
+
+layout(std430, binding = 5) readonly buffer SourceFields {
+    vec2 sourceField[];
+};
+
+layout(std430, binding = 6) writeonly buffer TargetFields {
+    vec2 targetField[];
+};
+
+uniform uint particleCount;
+uniform float spacing;
+shared uint successes[128];
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    uint lane = gl_LocalInvocationID.x;
+    successes[lane] = 0u;
+    if (i < particleCount && flags == 0u) {
+        // [snippet gpu-integrate]
+        vec3 v = sourceVelocity[i].xyz + acceleration[i].xyz * dt;
+        vec3 p = sourcePosition[i].xyz + v * dt;
+        float margin = 0.5 * spacing;
+        vec3 limits = vec3(1.65, 0.825, 1.1);
+        for (int axis = 0; axis < 3; axis++) {
+            if (p[axis] < margin) {
+                p[axis] = margin;
+                if (v[axis] < 0.0)
+                    v[axis] *= -0.1;
+            }
+            if (p[axis] > limits[axis] - margin) {
+                p[axis] = limits[axis] - margin;
+                if (v[axis] > 0.0)
+                    v[axis] *= -0.1;
+            }
+        }
+        vec3 bodyPosition = body.xyz + bodyVelocity.xyz * dt;
+        vec3 delta = p - bodyPosition;
+        float distance = length(delta);
+        if (body.w > 0.0 && distance < body.w + margin) {
+            vec3 normal = vec3(0, 1, 0);
+            if (distance > 1e-12)
+                normal = delta / distance;
+            p = bodyPosition + normal * (body.w + margin);
+            float outward = dot(v - bodyVelocity.xyz, normal);
+            if (outward < 0.0)
+                v -= 1.1 * outward * normal;
+        }
+        // [/snippet gpu-integrate]
+        bool bad = any(isnan(p)) || any(isinf(p)) || any(isnan(v)) || any(isinf(v));
+        bool outside = any(lessThan(p, vec3(0))) || any(greaterThan(p, limits));
+        if (bad) {
+            atomicOr(flags, 128u);
+            atomicAdd(invalid, 1u);
+        } else if (outside) {
+            atomicOr(flags, 256u);
+            atomicAdd(leakage, 1u);
+        } else {
+            targetPosition[i] = vec4(p, 1);
+            targetVelocity[i] = vec4(v, 0);
+            targetField[i] = sourceField[i];
+            successes[lane] = 1u;
+        }
+    }
+    // Every lane reaches every barrier, including the incomplete tail workgroup.
+    barrier();
+    for (uint stride = 64u; stride > 0u; stride /= 2u) {
+        if (lane < stride)
+            successes[lane] += successes[lane + stride];
+        barrier();
+    }
+    if (lane == 0u)
+        atomicAdd(updated, successes[0]);
+}
+#else
+#version 430 core
+layout(local_size_x = 128) in;
+
+void main() {}
+#endif

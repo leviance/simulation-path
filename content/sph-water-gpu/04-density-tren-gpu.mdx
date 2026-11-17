@@ -1,0 +1,118 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tính density và pressure mà chưa di chuyển hạt
+
+## Vấn đề cần giải quyết
+
+Nếu density đã sai, mọi bước sau chỉ khuếch đại sai số. Vì vậy checkpoint này chỉ tính density và pressure trên GPU, còn hạt giữ nguyên vị trí. Ta bắt đầu với all-pairs tối đa 512 hạt để có thể đối chiếu từng kết quả với CPU.
+
+## Hiểu ý tưởng trước khi viết code
+
+Density của hạt i là tổng mass × W cho các hạt trong support, kể cả chính i. Pressure là max(0, c²(rho − rho0)). Nhánh max này tránh pressure âm trong mô hình đơn giản đang học; nó không làm hệ trở thành nước không nén được. Càng tăng c, hệ càng cứng và timestep cho phép càng nhỏ.
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-4" />
+
+Canvas là mô hình CPU phục vụ học tập, không phải ứng dụng GPU của bài. Thời gian mô phỏng được ghi riêng và có thể chạy chậm hơn thời gian thực. Chuyển chế độ hiển thị không thay đổi phương trình SPH.
+
+## Viết code từng bước
+
+### 1. Đưa đúng kernel 3D sang GLSL
+
+Giữ cùng tên smoothingLength, particleMass và soundSpeed giữa host và shader. Đừng sao chép normalization 2D từ Project 50.
+
+{/* snippet shaders/shared/physics.glsl#spline3 */}
+
+```glsl title="shaders/shared/physics.glsl — Đưa đúng kernel 3D sang GLSL"
+float kernel3(float r) {
+    float q = r / smoothingLength;
+    if (q >= 2.0)
+        return 0.0;
+    float normalization = 1.0 / (pi * smoothingLength * smoothingLength * smoothingLength);
+    if (q < 1.0)
+        return normalization * (1.0 - 1.5 * q * q + 0.75 * q * q * q);
+    return normalization * 0.25 * pow(2.0 - q, 3.0);
+}
+
+vec3 gradient3(vec3 displacement) {
+    float r = length(displacement);
+    if (r < 1e-12 || r >= 2.0 * smoothingLength)
+        return vec3(0.0);
+    float q = r / smoothingLength;
+    float derivative = -0.75 * (2.0 - q) * (2.0 - q);
+    if (q < 1.0)
+        derivative = -3.0 * q + 2.25 * q * q;
+    return displacement * (derivative / (pi * pow(smoothingLength, 4.0) * r));
+}
+```
+
+GPU dùng float nên không yêu cầu từng bit giống CPU double. Tuy nhiên sai số nhỏ của float không thể giải thích việc dùng nhầm h², bỏ self hoặc đổi dấu gradient.
+
+### 2. Mỗi invocation tự cộng density của mình
+
+i đã được tail guard ở đầu main. Vòng dưới đọc tất cả j và chỉ ghi field[i] sau khi cộng xong; không cần atomicAdd cho density.
+
+{/* snippet shaders/sph/density.comp#density-pairs */}
+
+```glsl title="shaders/sph/density.comp — Mỗi invocation tự cộng density của mình"
+for (uint j = 0u; j < particleCount; j++)
+    density += particleMass * kernel3(length(point - position[j].xyz));
+```
+
+Self term có r = 0 và W(0) hữu hạn. Nó phải có trong density, còn force ở r = 0 có gradient bằng 0. Đừng áp dụng một quy tắc loại self chung cho cả hai pass.
+
+### 3. Tính pressure từ kết quả vừa cộng
+
+Đặt EOS sau cả fluid contribution lẫn boundary contribution. Rho và pressure được ghi cùng record field[i].
+
+{/* snippet shaders/sph/density.comp#equation-of-state */}
+
+```glsl title="shaders/sph/density.comp — Tính pressure từ kết quả vừa cộng"
+float pressure = max(0.0, soundSpeed * soundSpeed * (density - rho0));
+field[i] = vec2(density, pressure);
+```
+
+Không gán rho = rho0 để làm màu hiển thị đẹp hơn. Density thấp ở mặt thoáng là thông tin về mô hình; pressure bằng 0 ở đó cũng không có nghĩa hạt không có khối lượng.
+
+### 4. Gọi pass với đúng state đầu vào
+
+physics() bind position, field và uniforms. density() chọn chương trình, thiết lập các binding rồi dispatch đúng count.
+
+{/* snippet include/gpu/passes.hpp#density-pass */}
+
+```cpp title="include/gpu/passes.hpp — Gọi pass với đúng state đầu vào"
+void density(Storage& s, int source, const Parameters& p, bool gridEnabled) {
+
+    physics(density_, s, source, p, gridEnabled);
+    dispatch(s.model.count);
+
+}
+```
+
+Ở checkpoint 04, useGrid = false. Chưa có lý do tăng N: all-pairs cần N² phép kiểm. Khi có CSR ở Bài 06 ta mới thay cách tìm ứng viên, không thay công thức density.
+
+## Ghép các phần lại
+
+Gói ZIP trên trang tổng quan đã chứa đầy đủ file của mỗi checkpoint. Nếu muốn tự viết, bắt đầu từ bản cuối bài trước, thêm những phần vừa giải thích rồi đối chiếu bản dưới đây; không ghép các mảnh code thành một file main tùy ý.
+
+```powershell title="Terminal — checkpoint 04"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_51_checkpoint_4 --parallel 1
+.\build\Debug\project_51_checkpoint_4.exe
+```
+
+Trên Linux, dùng executable trong build thay cho thư mục Debug. Driver cần hỗ trợ OpenGL 4.3 compute; lỗi thiếu khả năng phải được báo rõ, không chuyển sang một animation giả.
+
+## Thử làm sai để hiểu đúng
+
+1. Chọn Density trong Canvas, xoay để so lớp ngoài với phần trong của khối rồi đổi N. Dự đoán vùng nào thiếu support trước khi nhìn màu. Bài này chưa cho chạy physics hay chỉnh c trên Canvas; màu đang giải thích density của lattice, không phải một dòng nước đã chuyển động.
+2. Trong bản nháp phép cộng density, bỏ riêng số hạng j=i. Dự đoán mức giảm trước khi chạy: với cùng vị trí và mass, mỗi hạt mất đúng mass × W(0,h). Đối chiếu với CPU reference, không chỉ nhìn màu. Khôi phục self term trước khi viết lực.
+
+## Tự kiểm tra kết quả
+
+N = 257 và 512 phải khớp CPU trong tolerance được ghi trong verification.hpp. Kiểm rho hữu hạn và dương, pressure không âm. Position trước/sau pass density phải giống nhau. Không dùng một ảnh xanh đồng nhất để thay kiểm số.
+
+## Bài tập mở rộng
+
+Tạm bỏ self trong một nhánh nhỏ. Đo chênh lệch density và so với mass × W(0,h). Sau đó khôi phục trước khi viết force.
+
+Tiếp theo: [Cho nước chuyển động từ lực SPH](/projects/sph-water-gpu/05-luc-va-tich-phan).

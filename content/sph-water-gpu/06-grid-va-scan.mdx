@@ -1,0 +1,171 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tìm hàng xóm bằng grid 3D trên GPU
+
+## Vấn đề cần giải quyết
+
+512 hạt còn có thể kiểm mọi cặp. 110.592 hạt thì không: số cặp vượt 12 tỷ cho mỗi pass. Ta phải giảm số ứng viên mà vẫn giữ nguyên đáp án SPH. GPU grid trong bài này không phải hiệu ứng hình ảnh; nó là cấu trúc dữ liệu quyết định solver có mở rộng được hay không.
+
+## Hiểu ý tưởng trước khi viết code
+
+Cell có cạnh 2h, nên chỉ cần duyệt cell hiện tại và 26 cell kề nó. Bên trong mỗi cell, CSR lưu một khoảng ID liên tiếp. Để tạo các khoảng ấy, ta đếm số hạt trong từng cell, exclusive scan counts thành offsets rồi scatter ID. Không cấp một số slot cố định cho mỗi cell và lặng lẽ bỏ hạt khi đầy.
+
+<InteractiveLab demo="sph-water-gpu" mode="sph3-6" />
+
+Canvas là mô hình CPU phục vụ học tập, không phải ứng dụng GPU của bài. Thời gian mô phỏng được ghi riêng và có thể chạy chậm hơn thời gian thực. Chuyển chế độ hiển thị không thay đổi phương trình SPH.
+
+## Viết code từng bước
+
+### 1. Đếm occupancy của từng cell
+
+clear.comp đặt counts về 0. Sau đó mỗi hạt xác định cell của mình và atomicAdd một lần. Không giữ counts của tick trước vì hạt đã di chuyển.
+
+{/* snippet shaders/sph/count.comp#cell-count */}
+
+```glsl title="shaders/sph/count.comp — Đếm occupancy của từng cell"
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= particleCount || flags != 0u)
+        return;
+    vec3 point = position[i].xyz;
+    if (!finite3(point) || any(lessThan(point, vec3(0))) || any(greaterThan(point, tankSize))) {
+        atomicOr(flags, 1u);
+        return;
+    }
+    uint cell = cellIndex(point);
+    atomicAdd(counts[cell], 1u);
+}
+```
+
+Atomic ở đây chỉ bảo vệ bộ đếm; nó không quyết định thứ tự ID cuối cùng. Thứ tự scatter có thể khác nhau giữa các lượt chạy nhưng tập hàng xóm phải giống nhau.
+
+### 2. Biến counts thành khoảng lưu trữ
+
+Mỗi workgroup scan tối đa 256 phần tử trong shared memory. Invocation ngoài entries nạp 0 và vẫn đi qua mọi barrier.
+
+{/* snippet shaders/sph/scan.comp#scan */}
+
+```glsl title="shaders/sph/scan.comp — Biến counts thành khoảng lưu trữ"
+uint local = gl_LocalInvocationID.x, index = gl_GlobalInvocationID.x;
+uint original = 0u;
+if (index < entries)
+    original = inputValue[index];
+data[local] = original;
+barrier();
+for (uint offset = 1u; offset < 256u; offset *= 2u) {
+    uint addend = 0u;
+    if (local >= offset)
+        addend = data[local - offset];
+    barrier();
+    data[local] += addend;
+    barrier();
+}
+if (index < entries)
+    outputValue[index] = data[local] - original;
+if (local == 255u)
+    blockSum[gl_WorkGroupID.x] = data[local];
+```
+
+Không return sớm ở tail trước barrier. Một workgroup chỉ đồng bộ được các lane của chính nó; block sums phải được scan ở dispatch khác.
+
+### 3. Ghép scan nhiều tầng trên host
+
+Vòng đi lên tạo tổng từng block; vòng đi xuống cộng prefix của block vào kết quả con. Cuối cùng offsets[cellCount] bằng particleCount và cursors nhận bản sao offsets.
+
+{/* snippet include/gpu/passes.hpp#scan-hierarchy */}
+
+```cpp title="include/gpu/passes.hpp — Ghép scan nhiều tầng trên host"
+void grid(Storage& s, int source, const Parameters& p) {
+
+    physics(clear_, s, source, p, true);
+    dispatch(s.model.cellCount);
+    physics(count_, s, source, p, true);
+    dispatch(s.model.count);
+    for (std::size_t level = 0; level < s.scan.size(); ++level) {
+        auto& pass = s.scan[level];
+        if (level == 0) {
+            s.counts.bind(0);
+            s.offsets.bind(1);
+        } else {
+            s.scan[level - 1].sums.bind(0);
+            s.scan[level - 1].prefix.bind(1);
+        }
+        pass.sums.bind(2);
+        scan_.use();
+        scan_.setUnsigned("entries", pass.entries);
+        dispatch(pass.entries, 256);
+    }
+    for (std::size_t index = s.scan.size(); index > 1; --index) {
+        const auto level = index - 2;
+        if (level == 0)
+            s.offsets.bind(0);
+        else
+            s.scan[level - 1].prefix.bind(0);
+        s.scan[level].prefix.bind(1);
+        add_.use();
+        add_.setUnsigned("entries", s.scan[level].entries);
+        dispatch(s.scan[level].entries);
+    }
+    s.offsets.bind(0);
+    s.counts.bind(1);
+    cursors_.use();
+    cursors_.setUnsigned("cellCount", s.model.cellCount);
+    cursors_.setUnsigned("particleCount", s.model.count);
+    dispatch(s.model.cellCount + 1);
+    physics(scatter_, s, source, p, true);
+    dispatch(s.model.count);
+
+}
+```
+
+counts được tái sử dụng làm cursors sau khi scan đã đọc xong. offsets giữ nguyên cho density/force. Nếu dùng chung một buffer rồi atomicAdd vào offsets, ranh giới cell sẽ bị phá hủy.
+
+### 4. Xếp đúng một ID vào mỗi slot
+
+Một atomicAdd lấy slot riêng trong khoảng của cell. Guard kiểm slot trước khi ghi indices.
+
+{/* snippet shaders/sph/scatter.comp#cell-scatter */}
+
+```glsl title="shaders/sph/scatter.comp — Xếp đúng một ID vào mỗi slot"
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= particleCount || flags != 0u)
+        return;
+    uint cell = cellIndex(position[i].xyz);
+    uint slot = atomicAdd(cursors[cell], 1u);
+    if (slot >= offsets[cell + 1u] || slot >= particleCount) {
+        atomicOr(flags, 2u);
+        return;
+    }
+    indices[slot] = i;
+}
+```
+
+Sau scatter, indices phải là hoán vị của 0..N−1. Density/force vẫn kiểm support 3D bằng kernel; cùng cell không đồng nghĩa là hàng xóm thật. Nếu một hạt vượt ngân sách 1024 ứng viên, batch bị từ chối, không cắt ngầm danh sách.
+
+## Ghép các phần lại
+
+Gói ZIP trên trang tổng quan đã chứa đầy đủ file của mỗi checkpoint. Nếu muốn tự viết, bắt đầu từ bản cuối bài trước, thêm những phần vừa giải thích rồi đối chiếu bản dưới đây; không ghép các mảnh code thành một file main tùy ý.
+
+```powershell title="Terminal — checkpoint 06"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_51_checkpoint_6 --parallel 1
+.\build\Debug\project_51_checkpoint_6.exe
+```
+
+Trên Linux, dùng executable trong build thay cho thư mục Debug. Driver cần hỗ trợ OpenGL 4.3 compute; lỗi thiếu khả năng phải được báo rõ, không chuyển sang một animation giả.
+
+## Thử làm sai để hiểu đúng
+
+1. Dùng 512 rồi 4.096 hạt trong Canvas, giữ nguyên cảnh và góc nhìn. Dự đoán phần nào tốn thêm công trước khi chạy. Browser cũng dùng CSR nhưng tính trên CPU; ms ở đây không phải thời gian compute shader của executable.
+2. Trong bản nháp nhỏ của scatter, tạm dùng vị trí đầu cell cho mọi ID thay vì tăng cursor. Các ID ghi đè nhau dù tổng count trước scan vẫn đúng. Phép kiểm permutation và membership trong verifier phải bắt được lỗi; sparse-grid N=257 còn buộc scan qua nhiều tầng. Khôi phục cursor trước khi chạy workload lớn.
+
+## Tự kiểm tra kết quả
+
+Offsets bắt đầu bằng 0, không giảm và kết thúc bằng N. Mỗi ID xuất hiện đúng một lần, nằm trong cell đúng. GPU CSR density/force phải khớp cả GPU all-pairs lẫn CPU double ở ca nhỏ. Tail của scan và scatter phải có test riêng.
+
+## Bài tập mở rộng
+
+Cho nhiều hạt rơi vào cùng một cell trong một fixture có giới hạn. Chứng minh CSR vẫn chứa đủ ID. Sau đó tạo ca vượt candidate budget và kiểm batch báo lỗi, không đưa state tính thiếu lực lên màn hình.
+
+Tiếp theo: [Chọn timestep từ dữ liệu của chính tick hiện tại](/projects/sph-water-gpu/07-timestep-va-reduction).

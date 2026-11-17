@@ -389,8 +389,9 @@
     "id": "51",
     "slug": "sph-water-gpu",
     "sourceDirectory": "project-51-sph-water-gpu",
-    "checkpointCount": 12,
-    "contentRevision": 2,
+    "checkpointCount": 13,
+    "contentRevision": 3,
+    "shaderRuntimePerTarget": true,
     "demoId": "sph-water-gpu"
   },
   {

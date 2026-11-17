@@ -1,0 +1,45 @@
+#if LAB_CHECKPOINT >= 6
+#version 430 core
+layout(local_size_x = 128) in;
+#include "shared/meta.glsl"
+#include "shared/physics.glsl"
+
+layout(std430, binding = 0) readonly buffer Positions {
+    vec4 position[];
+};
+
+layout(std430, binding = 4) buffer Cursors {
+    uint cursors[];
+};
+
+layout(std430, binding = 5) readonly buffer Offsets {
+    uint offsets[];
+};
+
+layout(std430, binding = 6) writeonly buffer Indices {
+    uint indices[];
+};
+
+// [snippet cell-scatter]
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= particleCount || flags != 0u)
+        return;
+    // [snippet scatter]
+    uint cell = cellIndex(position[i].xyz);
+    uint slot = atomicAdd(cursors[cell], 1u);
+    if (slot >= offsets[cell + 1u] || slot >= particleCount) {
+        atomicOr(flags, 2u);
+        return;
+    }
+    indices[slot] = i;
+    // [/snippet scatter]
+}
+
+// [/snippet cell-scatter]
+#else
+#version 430 core
+layout(local_size_x = 128) in;
+
+void main() {}
+#endif
