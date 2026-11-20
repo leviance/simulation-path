@@ -1,0 +1,131 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ tay kéo đến vòng quanh chim vàng
+
+## Vấn đề cần giải quyết
+
+Đến đây máy đọc và tính được công thức, nhưng người học cần nhìn thấy nó tác động lên đàn. Mục tiêu: cùng cú kéo giữa thanh gửi 80 vào onRadius; chính script quyết định giá trị cuối trên nhãn Radius và vòng quan sát.
+
+## Hiểu ý tưởng trước khi viết code
+
+C++ giao đúng một đề xuất từ event cho handler. Host chỉ cung cấp các thao tác đã liệt kê: dừng/chạy, Reset, bán kính, lực tách, lớp hàng xóm và phép đọc tương ứng. Script không cầm con trỏ tới cả simulation.
+
+<InteractiveLab demo="tiny-script" mode="script72-5" />
+
+## Viết code từng bước
+
+### Kiểm tên, số đối số, kiểu và miền giá trị
+
+`radius(80)` hợp lệ; `radius(true)` sai kiểu, `radius(200)` vượt miền. Đừng ép kiểu hoặc clamp im lặng: người học cần biết công thức mình viết sai ở đâu.
+
+{/* snippet include/script/host.hpp#allowed-host */}
+
+```cpp title="include/script/host.hpp — Kiểm tên, số đối số, kiểu và miền giá trị"
+inline Value hostCall(Host& h, const std::string& id, const std::vector<Value>& args, std::string_view source, std::size_t at) {
+    unsigned expected = 0;
+    if (id == "radius" || id == "separate" || id == "links")
+        expected = 1;
+    if (!hostName(id) || args.size() != expected)
+        tiny::fail(source, at, "unknown host or wrong arity: " + id);
+    if (id == "paused")
+        return h.paused;
+    if (id == "getRadius")
+        return h.radius;
+    if (id == "getSeparation")
+        return h.separation;
+    if (id == "showLinks")
+        return h.visible;
+    if (!h.writable)
+        tiny::fail(source, at, "host writes only inside handlers");
+    if (id == "pause")
+        h.paused = true;
+    if (id == "resume")
+        h.paused = false;
+    if (id == "reset") {
+        h.reset = true;
+        h.radius = 64;
+        h.separation = 1.5;
+        h.visible = true;
+    }
+    if (id == "links")
+        h.visible = logical(args[0], source, at);
+    if (id == "radius" || id == "separate") {
+        const double value = numeric(args[0], source, at);
+        if (id == "radius") {
+            if (value < 20 || value > 140)
+                tiny::fail(source, at, "radius outside 20..140");
+            h.radius = value;
+        } else {
+            if (value < 0 || value > 5)
+                tiny::fail(source, at, "separation outside 0..5");
+            h.separation = value;
+        }
+    }
+    return 0.0;
+}
+```
+
+### Chạy function rồi mới công bố kết quả
+
+Event Radius gọi onRadius(value); nhãn đọc giá trị cuối của host. Vị trí tay kéo là đề xuất, nên script có thể đặt bán kính khác mà không làm núm kéo giật ngược ở lần nhấn phím sau.
+
+{/* snippet include/script/session.hpp#atomic-event */}
+
+```cpp title="include/script/session.hpp — Chạy function rồi mới công bố kết quả"
+inline bool invoke(Session& s, tiny::Desk& d, const std::string& event, double proposal = 0) {
+    try {
+        Names vars = s.variables;
+        Host buffer = Host::read(d);
+        Machine vm(s.program, vars, buffer);
+        std::vector<Value> args;
+        if (event == "radius" || event == "separation")
+            args.push_back(proposal);
+        vm.call(handler(event), args);
+        buffer.publish(d);
+        // Giữ tay kéo ở giá trị đề xuất. Nhãn Radius/Separation đọc kết quả thật của script.
+        if (event == "radius" || event == "separation")
+            d.page.values.at(tiny::elementById(d.page, event)) = proposal;
+        if (event == "reset") {
+            d.page.values.at(tiny::elementById(d.page, "radius")) = buffer.radius;
+            d.page.values.at(tiny::elementById(d.page, "separation")) = buffer.separation;
+        }
+        s.variables = std::move(vars);
+        s.steps = vm.stepsUsed();
+        s.message = s.filename + " : " + handler(event) + "   /   " + std::to_string(s.steps) + " steps";
+        if (event == "radius")
+            s.message += "   input " + std::to_string(int(proposal)) + " -> " + std::to_string(int(buffer.radius)) + " px";
+        d.error = false;
+        d.status = s.message;
+        return true;
+    } catch (const std::exception& e) {
+        s.message = s.filename + " " + handler(event) + ": " + e.what();
+        d.error = true;
+        d.status = s.message;
+        return false;
+    }
+}
+```
+
+## Ghép các phần lại
+
+Sửa thân onRadius trong flight.tiny thành `radius(20 + (value - 20) / 2);`, F5 rồi bấm điểm giữa. Núm vẫn nhận 80, nhãn báo 50 px, vòng quanh chim vàng thu lại. Bật E để nhìn đường event từ Project 71.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_72_checkpoint_5 --parallel 2
+.\build\Release\project_72_checkpoint_5.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Gọi `radius()` ngay khi parser đọc tên function. Chỉ cần F5 đã làm đàn thay đổi trước khi người dùng bấm, sai hoàn toàn vòng đời một handler.
+
+## Tự kiểm tra kết quả
+
+Pause, Reset, hai slider và Links vẫn chạy qua cùng dispatcher của Project 71. Binding không phụ thuộc vị trí nút hay một nhãn hard-code trên màn hình.
+
+## Bài tập mở rộng
+
+Tự viết onReset để đặt lại đàn, bật Links và chọn bán kính 50. Đổi thứ tự hai lệnh đầu có tạo kết quả khác không?
+
+[Bài 6: Làm sao để script lỗi không làm treo cửa sổ?](/projects/tiny-script/06-loi-ma-cua-so-van-song).

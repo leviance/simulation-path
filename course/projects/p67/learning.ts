@@ -4,13 +4,13 @@ const data = {
     "p67-l01": {
       focus: "Chạy nền SDL và cây UI trước khi thêm thuật toán layout.",
       expected:
-        "Bóng và Pause/Reset/Slider chạy được; số đọc Pause world=(638,82) theo đúng Rect đặt tay.",
+        "Đàn Boids, Pause, Reset và hai slider chạy được; số đọc Pause world=(638,82) theo đúng Rect đặt tay.",
       files: ["include/app.hpp"],
       steps: [
         {
           title: "Build starter",
           explanation:
-            "Window, renderer, logical presentation, cây Widget và input từ Project 66 đều đã có. Chạy thử ba control; không bắt đầu từ một struct mới chưa có chỗ sử dụng.",
+            "Window, renderer, logical presentation, cây Widget và input từ Project 66 đều đã có. Chạy thử Pause, Reset, Neighbors cùng hai slider; không bắt đầu từ một struct mới chưa có chỗ sử dụng.",
         },
         {
           title: "Theo dõi một Rect",
@@ -92,7 +92,7 @@ const data = {
     },
     "p67-l05": {
       focus: "Đo chiều cao Panel con rồi đặt cả cây.",
-      expected: "Group cao 252; Pause world=(656,96), rộng 240.",
+      expected: "Group cao 352; Pause world=(656,96), rộng 240.",
       files: ["include/scene.hpp", "include/layout.hpp"],
       steps: [
         {
@@ -103,7 +103,7 @@ const data = {
         {
           title: "Cộng outer height của con",
           explanation:
-            "Measure đã biết content width rồi đi xuống child; height Auto được cộng khi quay lên. Group gồm 28 inset, 192 outer heights và 32 gap nên cao 252.",
+            "Measure đã biết content width rồi đi xuống child; height Auto được cộng khi quay lên. Group gồm 28 inset, 276 pixel cho bảy hàng kể cả margin và 48 pixel cho sáu gap nên cao 352.",
         },
         {
           title: "Arrange từ parent xuống",
@@ -136,13 +136,14 @@ const data = {
     },
     "p67-l07": {
       focus: "Hoàn tất geometry mới trước khi nhận input và cache khi không đổi.",
-      expected: "Width đổi làm Fill cập nhật, slider vẫn đúng; bước vật lý không tăng passes.",
+      expected:
+        "Width đổi làm Fill cập nhật, slider vẫn đúng; bước cập nhật đàn không tăng passes.",
       files: ["include/runtime.hpp", "include/events.hpp"],
       steps: [
         {
           title: "Đặt dirty ở các đường ghi",
           explanation:
-            "Width, gap, padding và visibility cần invalidation. Gravity/ticks/hover không đổi hình học nên không làm dirty. API bỏ qua giá trị không đổi hoặc không hợp lệ.",
+            "Width, gap, padding và visibility cần invalidation. Bán kính, số bước và hover không đổi hình học nên không làm dirty. API bỏ qua giá trị không đổi hoặc không hợp lệ.",
         },
         {
           title: "Ensure trước input",
@@ -169,7 +170,7 @@ const data = {
         {
           title: "Dùng clip tổ tiên",
           explanation:
-            "Render và picking vẫn dùng intersection của Project 66. Width của Slider không bị thay bằng clip.width; gravity được ánh xạ bằng bounds đầy đủ.",
+            "Render và picking vẫn dùng intersection của Project 66. Width của Slider không bị thay bằng clip.width; bán kính được ánh xạ bằng bounds đầy đủ.",
         },
         {
           title: "Kiểm cả tràn đứng",
@@ -191,12 +192,12 @@ const data = {
         {
           title: "Kiểm transition và cache",
           explanation:
-            "Resize khi kéo phải hủy active; input tiếp theo dùng Rect mới. Một nghìn frame đọc và bước vật lý không được tăng passes hoặc dựng lại cây.",
+            "Resize khi kéo phải hủy active; input tiếp theo dùng Rect mới. Một nghìn frame đọc và bước cập nhật đàn không được tăng passes hoặc dựng lại cây.",
         },
         {
           title: "Build có giới hạn",
           explanation:
-            "Check/EXIT_FAILURE có hiệu lực ở Release, khác assert bị NDEBUG bỏ. Dùng hai compiler, deadline ngoài build, CTest timeout và smoke ẩn; desktop QA được ghi riêng.",
+            "Check/EXIT_FAILURE có hiệu lực ở Release, khác assert bị NDEBUG bỏ. Giới hạn hai tiến trình biên dịch, đặt deadline ngoài build, CTest timeout và smoke ẩn; desktop QA được ghi riêng.",
         },
       ],
     },

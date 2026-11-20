@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import "./checkpoint-generation.cases.mjs";
+import "./voxel-workbook.cases.mjs";
 import "./lesson-routing.test.mjs";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
@@ -149,6 +150,27 @@ test("generated-file reconciliation preserves unchanged outputs and prunes stale
       workspace: root,
     });
     assert.deepEqual(second, { changedCount: 0, removedCount: 0, mismatchCount: 0 });
+
+    // Project p01 has already been reconciled. The outer sweep must retain it
+    // but still detect and remove stale nested files under an unknown project.
+    const orphan = path.join(root, "retired", "data", "old.json");
+    mkdirSync(path.dirname(orphan), { recursive: true });
+    writeFileSync(orphan, "{}");
+    const sweep = {
+      expectedFiles: new Map(),
+      managedRoots: [root],
+      checkedDirectories: [path.dirname(expectedTarget)],
+      workspace: root,
+    };
+    assert.equal(reconcileGeneratedFiles({ ...sweep, checkOnly: true }).mismatchCount, 1);
+    assert.ok(existsSync(orphan));
+    assert.deepEqual(reconcileGeneratedFiles(sweep), {
+      changedCount: 0,
+      removedCount: 1,
+      mismatchCount: 0,
+    });
+    assert.ok(existsSync(expectedTarget));
+    assert.equal(existsSync(path.join(root, "retired")), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -1,0 +1,106 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Mỗi pixel nhìn theo một tia nào?
+
+## Vấn đề cần giải quyết
+
+Ta đã có một ảnh phủ viewport. Nhưng tọa độ `uv` chưa nói pixel ấy nhìn vào đâu trong không gian. Muốn đọc volume, mỗi pixel cần một ray gồm điểm xuất phát và hướng. Bài này chỉ tạo ray và dùng màu để xem direction; chưa lấy density.
+
+Phần giữ lại là context, fullscreen triangle, target và present. Phần mới là camera basis, công thức ray và các uniform nối từ C++ sang GLSL. Kéo camera phải đổi hướng nhìn, không xoay hay viết lại dữ liệu volume.
+
+## Hiểu ý tưởng trước khi viết code
+
+Camera có `origin` và ba trục `forward`, `right`, `up`. Tại pixel giữa ảnh, ray phải trùng `forward`. Đi sang phải, direction nhận thêm thành phần `right`; đi lên, nó nhận thêm `up`.
+
+Ta dùng FOV dọc 50°. Khoảng lệch ngang cần nhân aspect = width/height, nếu không ảnh sẽ co giãn sai khi cửa sổ đổi hình. Sau khi cộng ba thành phần, normalize direction để `t` trên ray là quãng đường theo world units.
+
+Ở đây world unit là đơn vị tùy chọn của box [-1,1]³. Không giữ đơn vị mm của Project 53 rồi âm thầm dùng công thức như thể hai box giống nhau.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-2" />
+
+## Viết code từng bước
+
+### 1. Đọc camera basis trước
+
+`cameraBasis` là scaffold vector quen thuộc: eye orbit quanh gốc, nhìn vào gốc, rồi dựng right/up. Pitch bị chặn trước hai cực để cross product không suy biến. Khi chọn inside, origin về gốc nhưng yaw/pitch vẫn quyết định direction; ta không khóa hướng nhìn thành một vector cố định.
+
+{/* snippet include/model.hpp#camera-basis */}
+
+```cpp title="include/model.hpp — Camera chỉ quyết định điểm và hướng nhìn"
+inline Basis cameraBasis(Camera camera) {
+    camera.limit();
+    Vec3 origin{camera.distance * std::cos(camera.pitch) * std::sin(camera.yaw), camera.distance * std::sin(camera.pitch), camera.distance * std::cos(camera.pitch) * std::cos(camera.yaw)};
+    const Vec3 forward = unit(origin * -1);
+    const Vec3 right = unit(cross(forward, {0, 1, 0}));
+    if (camera.inside)
+        origin = {0, 0, 0};
+    return {origin, forward, right, cross(right, forward)};
+}
+```
+
+Ba trục cần vuông góc và có độ dài một. Đây là invariant dễ kiểm trước khi thêm volume: dot giữa hai trục khác nhau gần 0, dot của một trục với chính nó gần 1.
+
+### 2. Tạo ray tham chiếu ở C++
+
+Hàm CPU nhận `u`, `v` theo ảnh đi từ trên xuống. `u=0.5, v=0.5` là tâm ảnh; còn khi kiểm một pixel cụ thể, dùng `(x+0.5)/width`, không lấy góc pixel.
+
+{/* snippet include/model.hpp#camera-ray */}
+
+```cpp title="include/model.hpp — Tâm pixel thành ray perspective"
+inline Ray cameraRay(Camera camera, double u, double v, double aspect) {
+    if (!std::isfinite(u) || !std::isfinite(v) || !std::isfinite(aspect) || aspect <= 0)
+        throw std::invalid_argument("Finite pixel and positive aspect required");
+    const Basis basis = cameraBasis(camera);
+    const double tangent = std::tan(50.0 * 3.141592653589793 / 360.0);
+    const Vec3 horizontal = basis.right * ((2 * u - 1) * aspect * tangent);
+    const Vec3 vertical = basis.up * ((1 - 2 * v) * tangent);
+    return {basis.origin, unit(basis.forward + horizontal + vertical)};
+}
+```
+
+`horizontal` và `vertical` là độ lệch khỏi forward, không phải vị trí voxel. Normalize sau phép cộng; normalize riêng từng độ lệch rồi cộng sẽ làm mất quan hệ perspective.
+
+### 3. Viết cùng công thức trong shader
+
+GL tăng y từ dưới lên nên biểu thức dọc là `2*uv.y-1`, đối với CPU là `1-2*v`. Đây là hai quy ước đầu vào tương đương, không phải hai camera khác nhau.
+
+{/* snippet shaders/volume.frag#shader-ray */}
+
+```glsl title="shaders/volume.frag — Direction cho fragment đang vẽ"
+float tangent = tan(radians(50.0) * 0.5);
+vec3 horizontal = uRight * ((2.0 * uv.x - 1.0) * (uSize.x / uSize.y) * tangent);
+vec3 vertical = uUp * ((2.0 * uv.y - 1.0) * tangent);
+vec3 direction = normalize(uForward + horizontal + vertical);
+```
+
+Sau đoạn này, checkpoint 2 đưa `0.5*direction+0.5` ra ảnh. Direction trong [-1,1] được ánh xạ về [0,1] để nhìn bằng RGB; màu ấy chưa phải màu của sương.
+
+## Ghép các phần lại
+
+Trong `Renderer::render`, `setBasis` gửi forward/right/up từ cùng `Camera` đang được input cập nhật. `uSize` vẫn lấy từ target thực như Bài 1. Hàm `cameraRay` CPU sẽ dùng lại ở inspector và GPU oracle, không chạy một lần cho mọi fragment ở phía CPU.
+
+```powershell
+cmake --build build --config Debug --target project_54_checkpoint_2 --parallel 1
+.\build\Debug\project_54_checkpoint_2.exe
+```
+
+Thử phím mũi tên và kéo. Camera quay thì toàn ảnh direction đổi; zoom không cần đổi FOV vì distance thay đổi origin, không thay góc mở của các ray trong camera space.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ aspect rồi đổi cửa sổ từ vuông sang rộng. Dự đoán phần nào bị sai trước khi so ảnh.
+2. Bỏ normalize ở cuối và kiểm độ dài direction tại góc ảnh. Giải thích vì sao lỗi này sẽ làm opacity sai khi `ds` được hiểu là quãng đường.
+3. Tạm dùng cùng dấu y cho CPU và GL. Một pixel trên ảnh sẽ bị so với ray phía dưới khi kiểm GPU; ghi lại vị trí cần đảo, rồi khôi phục.
+
+## Tự kiểm tra kết quả
+
+- [ ] Ray ở giữa trùng forward; pixel phía trên có dot với up dương.
+- [ ] Các ray có direction dài một trong sai số số thực đã chọn.
+- [ ] UI không tuyên bố ảnh direction là density hoặc một volume đã render.
+- [ ] World/screen/texture coordinate chưa bị dùng lẫn nhau.
+
+## Bài tập mở rộng
+
+Đổi FOV từ 50° sang 35° ở cả CPU và shader. Giải thích tại sao object sau này trông lớn hơn dù mảng dữ liệu không thay đổi. Không đổi chỉ một phía rồi nới tolerance để oracle “qua”.
+
+[Bài 3](./03-tim-doan-ray-trong-box) sẽ tìm đoạn ray thật sự nằm trong box, để vòng lấy mẫu không đọc khoảng không ngoài dữ liệu.

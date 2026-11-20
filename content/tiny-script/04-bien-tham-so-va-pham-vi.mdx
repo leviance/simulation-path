@@ -1,0 +1,89 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hai hàm cùng đặt tên biến là value: có dùng chung giá trị không?
+
+## Vấn đề cần giải quyết
+
+Một handler có tham số value, rồi gọi một function cũng đặt tên tham số là value. Nếu hai tên dùng chung một ô nhớ, việc tính bán kính khảo sát có thể thay cả biến của nơi gọi.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi lần gọi mở một frame mới cho tham số và biến local. Tìm tên trong khối hiện tại, các khối ngoài của cùng function, cuối cùng mới tìm globals. Không bí mật mượn biến local của function đã gọi mình.
+
+<InteractiveLab demo="tiny-script" mode="script72-4" />
+
+## Viết code từng bước
+
+### Tìm biến gần nhất, rồi đến globals
+
+Chỉ các lớp trong frame đang chạy được duyệt. Một let trong nhánh if có thể che tên bên ngoài; sau dấu } biến ở ngoài lại hiện ra.
+
+{/* snippet include/script/machine.hpp#lookup */}
+
+```cpp title="include/script/machine.hpp — Tìm biến gần nhất, rồi đến globals"
+Value* lookup(Frame& frame, const std::string& name) {
+    for (auto it = frame.locals.rbegin(); it != frame.locals.rend(); ++it) {
+        const auto v = it->find(name);
+        if (v != it->end())
+            return &v->second;
+    }
+    const auto found = global.find(name);
+    if (found != global.end())
+        return &found->second;
+    return nullptr;
+}
+```
+
+### Tra function, kiểm số đối số và dựng frame mới
+
+Trước khi chạy body, sao các giá trị đối số vào đúng tên tham số. Return trở về người gọi; không có return thì kết quả số 0. Giới hạn độ sâu có từ ngay lần chạy đầu.
+
+{/* snippet include/script/machine.hpp#call-frame */}
+
+```cpp title="include/script/machine.hpp — Tra function, kiểm số đối số và dựng frame mới"
+Value call(const std::string& name, const std::vector<Value>& args, std::size_t at = 0) {
+    spend(at);
+    if (hostName(name))
+        return hostCall(host, name, args, p.source, at);
+    const auto fn = p.functions.find(name);
+    if (fn == p.functions.end())
+        tiny::fail(p.source, at, "unknown function: " + name);
+    if (args.size() != fn->second.params.size())
+        tiny::fail(p.source, at, "wrong argument count: " + name);
+    if (calls >= 16)
+        tiny::fail(p.source, at, "call depth exceeds 16: " + name);
+    ++calls;
+    Frame frame;
+    for (std::size_t i = 0; i < args.size(); ++i)
+        frame.locals.back()[fn->second.params[i]] = args[i];
+    auto returned = execute(fn->second.body, frame);
+    --calls;
+    if (returned)
+        return *returned;
+    return 0.0;
+}
+```
+
+## Ghép các phần lại
+
+Mở L để xem globals sau khi nạp. Thử `let presses = 1 + 2 * 3;` và dùng fixture ở tests để kiểm giá trị 7. Đây là mốc interpreter thuần; callback giao diện vẫn là C++ tới bài 5.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_72_checkpoint_4 --parallel 2
+.\build\Release\project_72_checkpoint_4.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Cho `hidden()` đọc một biến chỉ khai báo ở nơi gọi. Một interpreter vô tình dùng dynamic scope sẽ cho qua; phiên bản này phải báo unknown variable.
+
+## Tự kiểm tra kết quả
+
+Fixture phân biệt được che biến trong if với thay globals, tham số với tên ở nơi gọi; điều kiện if nhận boolean, không âm thầm coi số 2 là true.
+
+## Bài tập mở rộng
+
+Viết function có tham số n, trong nhánh if tạo let n mới rồi trả n ngoài nhánh. Bạn dự đoán kết quả với đối số 4 là bao nhiêu?
+
+[Bài 5: Từ tay kéo đến vòng quanh chim vàng](/projects/tiny-script/05-handler-thanh-keo-goi-host).

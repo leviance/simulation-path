@@ -3,203 +3,153 @@ const data = {
   guides: {
     "p66-l01": {
       focus:
-        "Chạy cảnh bóng rơi trước, rồi tạo Panel, Label và Button bằng dữ liệu; parent sở hữu child và cây được dựng ngoài vòng lặp.",
+        "Ở Project 65, một biến và một Rect đã đủ cho nút Pause. Bây giờ bạn muốn thêm cả nhóm thông số khi đàn đang bay. Nếu Reset đàn đồng thời dựng lại mọi nút, focus và thao tác kéo đang dở sẽ thuộc về ai?",
       expected:
-        "Có Panel, Label và một Button chưa nhận click; frames tăng còn builds và ID không đổi.",
-      files: ["include/tree.hpp", "include/scene.hpp", "include/app.hpp", "include/view.hpp"],
+        "Node thuộc đúng một parent. Một lần Reset đàn không thay địa chỉ root hoặc bộ cấp ID; không cần hoạt động chuột cho các nút ở mốc đầu này.",
+      files: ["include/tree.hpp"],
       steps: [
         {
-          title: "Mở starter và nhận ra phần đã có",
+          title: "Node chứa gì?",
           explanation:
-            "Starter đã có window, renderer, bóng, sàn và Space/N/R của Project 65. Hãy chạy nó trước. Mã hình học và vật lý được giữ làm nền; phần còn thiếu là đối tượng biểu diễn UI.",
+            "`Widget` chứa hình học local, loại, nhãn và danh sách con. Không nhét vận tốc đàn vào widget: hai phần có vòng đời khác nhau.",
         },
         {
-          title: "Cho mỗi widget một kiểu, ID và Rect",
+          title: "Trao child cho parent",
           explanation:
-            "Widget giữ dữ liệu, không giữ SDL_Renderer. Rect local đo từ góc parent; children là vector unique_ptr để ownership hiện rõ. ID 0 dành cho trạng thái không chọn widget nào.",
-        },
-        {
-          title: "Tạo cây một lần trong App",
-          explanation:
-            "buildTree nằm ở khởi tạo App, trước vòng while. draw chỉ nhận cây để đọc; Reset cảnh chỉ sửa Model. Theo dõi builds=1 trong khi số frame tăng.",
+            "Lấy ID trước khi `std::move` chuyển quyền sở hữu. Từ đây không giữ con trỏ tạm qua lần thay đổi cây; tìm lại bằng ID khi cần.",
         },
       ],
     },
     "p66-l02": {
       focus:
-        "Đưa hai button vào Panel con; dùng một phép duyệt để tính tọa độ world và vẽ từ parent tới child.",
+        "Bảng bên phải đã chật. Hãy thử dịch cả nhóm Pause và Reset sang trái mà không sửa một tọa độ nào của từng nút.",
       expected:
-        "Group có Pause/Reset; dịch root 16 đơn vị làm mọi descendant dịch 16, builds vẫn bằng 1.",
-      files: ["include/traversal.hpp", "include/scene.hpp", "include/view.hpp"],
+        "Sau dịch (-16,4), world của Pause là (672,84). Reset và các child cùng đi theo, đàn không bị dịch.",
+      files: ["include/traversal.hpp"],
       steps: [
         {
-          title: "Tính vị trí từ góc của parent",
+          title: "Tính bounds tại node đang thăm",
           explanation:
-            "World X/Y của một node bằng góc world của parent cộng Rect local của node. Width/height giữ nguyên vì project chưa có scale theo node.",
+            "Chỉ lấy vị trí từ origin của cha; chiều rộng và chiều cao vẫn thuộc node hiện tại. `WidgetView` là kết quả quan sát tạm thời, không phải cái cây thứ hai.",
         },
         {
-          title: "Duyệt parent trước rồi đến các child",
+          title: "Đưa đúng gốc xuống một cấp",
           explanation:
-            "visit nhận node, origin, clip và callback draw. Sau khi đặt node, truyền góc world vừa tính cho lời gọi trên từng child; đây là depth-first traversal, không phải layout tự động.",
-        },
-        {
-          title: "Dịch cả Panel bằng cách sửa root",
-          explanation:
-            "movePanel chỉ đổi hai trường của root. Các Rect local của con không đổi, nhưng vị trí vẽ của chúng đổi theo. So Inspector trước và sau khi dịch 16 pixel.",
+            "Vẽ cha trước rồi duyệt các con theo thứ tự thêm. Truyền góc trái vừa tính cho cấp kế tiếp; nếu truyền mãi gốc cửa sổ, các cháu sẽ tách khỏi Panel khi dịch chuyển.",
         },
       ],
     },
     "p66-l03": {
       focus:
-        "Tính giao của các Rect tổ tiên và áp clip cho từng node; cùng một phép giao sẽ được dùng lại khi hit-test.",
+        "Chuyển sang preset bảng thấp. Reset vẫn cao 44 px, nhưng chỉ còn thấy 36 px. Tám pixel biến mất ở đâu? Nếu sửa chiều cao của Reset thành 36, khi mở rộng Panel nó sẽ không trở lại như cũ.",
       expected:
-        "Preset cắt Panel giữ bounds của Reset là 224×44 nhưng clip chỉ cao 36; clip không làm mất node.",
-      files: ["include/geometry.hpp", "include/traversal.hpp", "include/view.hpp"],
+        "Reset vẫn báo bounds cao 44; clip cao 36. Child nằm ngoài vẫn thuộc parent và không bị cấp lại ID.",
+      files: ["include/geometry.hpp", "include/traversal.hpp"],
       steps: [
         {
-          title: "Tìm phần giao của hai hình chữ nhật",
+          title: "Giao hai hình chữ nhật",
           explanation:
-            "Mép trái/trên lấy max, phải/dưới lấy min. Nếu không giao, width hoặc height bằng 0. Không sửa Rect local để ép child vào parent.",
+            "Bên trái lấy giá trị lớn hơn, bên phải lấy giá trị nhỏ hơn. Nếu hai cạnh vượt qua nhau, chiều rộng bằng 0, không được lật chúng để tạo một khung giả.",
         },
         {
-          title: "Mang clip của tổ tiên xuống từng nhánh",
+          title: "Giữ bounds đủ, thu hẹp clip",
           explanation:
-            "place giao bounds của node với clip đang có. visit truyền kết quả đó xuống child. Node nằm hoàn toàn ngoài clip không được đưa vào paintList, dù find vẫn tìm thấy nó trong cây.",
-        },
-        {
-          title: "Áp clip vào SDL rồi trả renderer về trạng thái chung",
-          explanation:
-            "drawWidget đặt clip theo tọa độ logic và draw tắt clip trước HUD. Canvas dùng save/clip/restore. Chọn preset cắt Panel để thấy Reset chỉ còn phần nằm trong khung.",
+            "Lưu cả hai vào `WidgetView` và truyền clip đã thu hẹp xuống child. Child bị khuất hoàn toàn có thể không có view, nhưng `find` vẫn tìm thấy ID trong cây.",
         },
       ],
     },
     "p66-l04": {
       focus:
-        "Dùng cùng bounds/clip với phép vẽ, nhưng duyệt child theo thứ tự ngược để trả về một WidgetId.",
+        "Xếp Reset ở đúng chỗ Pause trong preset chồng. Nếu cứ trả ngay node đầu tiên chứa con trỏ, bạn sẽ kích hoạt nút ở bên dưới – nút mà người dùng không thấy.",
       expected:
-        "Ở preset chồng nhau, điểm (700,90) trả ID của Reset on top; hover chưa thay đổi Model.",
-      files: ["include/traversal.hpp", "include/events.hpp"],
+        "Tại (700,90), nút Reset phía trên thắng; một label đặt sau cùng không cướp click. Điểm ở mép clip không lọt tới child bên dưới.",
+      files: ["include/traversal.hpp"],
       steps: [
         {
-          title: "Loại điểm ngoài viewport hoặc clip",
+          title: "Tìm từ phần nhìn thấy ở trên cùng",
           explanation:
-            "Point phải nằm trong cả bounds và clip với quy ước half-open. Một phần button bị cắt không được nhận chuột ở vùng đã biến mất.",
+            "Dùng `rbegin()` để đi ngược các child. Label có thể che một phần nét vẽ nhưng không phải control nhận input. Panel trống vẫn chặn click để con chim sau panel không bị chọn.",
         },
         {
-          title: "Tìm từ child cuối về child đầu",
+          title: "Điểm ngoài viewport không trúng node nào",
           explanation:
-            "Parent được vẽ trước, child được thêm sau vẽ sau. Vì vậy picking tìm từ rbegin tới rend và dừng ở hit đầu tiên; không lấy node đầu trong danh sách vẽ.",
-        },
-        {
-          title: "Quy định ai nhận input",
-          explanation:
-            "Label chỉ hiển thị nên không nhận input. Panel nhận cả vùng trống, còn Button/Slider trả ID để bước sau quyết định action. Control disable vẫn chắn click nhưng không kích hoạt.",
+            "Từ chối điểm ngoài cửa sổ trước khi gọi tìm trong root. Kết quả là ID, không phải một con trỏ mà lần sau rất có thể đã hết hiệu lực.",
         },
       ],
     },
     "p66-l05": {
       focus:
-        "Giữ hot/active/focus bằng ID, nối action với Model và ánh xạ slider bằng tọa độ world của chính node đó.",
+        "Bạn đã tìm được ID dưới con trỏ. Bây giờ kéo Radius ra khỏi Panel: chim phải tiếp tục nhận bán kính mới dù chuột đã đi sang viewport. Trả ID dưới con trỏ ở mỗi frame không giải được trường hợp này.",
       expected:
-        "Pause/Reset dùng chung dispatcher; slider vẫn đúng sau khi dịch Panel, release cuối cùng được áp dụng.",
-      files: ["include/input.hpp", "include/scene.hpp", "include/events.hpp", "include/view.hpp"],
+        "Kéo Radius đến tận mép ngoài vẫn clamp ở 140. Tắt lớp quan sát không đổi các cá thể. Click panel không chọn chim ở phía sau.",
+      files: ["include/input.hpp"],
       steps: [
         {
-          title: "Tra ID trong phạm vi một sự kiện",
+          title: "Sửa đúng tham số được gắn với node",
           explanation:
-            "Ui chỉ lưu ID. Khi down, locate trả view hiện tại; khi up, tra lại trước khi dùng. WidgetView không được cất qua frame hoặc qua thao tác xóa cây.",
+            "`locate` tìm lại view còn hợp lệ. Một slider gắn Radius, slider kia gắn Separation. Đọc binding rồi gọi `assign`, không đoán loại tham số từ chữ ghi trên nhãn.",
         },
         {
-          title: "Chốt click sau khi thả đúng nút",
+          title: "Nhận mẫu cuối cùng trước khi nhả capture",
           explanation:
-            "pointerUp nhận tọa độ cuối, cập nhật slider nếu đang kéo, xóa active rồi mới xét action. Release mồ côi, release trên nút khác và cancel không tạo action.",
-        },
-        {
-          title: "Đổi X world thành trọng lực",
-          explanation:
-            "drag dùng bounds.x và bounds.width của Slider sau khi cộng mọi parent, không dùng hằng x=688. Giá trị được clamp; dịch Panel không làm slider đọc nhầm tọa độ.",
+            "Sự kiện up có thể đến ở một tọa độ mới dù không có move cuối. Ghi giá trị lần chót, xóa active, rồi chỉ kích hoạt button nếu nhấn và thả trên cùng một ID.",
         },
       ],
     },
     "p66-l06": {
       focus:
-        "Sinh focus order từ các node đang hiển thị, giữ hover độc lập và chặn key repeat cho action của Button.",
+        "Một nhóm mới được thêm vào bảng. Nếu Tab vẫn dựa trên danh sách năm nút của Project 65, người dùng bàn phím không bao giờ tới được nhóm ấy.",
       expected:
-        "Tab theo Pause→Reset→Slider; hover không đổi focus; giữ Enter không toggle liên tục, arrow vẫn repeat.",
-      files: [
-        "include/keyboard.hpp",
-        "include/traversal.hpp",
-        "include/events.hpp",
-        "include/view.hpp",
-      ],
+        "Tab và Shift+Tab đi ngược nhau; giữ Enter trên checkbox không đảo liên tục. Hai phím mũi tên trên slider chạm đúng binding của nó.",
+      files: ["include/traversal.hpp", "include/keyboard.hpp"],
       steps: [
         {
-          title: "Lấy danh sách node có thể nhận focus",
+          title: "Lấy những node có thể nhận focus",
           explanation:
-            "focusOrder đọc paintList theo preorder và chỉ giữ Button/Slider có enabled kế thừa. Label và Panel không nằm trong thứ tự Tab.",
+            "Khi toàn bộ nhóm mất khỏi clip, child cũng mất khỏi danh sách. Label còn nhìn thấy không có nghĩa là nó phải nhận Tab.",
         },
         {
-          title: "Đi tới hoặc lùi một ID",
+          title: "Đi vòng mà không tạo chỉ số âm",
           explanation:
-            "Tìm vị trí của focus hiện tại, cộng hoặc trừ 1 rồi xử lý hai đầu. Native đi vòng; Canvas trả Tab ra ngoài ở hai đầu để không nhốt người học.",
-        },
-        {
-          title: "Tách phím action khỏi phím chỉnh giá trị",
-          explanation:
-            "Enter/Space chỉ activate khi không repeat. Arrow/Home/End chỉ chỉnh Slider đang focus; Shift+arrow dịch Panel và không được đồng thời sửa gravity.",
+            "Xác định hướng và vị trí kế tiếp, cộng chiều dài trước phép modulo. Tab từ cuối về đầu; Shift+Tab từ đầu tới cuối, kể cả sau khi preset vừa đổi.",
         },
       ],
     },
     "p66-l07": {
       focus:
-        "Phân biệt ownership với visibility, dọn active/focus khi nhánh đổi và không dùng lại ID trong cùng phiên cây.",
+        "Đang kéo Radius thì toàn bộ nhóm biến mất. Một sự kiện mouse-up vẫn có thể tới ở frame sau. Không được tìm một con trỏ cũ rồi tiếp tục điều khiển đàn.",
       expected:
-        "Ẩn rồi hiện giữ ID; xóa Group loại cả button/slider, release cũ không tạo action; Label mới không mượn ID đã xóa.",
-      files: [
-        "include/mutation.hpp",
-        "include/tree.hpp",
-        "include/input.hpp",
-        "include/events.hpp",
-      ],
+        "Ẩn rồi hiện giữ ID cũ. Xóa rồi thêm Label bằng A cấp ID mới. Release muộn không chạy action và không chọn chim khác.",
+      files: ["include/mutation.hpp", "include/input.hpp"],
       steps: [
         {
-          title: "Ẩn khác với hủy đối tượng",
+          title: "Hủy nhánh sau khi bảo vệ root",
           explanation:
-            "setVisible không xóa children. find vẫn tìm thấy node, nhưng locate và focusOrder không còn đưa nhánh ẩn vào UI. Enabled cũng được kế thừa từ parent.",
+            "Xóa qua parent và cập nhật số lượng node. Những child phía dưới được hủy theo `unique_ptr`; không tái sử dụng ID vừa mất cho một button mới.",
         },
         {
-          title: "Xóa từ owner của nhánh",
+          title: "So active, focus và hot với cây mới",
           explanation:
-            "removeSubtree xóa unique_ptr trong children của parent. Các descendant bị hủy cùng nhánh. Không giữ iterator/reference rồi tiếp tục dùng sau erase; root không được xóa.",
-        },
-        {
-          title: "Đối chiếu Ui sau mutation",
-          explanation:
-            "reconcile loại active/focus không còn tương tác được và hot không còn view. Host nhả capture khi active về 0. add dùng nextId tăng dần; dựng lại toàn cây mở phiên ID mới và phải xóa Ui.",
+            "Không chỉ hỏi ID có tồn tại. Kiểm cả visible/enabled kế thừa và loại node. Hành động dọn state phải diễn ra trước khi sự kiện tiếp theo có thể dùng ID.",
         },
       ],
     },
     "p66-l08": {
       focus:
-        "Kiểm tọa độ, thứ tự vẽ/chọn, clipping, lifetime và giới hạn công việc bằng fixture độc lập ở Debug lẫn Release.",
+        "Nếu mỗi lần Reset đàn lại dựng một cây trông hệt cây cũ, người dùng có thể chẳng nhận thấy đến khi đang kéo dở slider. Ta cần kiểm điều ảnh chụp không thể cho biết.",
       expected:
-        "Các test hình học, ID, mutation, input và retained state qua Debug/Release; ZIP và mã cuối bài khớp nguồn chuẩn.",
-      files: ["include/audit.hpp", "tests/tests.cpp", "src/main.cpp"],
+        "Kiểm đúng bounds (688,80), phần Reset bị clip 36 pixel, reverse pick, Tab và việc hủy capture. Debug và Release đều qua CTest.",
+      files: ["include/audit.hpp", "tests/tests.cpp"],
       steps: [
         {
-          title: "Kiểm cấu trúc trước khi kiểm hành vi",
+          title: "Đọc toàn cây mà không sửa trạng thái",
           explanation:
-            "checkNode đếm node, ID duy nhất, depth, Rect và loại parent; audit so count với Tree rồi kiểm ID trong Ui. Đây chỉ là kiểm state hiện tại, không thay test chuỗi input.",
+            "Đếm node thực, kiểm ID duy nhất. Đối chiếu với một bản sao UI đã reconcile: nếu hot/active/focus cũ khác bản hợp lệ, báo lỗi thay vì lặng lẽ sửa giúp test.",
         },
         {
-          title: "Viết đáp án tọa độ và transition độc lập",
+          title: "Thử nghiệm đủ dài nhưng hữu hạn",
           explanation:
-            "Fixture tính Pause tại (688,80) bằng các phép cộng cụ thể, không gọi place để tạo expected. Test thay thứ tự child và xóa nhánh trong lúc active, rồi kiểm Model có đổi hay không.",
-        },
-        {
-          title: "Build và chạy trong giới hạn hữu hạn",
-          explanation:
-            "Build starter, tám checkpoint và final với hai compiler; CTest không cần window, dùng check/EXIT_FAILURE thay assert. Smoke chỉ vẽ một frame ẩn và luôn có watchdog bên ngoài.",
+            "Một nghìn frame không phải thử tải vô hạn. Duyệt, hit-test, cập nhật đàn rồi Reset; sau đó đối chiếu root, nextId và số node với fixture. CTest dùng điều kiện chạy cả khi có NDEBUG.",
         },
       ],
     },

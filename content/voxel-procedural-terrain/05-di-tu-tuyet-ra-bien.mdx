@@ -1,0 +1,105 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Theo một con sông qua năm điểm hẹn
+
+## Vấn đề cần giải quyết
+
+Lần này hãy đóng bảng số liệu và thử đoán mình đang ở đâu bằng hình ảnh. Tuyết dưới chân, tán thông thuôn và vách cao kể một câu chuyện khác hẳn bờ cát trống cuối dòng. Năm phím mốc chỉ giúp kiểm nhanh; bản đồ giữa các mốc vẫn phải đi qua được.
+
+## Hiểu ý tưởng trước khi viết code
+
+Các điểm hẹn đều là tọa độ trên cùng một seed, không phải năm màn hình độc lập. Lấy độ cao của mặt đất ngay tại điểm đặt chân để bắt đầu mỗi lần so với cùng tầm mắt.
+
+<InteractiveLab demo="voxel-procedural-terrain" mode="voxel63-5" />
+
+## Viết code từng bước
+
+Ta đã có một bản đồ liền mạch. Năm điểm dừng dưới đây là năm dấu trên **cùng** bản đồ, dùng để quay lại một góc nhìn khi thử hình ảnh; chúng không phải năm cảnh tải độc lập.
+
+### Ánh xạ phím tới chỗ đứng, không thay seed
+
+Trong `field-controls.hpp`, với phím từ F5 đến F9, lấy hiệu với F5 để có chỉ số 0–4. Chọn preset cảnh quan rồi gọi `resetPose`. Không tạo lại thế giới theo một seed mới: `Stream` tự nhận ra camera đã sang vùng khác. Hàm chọn góc đứng và hàm sóng dưới đây đều có sẵn; đây là lần đầu gắn các điểm ấy với bàn phím.
+
+{/* snippet include/trail/field-scene.hpp#route-poses */}
+
+```cpp title="include/trail/field-scene.hpp — Đặt camera trở lại một nơi có thật"
+constexpr std::array<int, 5> routes{4, 39, 96, 170, 147};
+int z = routes.at(landmark);
+const Site base = siteAt(0, z, region.seed);
+int x = int(std::floor(base.riverX + 7));
+if (landmark == 3)
+    x = int(std::floor(base.riverX + 18));
+if (landmark == 4) {
+    x = campX(region.seed) + 3;
+    z -= 4;
+}
+const Site at = siteAt(x, z, region.seed);
+camera.eye = {x + 0.5, at.ground + 2.65, z + 0.5};
+camera.yaw = -0.52;
+camera.pitch = -0.07;
+```
+
+{/* snippet include/trail/water.hpp#ocean-wave */}
+
+```cpp title="include/trail/water.hpp — Chọn thước đo đúng cho nước biển"
+inline WaterSurface oceanAt(double x, double z, double seconds) {
+    const double a = 0.53 * x + 0.23 * z - 1.6 * seconds;
+    const double b = -0.21 * x + 0.78 * z - 2.1 * seconds;
+    const double height = 0.32 * std::sin(a) + 0.13 * std::sin(b);
+    const double dx = 0.32 * 0.53 * std::cos(a) - 0.13 * 0.21 * std::cos(b);
+    const double dz = 0.32 * 0.23 * std::cos(a) + 0.13 * 0.78 * std::cos(b);
+    return {height, normalized({-dx, 1, -dz})};
+}
+```
+
+{/* snippet include/trail/field-controls.hpp#landmark-keys */}
+
+```cpp title="include/trail/field-controls.hpp — Trở về điểm quan sát trên cùng bản đồ"
+if (key >= SDLK_F5 && key <= SDLK_F9) {
+    scene.landmark = int(key - SDLK_F5);
+    scene.preset = 2;
+    scene.resetPose();
+}
+```
+
+<VoxelWorkFile project="63" step={5} file="field-controls" />
+
+### Tự đi một đoạn thay vì chỉ nhảy mốc
+
+F5 về biển, F6 về sông, F7 tới hẻm, F8 tới vùng thông tuyết và F9 tới chỗ nghỉ. Từ biển, lần theo sông bằng WASD rồi nhìn lại một cây khi quay về; dùng F6 chỉ để đối chiếu nếu lạc. Ở mốc này bạn còn đi bằng camera tự do. Thông có tuyết phủ nhưng chưa có tuyết rơi; bãi nghỉ chưa có lửa.
+
+## Ghép các phần lại
+
+Đứng cạnh hai mốc bờ riêng biệt: ở sông ghi hướng vệt nước, ở biển nhìn mép sóng cao thấp. Giữ cùng seed, đi qua biên rồi quay lại: đất và cây phải cùng chỗ; chỉ các hiệu ứng theo giờ được khác. Hai ảnh chụp tĩnh không thay cho lần đứng nhìn nước chuyển động.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_63_work --parallel 1
+.\build-work\Release\project_63_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Chụp hai lần ở hai vị trí hơi khác và gọi phần khác nhau là sóng. Hãy làm lại với cùng camera, rồi Pause và di chuyển camera để tách hai nguyên nhân.
+
+## Tự kiểm tra kết quả
+
+Trong bản bạn vừa viết, rừng, đồi đá, hẻm sâu, tuyết và bãi cát nằm trên cùng bản đồ. Ở sông nhìn được vệt nước trôi, ra biển thấy được sóng nâng hạ. CTest kiểm tính lặp lại và chiều chuyển động; còn hai hiện tượng khác nhau ra sao thì phải tự đứng bên bờ quan sát.
+
+
+Khi bản của bạn đã đủ các tính năng, chạy bộ kiểm của project trên chính `work/include`. Dùng lại thư mục `build-work` đã cấu hình với `VOXEL_WORKBOOK=ON`; chạy test của bản mẫu trong thư mục khác không kiểm được mã này.
+
+```bash title="Windows / Visual Studio — kiểm bài làm ở cả hai cấu hình"
+cmake --build build-work --config Debug --target project_63_tests --parallel 1
+ctest --test-dir build-work -C Debug --output-on-failure --timeout 30
+cmake --build build-work --config Release --target project_63_tests --parallel 1
+ctest --test-dir build-work -C Release --output-on-failure --timeout 30
+```
+
+Với Ninja/Make, kiểm Release trong `build-work`. Để kiểm Debug thật, cấu hình thêm `cmake -S . -B build-work-debug -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Debug` rồi dùng `build-work-debug` cho hai lệnh Debug. Cả hai đọc cùng một thư mục `work/`.
+
+## Bài tập mở rộng
+
+Tìm ở cửa sông một góc cho thấy nước, bờ và đường chân trời trong cùng khung. Hãy mô tả chi tiết nào cho biết đây là biển chứ không chỉ là sông rộng.
+
+[Tải mã hoàn chỉnh của Project 63](/downloads/project-63-voxel-procedural-terrain.zip) · [Sang Project 64](/projects/voxel-sandbox).

@@ -2,193 +2,230 @@ import type { ProjectLearningAssets } from "../../learning/types";
 const data = {
   guides: {
     "p54-l01": {
-      focus: "SDL/OpenGL 3.3, fullscreen triangle và render target nhỏ cố định.",
-      expected: "Vẽ ảnh đầu tiên bằng fragment shader",
+      focus: "Đi từ starter có context tới một ảnh do fragment shader vẽ ra.",
+      expected: "Một ảnh UV đầy viewport, chưa có volume.",
       files: [
-        "include/gl_api.hpp",
+        "include/platform.hpp",
         "include/program.hpp",
         "include/renderer.hpp",
-        "src/main.cpp",
         "shaders/fullscreen.vert",
-        "shaders/volume.frag",
+        "src/main.cpp",
       ],
       steps: [
         {
-          title: "Chạy bộ khung GL",
-          explanation: "Context phải có trước khi load entry points; starter chỉ clear nền.",
-        },
-        {
-          title: "Vẽ một fullscreen triangle",
-          explanation: "gl_VertexID dựng ba đỉnh, VAO hợp lệ và DrawArrays phủ target.",
-        },
-        {
-          title: "Giữ render target có giới hạn",
+          title: "Chạy starter trước",
           explanation:
-            "RGBA32F 240×180 tách khỏi kích thước cửa sổ; present pass không nhân số ray khi resize.",
+            "Platform kiểm từng tài nguyên SDL/GL; lỗi compile shader giữ tên file và driver log.",
+        },
+        {
+          title: "Vẽ một triangle đủ lớn",
+          explanation: "Ba vertex phủ viewport; gl_VertexID không cần VBO cho pass này.",
+        },
+        {
+          title: "Nối render và present",
+          explanation:
+            "Resize target theo drawable, render vào RGBA32F rồi present; đường dữ liệu này giữ lại cho các bài sau.",
         },
       ],
     },
     "p54-l02": {
-      focus: "Camera orbit, perspective ray và quy ước y CPU/GPU.",
-      expected: "Tạo một tia cho mỗi pixel của ảnh",
+      focus: "Đặt đúng ray ở tâm pixel và chứng minh camera không xoay lại mảng scalar.",
+      expected: "Màu direction đổi liên tục khi orbit/zoom.",
       files: ["include/model.hpp", "include/renderer.hpp", "shaders/volume.frag"],
       steps: [
         {
-          title: "Dựng basis từ camera",
-          explanation: "Origin/forward/right/up cùng world units, không dùng pixel làm direction.",
+          title: "Đọc basis được cung cấp",
+          explanation:
+            "Origin, forward/right/up có tên rõ; inside đổi origin nhưng vẫn giữ yaw/pitch.",
         },
         {
-          title: "Đưa basis vào shader",
-          explanation:
-            "Các uniform active được kiểm tên; upload origin chỉ khi shader thực sự dùng.",
+          title: "Đi từ pixel sang direction",
+          explanation: "FOV dọc 50°, aspect của target và pixel centre xác định ray normalized.",
         },
         {
-          title: "Tính ray tại pixel centre",
+          title: "Đối chiếu hai chiều y",
           explanation:
-            "GL gl_FragCoord y lên, Canvas v xuống; normalize để t và stepLength cùng world units.",
+            "CPU nhận v đi xuống; GL fragment đi lên. Chỉ đảo v tại ranh giới, không đảo density thêm lần nữa.",
         },
       ],
     },
     "p54-l03": {
-      focus: "Slab interval, miss, camera inside và ray song song.",
-      expected: "Chỉ lấy mẫu trong đoạn tia xuyên volume",
+      focus: "Chỉ đi trên đoạn giao volume, kể cả lúc mắt đã ở trong khối.",
+      expected: "Ảnh độ dài interval và các ca miss/parallel giải thích được.",
       files: ["include/model.hpp", "shaders/volume.frag"],
       steps: [
         {
-          title: "Tách volume khỏi surface hit",
-          explanation: "Entry clamp 0 khi camera ở trong box, khác chọn mặt exit ở Project 52.",
+          title: "Cắt ray theo từng slab",
+          explanation: "Mỗi trục cho một interval; giao ba interval mới là phần nằm trong box.",
         },
         {
-          title: "Giao ba slab",
-          explanation: "Direction zero xét trước phép chia, entry/exit và tMax=20 có giới hạn.",
+          title: "Xử lý direction zero",
+          explanation: "Kiểm slab song song trước khi chia; tránh Inf/NaN lan vào loop count.",
         },
         {
-          title: "Vẽ độ dài đoạn để debug",
-          explanation: "Ảnh length diagnostic kiểm camera/box trước texture hoặc opacity.",
+          title: "Giữ entry không âm",
+          explanation:
+            "Camera inside bắt đầu ở t=0; không đi ngược ra sau mắt hoặc lấy mẫu trên đoạn ngoài box.",
         },
       ],
     },
     "p54-l04": {
-      focus: "R32F, texel centre, GL_LINEAR và clamp-to-edge.",
-      expected: "Đưa density lên texture 3D và lấy đúng mẫu",
-      files: ["include/volume.hpp", "include/renderer.hpp", "shaders/volume.frag"],
+      focus: "Đưa mảng scalar thật lên GL_R32F và giữ đúng centre/clamp convention.",
+      expected: "Một midpoint từ texture 3D, chưa gọi đó là volume integration.",
+      files: [
+        "include/volume.hpp",
+        "include/state.hpp",
+        "include/renderer.hpp",
+        "shaders/volume.frag",
+      ],
       steps: [
         {
-          title: "Khởi tạo cùng phantom Project 53",
-          explanation: "64×48×40 float, x-fast, spacing 0.05/0.08/0.12 và 480 KiB.",
-        },
-        {
-          title: "Upload một lần khi dataset đổi",
-          explanation: "TexImage3D, GL_R32F/GL_RED/GL_FLOAT, texture unit và sampler3D.",
-        },
-        {
-          title: "Đổi world thành uvw",
+          title: "Đặt N và kiểm cấp phát",
           explanation:
-            "UVW=(p−boxMin)/extent; GL_LINEAR khớp trilinear g=uvw*N−0.5 và replicate biên.",
+            "X thay đổi nhanh nhất; spacing 2/N và giới hạn side được kiểm trước phép nhân.",
+        },
+        {
+          title: "Upload đúng kiểu",
+          explanation:
+            "GL_R32F/GL_RED/GL_FLOAT, GL_LINEAR và CLAMP_TO_EDGE; chỉ upload khi dataset đổi.",
+        },
+        {
+          title: "Đọc một điểm biết trước",
+          explanation:
+            "Ramp và constant giúp kiểm mapping; ảnh midpoint là mốc trung gian, không thay ảnh ray marching cuối.",
         },
       ],
     },
     "p54-l05": {
-      focus: "Beer–Lambert, sigma, transmittance và một midpoint approximation.",
-      expected: "Đổi density thành opacity có độ dài đoạn",
-      files: ["include/reference.hpp", "include/renderer.hpp", "shaders/volume.frag"],
+      focus: "Viết vòng march phủ hết interval rồi áp dụng hai reducer scalar.",
+      expected: "MIP và average khác nhau trên slab/lõi đặc.",
+      files: ["include/reference.hpp", "shaders/volume.frag"],
       steps: [
         {
-          title: "Phân biệt density và extinction",
-          explanation: "Density là scalar [0,1], sigma có đơn vị 1/world-unit.",
-        },
-        {
-          title: "Tính alpha từ optical depth",
-          explanation: "Alpha=1−exp(−sigma*rho*ds), không đặt alpha=rho cố định cho mỗi sample.",
-        },
-        {
-          title: "Thử medium hằng có nghiệm",
+          title: "Chia interval thành đoạn",
           explanation:
-            "Checkpoint 5 coi cả đoạn là một cell midpoint; chưa gọi là ray marching đầy đủ.",
+            "Count là ceil(L/step); mỗi ds chặn ở exit và lấy midpoint của chính đoạn ấy.",
+        },
+        {
+          title: "Giữ hai phép gộp riêng",
+          explanation: "Maximum không cần chuẩn hóa; average cộng density*ds rồi chia L.",
+        },
+        {
+          title: "Nối mode từ UI tới shader",
+          explanation:
+            "Cùng volume/camera/step, chỉ đổi uMode; chưa có màu phát xạ hay nghĩa quang học.",
         },
       ],
     },
     "p54-l06": {
-      focus: "Midpoint, partial tail, C/T và thứ tự tích lũy.",
-      expected: "Cộng từng đoạn dọc tia theo front-to-back",
-      files: ["include/reference.hpp", "shaders/volume.frag"],
+      focus: "Thêm alpha vào loop đã chạy, không đưa ra công thức chưa có bối cảnh.",
+      expected: "Các lớp gần xa đóng góp đúng thứ tự; constant medium không đổi khi đổi step.",
+      files: ["include/reference.hpp", "shaders/volume.frag", "shaders/present.frag"],
       steps: [
         {
-          title: "Chia đoạn thành bước world",
-          explanation: "Count=ceil(L/step), mẫu cuối dùng ds thật; cap 512 từ chối partial result.",
+          title: "Tính phần cản của một đoạn",
+          explanation: "Sigma*rho*ds không có đơn vị; alpha thay đổi khi ds đổi.",
         },
         {
-          title: "Tích lũy bằng T cũ",
-          explanation: "C+=T*alpha*color, T*=segmentT; không blend lại cùng opacity trong GL.",
-        },
-        {
-          title: "So oracle CPU và shader",
+          title: "Dùng T cũ trước",
           explanation:
-            "C++ dùng expm1 cho alpha nhỏ, GLSL dùng 1−exp; kiểm với tolerance thay vì bitwise.",
+            "Màu đoạn được nhân T hiện tại rồi mới giảm T; không trộn thêm alpha lần nữa ở present.",
+        },
+        {
+          title: "Kiểm medium hằng",
+          explanation:
+            "T=exp(-sigma*rho*L) là đáp số độc lập; dùng white transfer và tắt lighting khi kiểm công thức này.",
         },
       ],
     },
     "p54-l07": {
-      focus: "Transfer function, C premultiplied và background/gamma sau tích lũy.",
-      expected: "Chọn màu để thấy cấu trúc bên trong",
+      focus:
+        "Phân loại scalar, chọn palette và giải thích lighting như một lớp trình bày tùy chọn.",
+      expected: "Thấy rõ cấu trúc 3D nhưng không gọi local gradient lighting là scattering.",
       files: ["include/reference.hpp", "shaders/volume.frag", "shaders/present.frag"],
       steps: [
         {
-          title: "Map scalar sang màu riêng",
-          explanation: "Warm/cool thay màu, không thay sigma, density hay T.",
+          title: "Giữ cutoff có một nghĩa",
+          explanation: "Cả ba mode lấy cùng rho đã phân loại; đổi palette không sửa volume hoặc T.",
         },
         {
-          title: "Giữ color accumulation tuyến tính",
-          explanation: "Kết quả C/T nằm trong RGBA32F; không gamma từng sample.",
+          title: "Thêm màu trước gamma",
+          explanation: "Alpha tích lũy C linear; MIP/average ánh xạ scalar sau phép gộp.",
         },
         {
-          title: "Compose background cuối cùng",
+          title: "Bật tắt ánh sáng cục bộ",
           explanation:
-            "Display=C+T*background rồi mới approximate gamma; không gọi đây là lighting vật lý.",
+            "Gradient central difference cho normal xấp xỉ; source được cung cấp và giải thích rõ chi phí sáu mẫu phụ.",
         },
       ],
     },
     "p54-l08": {
-      focus: "Step size, early termination và ngân sách render.",
-      expected: "Đổi chất lượng mà không đổi mô hình độ đặc",
-      files: ["include/model.hpp", "include/reference.hpp", "shaders/volume.frag", "src/main.cpp"],
+      focus: "Nối input với một ray cụ thể và giữ inspector độc lập với ảnh gamma.",
+      expected: "Chọn pixel, tiến từng mẫu, đọc raw/classified density, ds và T.",
+      files: ["include/input.hpp", "include/state.hpp", "include/reference.hpp", "include/ui.hpp"],
       steps: [
         {
-          title: "Giữ giới hạn cố định",
+          title: "Chuẩn hóa điểm chọn",
           explanation:
-            "240×180 và tối đa 512 samples/ray, step 0.02..0.25; không auto-increase workload.",
+            "Shift+click dùng tọa độ trong scene, không gồm sidebar; u/v vẫn theo chiều y CPU.",
         },
         {
-          title: "Dừng sớm với error bound",
+          title: "Tách kéo và chọn",
           explanation:
-            "T≤0.001 cho bound màu khi transfer/background trong [0,1]; cap cắt ray không phải early termination.",
+            "Drag orbit không đổi u/v; mất left-button mask, blur hoặc reset đều nhả capture.",
         },
         {
-          title: "Đo trên ca hằng trước",
+          title: "Đọc trace thật",
           explanation:
-            "Constant medium phải giữ T khi đổi step; medium biến thiên cần so convergence, không chỉ FPS.",
+            "Trace gọi cùng sampling/compositing trên CPU cho ray đang chọn, không lấy giá trị từ màu ảnh đã gamma.",
         },
       ],
     },
     "p54-l09": {
-      focus: "CTest, hidden 16×12 GPU oracle, smoke shader và ZIP độc lập.",
-      expected: "Kiểm C/T trên GPU và chạy project hoàn chỉnh",
-      files: ["include/validation.hpp", "tests/tests.cpp", "src/main.cpp"],
+      focus: "Đo tradeoff trên cùng input và không đồng nhất queue time với GPU time.",
+      expected: "Bảng bốn step có max error và GPU median/IQR, có thể hủy.",
+      files: [
+        "include/benchmark.hpp",
+        "include/renderer.hpp",
+        "include/reference.hpp",
+        "shaders/volume.frag",
+      ],
       steps: [
         {
-          title: "Kiểm pure math không window",
+          title: "Đặt hai ngân sách riêng",
           explanation:
-            "Interval, texture layout, tail, Beer–Lambert và early bound đều có ca riêng.",
+            "512 đoạn/ray là hard cap; early T chỉ là xấp xỉ alpha có bound, không sửa cap.",
         },
         {
-          title: "Đọc target linear nhỏ",
+          title: "Đo một kernel đã đồng bộ",
           explanation:
-            "GPU verify so C/T ở pixel biết trước, 3 dataset và camera outside/inside; có timeout ngoài process.",
+            "GL_TIME_ELAPSED và poll availability; warm-up rồi năm lần đo cùng target 320×240.",
         },
         {
-          title: "Bàn giao đầy đủ",
+          title: "Giữ job hữu hạn",
           explanation:
-            "Starter/9 checkpoint/final/shader/tests chạy riêng; kiểm desktop interaction tách khỏi CTest/GPU numeric.",
+            "Mỗi tick một draw, có deadline/cancel; đổi tham số xóa kết quả cũ thay vì để bảng số trông như vẫn đúng.",
+        },
+      ],
+    },
+    "p54-l10": {
+      focus: "Chứng minh đúng bản chất sản phẩm, rồi bàn giao chương trình hoàn chỉnh.",
+      expected: "C++ 128³, đầy đủ mode/controls, source/ZIP khớp và giới hạn kiểm tra được ghi rõ.",
+      files: ["tests/tests.cpp", "include/validation.hpp", "src/main.cpp"],
+      steps: [
+        {
+          title: "Tách các oracle",
+          explanation:
+            "Constant/slab có đáp số độc lập; CPU/GPU cùng-step kiểm implementation; CPU fine chỉ ước lượng convergence.",
+        },
+        {
+          title: "Giữ checks trong Release",
+          explanation: "Không dùng assert để đếm PASS; NaN/Inf và sai policy đều là lỗi.",
+        },
+        {
+          title: "Build và tự dùng sản phẩm",
+          explanation:
+            "Chạy cả Debug/Release, kiểm viewport/Tab/camera/controls và đối chiếu ZIP; không coi screenshot là thay executable.",
         },
       ],
     },
@@ -196,70 +233,68 @@ const data = {
   references: {
     "p54-l01": [
       {
-        label: "SDL GL context",
+        label: "SDL_GL_CreateContext",
         href: "https://wiki.libsdl.org/SDL3/SDL_GL_CreateContext",
         kind: "SDL API",
       },
     ],
-    "p54-l02": [
-      {
-        label: "Volume transmittance",
-        href: "/glossary#volume-transmittance",
-        kind: "Thuật ngữ",
-      },
-    ],
+    "p54-l02": [{ label: "Basis của camera", href: "/glossary#camera-basis", kind: "Thuật ngữ" }],
     "p54-l03": [
-      {
-        label: "Volume transmittance",
-        href: "/glossary#volume-transmittance",
-        kind: "Thuật ngữ",
-      },
+      { label: "Ray-box slab interval", href: "/glossary#ray-slab-interval", kind: "Thuật ngữ" },
     ],
     "p54-l04": [
       {
-        label: "Volume transmittance",
-        href: "/glossary#volume-transmittance",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "OpenGL texture 3D",
+        label: "glTexImage3D",
         href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glTexImage3D.xhtml",
         kind: "OpenGL API",
       },
+      { label: "Tâm voxel và sampling", href: "/glossary#volume-trilinear", kind: "Thuật ngữ" },
     ],
     "p54-l05": [
       {
-        label: "Volume transmittance",
-        href: "/glossary#volume-transmittance",
+        label: "MIP và length-weighted average",
+        href: "/glossary#volume-projection-modes",
         kind: "Thuật ngữ",
       },
     ],
     "p54-l06": [
       {
-        label: "Volume transmittance",
-        href: "/glossary#volume-transmittance",
+        label: "Front-to-back và transmittance",
+        href: "/glossary#volume-front-to-back",
         kind: "Thuật ngữ",
       },
     ],
     "p54-l07": [
       {
-        label: "Volume transmittance",
-        href: "/glossary#volume-transmittance",
+        label: "Transfer function và gradient lighting",
+        href: "/glossary#volume-transfer-lighting",
         kind: "Thuật ngữ",
       },
     ],
     "p54-l08": [
       {
-        label: "Volume transmittance",
-        href: "/glossary#volume-transmittance",
-        kind: "Thuật ngữ",
+        label: "SDL_CaptureMouse",
+        href: "https://wiki.libsdl.org/SDL3/SDL_CaptureMouse",
+        kind: "SDL API",
       },
     ],
     "p54-l09": [
       {
-        label: "Volume transmittance",
-        href: "/glossary#volume-transmittance",
-        kind: "Thuật ngữ",
+        label: "glGetQueryObject — query result",
+        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glGetQueryObject.xhtml",
+        kind: "OpenGL API",
+      },
+      {
+        label: "SDL_GetWindowSizeInPixels",
+        href: "https://wiki.libsdl.org/SDL3/SDL_GetWindowSizeInPixels",
+        kind: "SDL API",
+      },
+    ],
+    "p54-l10": [
+      {
+        label: "CMake/SDL3 độc lập",
+        href: "https://wiki.libsdl.org/SDL3/README-cmake",
+        kind: "SDL API",
       },
     ],
   },

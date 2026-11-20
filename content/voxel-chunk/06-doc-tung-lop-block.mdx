@@ -1,106 +1,91 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
 
-# Mở từng lớp để đọc dữ liệu bên trong
+# Mở một lát ngang của bờ suối
 
 ## Vấn đề cần giải quyết
 
-Nhìn mặt ngoài chưa trả lời được “bên dưới Grass có mấy lớp Dirt?”. Ta cần đọc một ô cụ thể, xem tọa độ/index/Block ID và đối chiếu với hình cắt của khối đất.
-
-Bài này chỉ thêm **công cụ quan sát**. Bảng chỉ đọc, không sửa dữ liệu. Chọn ô trên bảng x/z không phải bắn tia từ camera; cắt hình không phải phá block. Giữ ranh giới đó giúp công cụ debug không vô tình sửa dữ liệu đang kiểm.
+Trên mặt có cỏ, nhưng dưới chân cây thực ra là đất hay đá? Không cần nhổ cây hoặc đào bờ để biết. Ta thêm một ô nhìn phụ đọc đúng một tầng y trong chunk đang giữ.
 
 ## Hiểu ý tưởng trước khi viết code
 
-`slice` chọn một y nguyên trong 0..15. Có hai cách nhìn song song:
-
-- Bảng 2D đọc đúng lớp `y=slice`.
-- Mesh 3D chỉ dựng các block có `y<=slice`, để nhìn phần dưới mặt cắt.
-
-Giảm slice **không set Air** vào chunk. Bởi vậy `solidCount` không đổi, còn số triangles trong phần hiển thị có thể giảm. Với khối đặc, slice=0 giữ 16×16 block, tạo 3072 triangles; slice=7 giữ tám lớp, tạo 24576.
-
-$$T_{full}(slice)=16^2(slice+1)\times12.$$
-
-Mặt trên của các block ở lớp cắt vốn đã nằm trong baseline sáu mặt. Ta không cần tự sinh “nắp” mới. Ở Project 59, khi bỏ mặt tiếp giáp, ta sẽ phải xác định neighbor theo miền hiển thị cho đúng; đừng áp culling sớm rồi chữa khoảng hở bằng dữ liệu giả.
+Xem ô `(x,y,z)` như một ống nghiệm: chọn y rồi đi theo hai chiều x/z. Lát là một phép **đọc**, không phải thao tác cắt mất phần đất phía trên. Thử đoán lớp nào có vệt nước liên tục trước khi bật bảng.
 
 <InteractiveLab demo="voxel-chunk" mode="voxel58-6" />
 
-Chọn đất bậc thang và kéo y xuống 3. Một số ô đang Grass, một số vẫn Dirt/Stone vì cột cao khác nhau. Đọc x=0 và x=15 để thấy cùng y không đồng nghĩa cùng vật liệu.
-
 ## Viết code từng bước
 
-### Bước 1 — Cắt mesh thay vì xóa dữ liệu
+Làm sao biết bên dưới lớp cỏ có thật sự là đất? Ta sẽ soi một tầng của cột ở góc màn hình. Tắt bảng đi thì bờ suối ban đầu phải còn nguyên.
 
-```cpp title="include/mesh.hpp"
-if (y > slice) {
-    continue;
-}
-```
+### Giữ con số y cần soi trong Scene
 
-Đặt nhánh này ngay trong vòng y của `buildMesh`, trước vòng z/x. Hàm nhận `const Chunk&`, nên compiler ngăn việc gọi `set` lên dữ liệu gốc trong đường dựng hình. Kiểm slice hợp lệ trước khi duyệt; −1 hoặc 16 không phải một lớp của chunk.
+Trong `scene.hpp`, thêm `sliceY`, cờ `showSlice` và hàm đọc `inspectedBlock`. Hàm này chỉ trả `column.get(x,y,z)`; không viết `put`, không cắt mesh. Phép tính index của bài 2 giải thích vì sao mọi ô của một tầng nằm cạnh nhau.
 
-### Bước 2 — Từ vị trí chuột đến ô bảng
+{/* snippet include/trail/blocks.hpp#local-index */}
 
-```cpp title="include/inspector.hpp"
-inline std::optional<std::array<int, 3>> pickCell(double x, double y, int slice) {
-    if (!std::isfinite(x) || !std::isfinite(y) || slice < 0 || slice >= side) {
-        return std::nullopt;
+```cpp title="include/trail/blocks.hpp — Địa chỉ bảng và địa chỉ mesh dùng chung"
+inline int localIndex(int x, int y, int z) {
+    if (x < 0 || x >= side || y < 0 || y >= side || z < 0 || z >= side) {
+        throw std::out_of_range("cell outside section");
     }
-    const double localX = x - panelX;
-    const double localZ = y - panelY;
-    if (localX < 0 || localZ < 0 || localX >= side * cellSize || localZ >= side * cellSize) {
-        return std::nullopt;
+    return x + side * (z + side * y);
+}
+```
+
+<VoxelWorkFile project="58" step={6} file="scene" />
+
+### Dùng H mở bảng, chọn tầng rồi tô ô
+
+Trong `window.hpp`, xử lý H và hai phím PageUp/PageDown, chặn y ở 0 và 15. Sau khi đã đưa ảnh 3D lên renderer, lặp qua x/z, lấy màu từ atlas cho từng vật liệu, tô ô nhỏ và in số tầng. Nền riêng của `Air` giúp phân biệt khoảng trống với đá tối.
+
+{/* snippet include/trail/window.hpp#slice-read */}
+
+```cpp title="include/trail/window.hpp — Đọc một lớp mà không thay địa hình"
+for (int z = 0; z < side; ++z) {
+    for (int x = 0; x < side; ++x) {
+        const Block block = scene.inspectedBlock(x, scene.sliceY, z);
+        Color ink{30, 39, 48};
+        if (block != Block::Air)
+            ink = atlas.sample(block, 2, 0.25, 0.5);
+        require(SDL_SetRenderDrawColor(display.renderer, ink.r, ink.g, ink.b, 255));
+        const SDL_FRect cell{float(664 + x * 8), float(24 + z * 8), 8, 8};
+        require(SDL_RenderFillRect(display.renderer, &cell));
     }
-    return std::array<int, 3>{static_cast<int>(localX / cellSize), slice, static_cast<int>(localZ / cellSize)};
 }
 ```
 
-Panel native bắt đầu ở `(660,60)`, cellSize=16. Đổi về local rồi kiểm miền nửa mở `[0,256)` trước khi chia. Vị trí đúng cạnh phải x=916 nằm **ngoài**, không được tạo ô x=16; tương tự cạnh dưới y=316.
+{/* snippet include/trail/window.hpp#slice-keys */}
 
-Tham số thứ hai của hàm là screen y, nhưng sau khi trừ panelY nó trở thành trục z trên bảng. Đặt tên `localZ` để không vô tình đưa screen y vào tọa độ world y.
-
-### Bước 3 — Đổi lớp bằng keyboard
-
-```cpp title="src/main.cpp"
-if (key == SDLK_PAGEUP) {
-    slice = std::min(15, slice + 1);
-}
-if (key == SDLK_PAGEDOWN) {
-    slice = std::max(0, slice - 1);
-}
-selected[1] = slice;
+```cpp title="include/trail/window.hpp — Giữ tầng đang soi trong khoảng hợp lệ"
+if (key == SDLK_H)
+    scene.showSlice = !scene.showSlice;
+if (key == SDLK_PAGEUP)
+    scene.sliceY = std::min(15, scene.sliceY + 1);
+if (key == SDLK_PAGEDOWN)
+    scene.sliceY = std::max(0, scene.sliceY - 1);
 ```
 
-Sau khi slice đổi, nhánh event đánh dấu dirty để dựng ảnh mới. Native chọn ô bằng click/drag trên bảng. Canvas có slider Lớp y và ô nhập x/z, nên mọi thao tác đọc block đều thực hiện được bằng bàn phím, không bắt buộc kéo chuột.
-
-### Bước 4 — Đọc dữ liệu qua cùng một công thức
-
-```cpp title="src/main.cpp"
-const std::string detail = "x=" + std::to_string(selected[0]) + " y=" + std::to_string(slice) + " z=" + std::to_string(selected[2]) + " index=" + std::to_string(voxel::index(selected[0], slice, selected[2])) + " block=" + std::to_string(static_cast<int>(voxel::get(chunk, selected[0], slice, selected[2])));
-```
-
-Chuỗi được đưa vào `SDL_RenderDebugText`. Không lấy màu màn hình để đoán Block ID: một mặt Stone tối có thể gần màu Dirt, còn mặt bị che không có pixel để đọc. `get` truy cập dữ liệu đúng cả khi ô là Air hoặc nằm sâu bên trong.
-
-Pointer capture giữ chuỗi drag khi con trỏ ra khỏi Canvas; pointer up/cancel, blur và reset đều nhả capture. Đi ra ngoài bảng không được clamp về một block mép rồi coi như đang chọn trong bảng. Native cũng chuyển event về logical coordinates và từ chối vùng letterbox ngoài nội dung.
+<VoxelWorkFile project="58" step={6} file="window" />
 
 ## Ghép các phần lại
 
-```bash title="Terminal — checkpoint 6"
-cmake --build build --config Debug --target project_58_checkpoint_6 --parallel 2
-.\build\Debug\project_58_checkpoint_6.exe
-```
+Nhấn H tại bờ suối. Đi từ tầng đáy lên ngọn rồi tắt H: thấy bố cục các ô thay đổi trong bảng, không thấy một lát nào biến mất khỏi cảnh 3D. Nhấn vượt hai đầu nhiều lần vẫn chỉ có các tầng 0–15.
 
-Với khối đặc, slice=0 cho 3072 triangles nhưng vẫn `solid=4096`. Tại `(15,0,15)`, index=255 và block=3. Với đất bậc thang, ô `(0,3,0)` là Grass=1; `(0,4,0)` là Air=0. Dữ liệu không đổi khi bạn kéo nhiều lần giữa các lớp.
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_58_work --parallel 1
+.\build-work\Release\project_58_work.exe
+```
 
 ## Thử làm sai để hiểu đúng
 
-1. Thử thay nhánh cắt bằng thao tác set các block trên slice thành Air. Khi kéo lớp lên lại, đất không trở về: công cụ quan sát đã phá dữ liệu. Hoàn nguyên, tạo lại preset và giữ `const Chunk&`.
-2. Dùng điều kiện cạnh phải `>` thay cho `>=`. Một click đúng mép tạo x=16 và `index` báo lỗi. Half-open bounds phải thống nhất ở cả picking và storage.
+Tạm đảo x và z **chỉ** khi đọc bảng và so dáng cong của lòng suối. Hình thế giới không đổi, nhưng lát bị phản chiếu qua đường chéo.
 
 ## Tự kiểm tra kết quả
 
-Số block gốc không đổi theo slice. Chọn ô cho đúng x/y/z, index và ID; click mép ngoài không chọn ô 16. Preset empty vẫn xem được bảng Air. Camera, lớp cắt và lựa chọn ô là state hiển thị, không trở thành ba bản sao Chunk. Bảng 2D không được gọi là ray picking.
+Đổi lớp làm ảnh nhỏ thay đổi; số block đặc, mesh và vị trí mắt giữ nguyên. Tắt bảng trở về viewport sạch, vẫn đọc được cỏ, cát, đất bằng mắt.
 
 ## Bài tập mở rộng
 
-Thêm tên Air/Grass/Dirt/Stone cạnh ID, dùng một bảng tra cứu nhỏ. Sau đó tự tính index cho ba ô, nhập tọa độ và kiểm với readout. Không cần thêm ray hoặc sửa block để làm bài tập đọc dữ liệu này.
+Chọn một cột x/z trên lát. Tìm hai y liên tiếp mà vật liệu đổi loại; dùng kết quả để giải thích tại sao chỗ đó là bờ.
 
-[Bài tiếp theo](/projects/voxel-chunk/07-kiem-chung-va-hoan-thien) — Kiểm chứng chunk và hoàn thiện ứng dụng.
+[Bài 7: Đi một vòng và kiểm tra bản hoàn chỉnh](/projects/voxel-chunk/07-kiem-chung-va-hoan-thien).

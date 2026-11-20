@@ -1,26 +1,26 @@
 export const voxelPickingGlossaryTerms = [
   {
     id: "voxel-camera-ray",
-    term: "Ray từ camera trực giao",
+    term: "Tia từ mắt qua một pixel",
     definition:
-      "Mỗi pixel tạo một origin khác nhau trên mặt phẳng camera, nhưng cùng direction normalized. Project 60 đảo basis yaw/pitch của renderer, phát ở depth=32 và đi vào scene. t là khoảng cách từ origin plane, không phải khoảng cách từ mắt FPS. Pixel CPU, SDL logical và CSS/DPR phải được đổi đúng trước khi tạo ray.",
+      "Trong phép chiếu phối cảnh, các tia xuất phát từ cùng một mắt và có hướng khác nhau. Tia qua tâm ảnh trùng hướng nhìn; ở mép ảnh phải cộng thêm thành phần ngang và dọc theo tiêu cự.",
   },
   {
     id: "voxel-dda-traversal",
-    term: "3D DDA voxel traversal",
+    term: "3D DDA: đi qua các ô theo tia",
     definition:
-      "Đi qua ô theo thứ tự front-to-back bằng step, tMax tới mặt phẳng lưới kế và tDelta giữa hai lần cắt cùng trục. Không dò theo một bước dt cố định. Project 60 clip trước vào chunk, bỏ contact-only trong tolerance 1e-9 theo t, đi cùng các trục tie và giới hạn 64 vòng.",
+      "Trên mỗi trục, giữ khoảng cách đến vách kế và khoảng cách giữa hai vách liên tiếp. Đi tới vách gần nhất; nếu tia cắt đúng cạnh hoặc góc thì đổi ô trên các trục cùng lúc. Trục song song tia không có lần cắt kế.",
   },
   {
     id: "voxel-entry-normal",
-    term: "Entry normal của voxel hit",
+    term: "Normal của mặt vừa đi vào",
     definition:
-      "Normal đơn trục hướng ra block ở mặt ray vừa đi vào. Đặt block tại hit.cell+normal, không phải hit.cell−normal hoặc luôn dùng ô Air cuối. Tie ưu tiên X/Y/Z. Origin hẳn trong block không có entry face; origin trên mặt voxel có thể cho t=0 và normal khác zero, kể cả mặt bên trong chunk.",
+      "Đây là hướng đơn vị ra khỏi mặt mà tia vừa xuyên qua. Khi tia qua đúng cạnh, chọn một trục theo thứ tự X, Y, Z để bảng đọc ổn định. Mắt nằm hẳn trong vật liệu cho khoảng cách 0 và không có mặt đi vào.",
   },
   {
-    id: "voxel-edit-transaction",
-    term: "Action sửa voxel",
+    id: "voxel-read-only-probe",
+    term: "Ống ngắm chỉ đọc",
     definition:
-      "Một thao tác phá/đặt truy vấn ray lại trên state hiện tại, kiểm điều kiện rồi chỉ đổi một Block ID. Miss, ô đặt ngoài chunk, thiếu normal hoặc target không Air đều không ghi. Edit thành công làm mesh/frame/pick dirty; preview và aim chỉ đọc, không được dùng Hit cũ để sửa một block khác.",
+      "Tọa độ ô, vật liệu, khoảng cách và normal được ghi trong một kết quả đo riêng. Giữ phép đo rồi đi vòng quanh không làm ô đổi loại hay mesh bị dựng lại.",
   },
 ];

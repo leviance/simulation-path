@@ -13,6 +13,7 @@ struct WidgetView {
     int depth;
 };
 
+// [snippet world-frame]
 inline std::optional<WidgetView> place(const Widget& node, Point origin, Rect clip, bool enabled, int depth) {
 #if LAB_CHECKPOINT >= 7
     if (!node.visible)
@@ -27,8 +28,10 @@ inline std::optional<WidgetView> place(const Widget& node, Point origin, Rect cl
         return std::nullopt;
     return WidgetView{&node, bounds, clip, enabled, depth};
 }
+// [/snippet world-frame]
 
 #if LAB_CHECKPOINT >= 2
+// [snippet visit-children]
 inline void visit(const Widget& node, Point origin, Rect clip, bool enabled, int depth, const std::function<void(const WidgetView&)>& draw) {
     const auto placed = place(node, origin, clip, enabled, depth);
     if (!placed)
@@ -38,6 +41,7 @@ inline void visit(const Widget& node, Point origin, Rect clip, bool enabled, int
         visit(*child, {placed->bounds.x, placed->bounds.y}, placed->clip, placed->enabled, depth + 1, draw);
     }
 }
+// [/snippet visit-children]
 #endif
 
 inline std::vector<WidgetView> paintList(const Tree& tree) {
@@ -64,6 +68,7 @@ inline std::optional<WidgetView> locate(const Tree& tree, WidgetId id) {
 }
 
 #if LAB_CHECKPOINT >= 4
+// [snippet topmost]
 inline WidgetId pick(const Widget& node, Point origin, Rect clip, bool enabled, int depth, Point point) {
     const auto placed = place(node, origin, clip, enabled, depth);
     if (!placed || !contains(placed->clip, point) || !contains(placed->bounds, point))
@@ -80,15 +85,19 @@ inline WidgetId pick(const Widget& node, Point origin, Rect clip, bool enabled, 
         return node.id;
     return 0;
 }
+// [/snippet topmost]
 
+// [snippet hit]
 inline WidgetId hitTest(const Tree& tree, Point point) {
     if (!contains(viewport, point))
         return 0;
     return pick(*tree.root, {}, viewport, true, 0, point);
 }
+// [/snippet hit]
 #endif
 
 #if LAB_CHECKPOINT >= 6
+// [snippet focus]
 inline std::vector<WidgetId> focusOrder(const Tree& tree) {
     std::vector<WidgetId> result;
     for (const WidgetView& view : paintList(tree)) {
@@ -97,6 +106,7 @@ inline std::vector<WidgetId> focusOrder(const Tree& tree) {
     }
     return result;
 }
+// [/snippet focus]
 #endif
 #endif
 } // namespace lab

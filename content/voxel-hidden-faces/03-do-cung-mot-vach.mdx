@@ -1,0 +1,100 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# So hai bức hình trước khi tin số tam giác
+
+## Vấn đề cần giải quyết
+
+Một thuật toán bỏ nhầm trọn một vách cũng có số tam giác rất đẹp. Lần này ta giữ camera, vật liệu và ánh sáng cố định, đổi riêng bộ dựng mesh rồi đi vòng sang phía khuất của vách.
+
+## Hiểu ý tưởng trước khi viết code
+
+Lấy tập mặt ngoài làm đáp án hình học. Ở mỗi vị trí có nhiều nhất một mặt cho mỗi hướng và vật liệu. Sau đó so ảnh và độ sâu ở cùng góc nhìn; phép đo thứ hai cho biết có vết hở người học thực sự nhìn thấy hay không.
+
+<InteractiveLab demo="voxel-hidden-faces" mode="voxel59-3" />
+
+## Viết code từng bước
+
+Một khối đặc chỉ cho ta xem mặt ngoài. Muốn phát hiện thuật toán bỏ nhầm mặt, hãy khoét một hốc có trần rồi tự bước vào nhìn ra ngoài.
+
+### Khoét cửa hang trong dữ liệu, không xóa mặt bằng tay
+
+Trong `visibility.hpp`, bắt đầu `stoneShelter` từ cột đặc; đổi các ô trong miền x từ 5 tới trước 11, y từ 4 tới trước 10, z từ 0 tới trước 11 thành `Air`. Bộ dựng mặt của bài 1 phải tự tạo trần, hai vách và đáy hốc mà không cần trường hợp riêng cho hang.
+
+<VoxelWorkFile project="59" step={3} file="visibility" />
+
+### Đặt mắt trước cửa rồi bật lưới để soi
+
+Trong `field-scene.hpp`, thêm preset chứa cột hang và đặt mắt trước cửa. Trong `field-controls.hpp`, nối phím 5 với việc chọn/gọi lại `generate`; phím M chỉ bật lớp lưới. Hai đoạn dưới đã thuộc đường vẽ của bài 1: một đoạn cho thấy mép tam giác, đoạn kia giữ ánh sáng nhất quán. Không dùng M để ra lệnh dựng lại địa hình.
+
+{/* snippet include/trail/field-render.hpp#wire-overlay */}
+
+```cpp title="include/trail/field-render.hpp — Vẽ cạnh lên đúng mặt đã dựng"
+if (weather.wire) {
+    for (int i = 0; i < 4; ++i)
+        meshEdge(draw, points[i], points[(i + 1) % 4]);
+    meshEdge(draw, points[0], points[2]);
+}
+```
+
+{/* snippet include/trail/field-render.hpp#face-light */}
+
+```cpp title="include/trail/field-render.hpp — Giữ cùng ánh sáng cho hai lần chụp"
+const Cell ni = neighbors[f.direction];
+const Vec3 normal{double(ni.x), double(ni.y), double(ni.z)};
+if (dot(draw.camera.eye - f.origin, normal) <= -0.55)
+    return;
+const Vec3 u = faceU[f.direction] * f.width, v = faceV[f.direction] * f.height;
+std::array<Vec3, 4> points{f.origin, f.origin + u, f.origin + u + v, f.origin + v};
+double brightness = 0.59 + 0.48 * std::max(0.0, dot(normal, draw.sun)) + normal.y * 0.055;
+```
+
+<VoxelWorkFile project="59" step={3} file="field-scene" />
+
+{/* snippet include/trail/field-controls.hpp#shelter-key */}
+
+```cpp title="include/trail/field-controls.hpp — Đặt mắt trước hang hoặc chỉ bật lưới"
+if (key == SDLK_5) {
+    scene.preset = 4;
+    scene.generate();
+}
+if (key == SDLK_M)
+    scene.weather.wire = !scene.weather.wire;
+```
+
+<VoxelWorkFile project="59" step={3} file="field-controls" />
+
+## Ghép các phần lại
+
+Nhấn 5, nhìn lên trần và về phía đáy. Bật/tắt F2 tại đúng chỗ đứng: các bề mặt đó phải còn nguyên. Nhấn M: đường lưới xuất hiện nhưng số mặt không đổi. Phím V dùng cho fixture khối đặc; nó không thay cho việc nhìn vào hốc và kiểm mép nước.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_59_work --parallel 1
+.\build-work\Release\project_59_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Bỏ nhầm hướng âm X rồi đứng ở phía dương. Ảnh đầu có vẻ đúng; đi vòng ra sau mới thấy ánh trời xuyên vách. Đưa góc nhìn thứ hai vào ca kiểm.
+
+## Tự kiểm tra kết quả
+
+Chạy CTest cho bề mặt kín, mép nước, hốc và hai chunk kề nhau. Trong ứng dụng F1 phải báo các số đo của chính cảnh đang xem; quay đầu không dựng lại mesh.
+
+
+Khi bản của bạn đã đủ các tính năng, chạy bộ kiểm của project trên chính `work/include`. Dùng lại thư mục `build-work` đã cấu hình với `VOXEL_WORKBOOK=ON`; chạy test của bản mẫu trong thư mục khác không kiểm được mã này.
+
+```bash title="Windows / Visual Studio — kiểm bài làm ở cả hai cấu hình"
+cmake --build build-work --config Debug --target project_59_tests --parallel 1
+ctest --test-dir build-work -C Debug --output-on-failure --timeout 30
+cmake --build build-work --config Release --target project_59_tests --parallel 1
+ctest --test-dir build-work -C Release --output-on-failure --timeout 30
+```
+
+Với Ninja/Make, kiểm Release trong `build-work`. Để kiểm Debug thật, cấu hình thêm `cmake -S . -B build-work-debug -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Debug` rồi dùng `build-work-debug` cho hai lệnh Debug. Cả hai đọc cùng một thư mục `work/`.
+
+## Bài tập mở rộng
+
+Tìm một lỗi có thể làm mất một mặt và thừa một mặt khác, khiến tổng không đổi. Giải thích vì sao đối chiếu theo tọa độ bắt được nó.
+
+[Tải mã hoàn chỉnh của Project 59](/downloads/project-59-voxel-hidden-faces.zip) · [Sang Project 60](/projects/voxel-ray-editor).

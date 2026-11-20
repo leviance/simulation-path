@@ -1,355 +1,329 @@
 "use client";
+import { useClientReady } from "@/components/use-client-ready";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  useCallback,
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type PointerEvent,
-} from "react";
-import {
-  audit,
-  defaultCamera,
-  index,
-  orbit,
-  pickCell,
-  scene,
-  solidCount,
-  zoom,
-  type Preset,
-  type Vec3,
-} from "@/lib/labs/voxel-chunk";
-import {
-  LabReadout,
-  canvasPoint,
-  useCanvasSize,
-  useReducedMotion,
-  usePauseOnReducedMotion,
-} from "./lab-shared";
-import { draw, layout, renderScene } from "./voxel-chunk/draw";
+  bankData,
+  localIndex,
+  spawn,
+  tileNames,
+  travel,
+  type BankPreset,
+  type View,
+} from "@/lib/labs/voxel-expedition/bank";
+import { bankImage } from "@/lib/labs/voxel-expedition/preview";
+import { fieldCommand } from "@/lib/labs/voxel-expedition/keys";
 import { VoxelFaceInspector } from "./voxel-face-inspector";
 
-function ChunkLab({ stage }: { stage: number }) {
-  const canvas = useRef<HTMLCanvasElement>(null),
-    size = useCanvasSize(canvas),
-    reduced = useReducedMotion(),
-    help = useId();
-  const initialPreset: Preset = stage >= 4 ? 2 : stage >= 3 ? 1 : 0;
-  const [preset, setPreset] = useState<Preset>(initialPreset),
-    [slice, setSlice] = useState(stage < 3 ? 7 : 15),
-    [selected, setSelected] = useState<Vec3>([7, 7, 7]);
-  const initialCamera = useMemo(
-    () => ({ ...defaultCamera, ...(stage < 3 ? { center: 7.5, scale: 60 } : {}) }),
-    [stage],
-  );
-  const [camera, setCamera] = useState(initialCamera),
-    [paused, setPaused] = useState(true),
-    [depth, setDepth] = useState(true),
-    [result, setResult] = useState("Chưa kiểm");
-  const pointer = useRef<{ id: number; x: number; y: number; kind: "orbit" | "grid" } | null>(null);
-  const release = useCallback(() => {
-    const p = pointer.current;
-    pointer.current = null;
-    if (p && canvas.current?.hasPointerCapture(p.id)) canvas.current.releasePointerCapture(p.id);
+function BankLab({ stage }: { stage: number }) {
+  const ready = useClientReady();
+  const initial: BankPreset = stage >= 4 ? "bank" : stage === 3 ? "solid" : "stone";
+  const [preset, setPreset] = useState<BankPreset>(initial);
+  const [view, setView] = useState<View>(() => spawn(initial));
+  const [slice, setSlice] = useState(4),
+    [x, setX] = useState(7),
+    [z, setZ] = useState(4);
+  const [running, setRunning] = useState(false),
+    [reduced, setReduced] = useState(false),
+    [audit, setAudit] = useState("");
+  const ref = useRef<HTMLCanvasElement>(null),
+    drag = useRef<{ id: number; x: number; y: number } | null>(null);
+  const cells = useMemo(() => bankData(preset), [preset]);
+  const count = useMemo(() => cells.reduce((s, b) => s + Number(b !== 0), 0), [cells]);
+  const reset = useCallback((value: BankPreset) => {
+    setPreset(value);
+    setView(spawn(value));
+    setRunning(false);
+    setAudit("");
+    setSlice(4);
+    setX(7);
+    setZ(4);
   }, []);
-  const stop = useCallback(() => {
-    setPaused(true);
-    release();
-  }, [release]);
-  usePauseOnReducedMotion(stop);
+  const rotate = (dx: number, dy: number) =>
+    setView((v) => ({
+      ...v,
+      yaw: v.yaw + dx,
+      pitch: Math.max(-1.45, Math.min(1.45, v.pitch - dy)),
+    }));
   useEffect(() => {
-    const hidden = () => {
-      if (document.hidden) stop();
+    const pref = matchMedia("(prefers-reduced-motion: reduce)");
+    const change = () => {
+      setReduced(pref.matches);
+      if (pref.matches) setRunning(false);
     };
-    window.addEventListener("blur", stop);
-    document.addEventListener("visibilitychange", hidden);
+    const stop = () => {
+      if (document.hidden) setRunning(false);
+    };
+    const blur = () => setRunning(false);
+    change();
+    pref.addEventListener("change", change);
+    document.addEventListener("visibilitychange", stop);
+    window.addEventListener("blur", blur);
     return () => {
-      window.removeEventListener("blur", stop);
-      document.removeEventListener("visibilitychange", hidden);
-      release();
+      pref.removeEventListener("change", change);
+      document.removeEventListener("visibilitychange", stop);
+      window.removeEventListener("blur", blur);
     };
-  }, [stop, release]);
+  }, []);
   useEffect(() => {
-    if (paused || reduced || stage < 5) return;
-    let id = 0,
-      previous = 0;
-    const frame = (now: number) => {
-      if (previous) {
-        const dt = Math.min(0.05, (now - previous) / 1000);
-        setCamera((c) => orbit(c, dt * 20, 0));
+    if (!running || reduced) return;
+    // Lượt quan sát hữu hạn, 12 thay đổi/giây; không chạy bù sau khi đổi tab.
+    let last = performance.now(),
+      elapsed = 0;
+    const id = window.setInterval(() => {
+      const now = performance.now(),
+        dt = Math.min(0.16, (now - last) / 1000);
+      last = now;
+      elapsed += dt;
+      setView((v) => ({ ...v, yaw: v.yaw + 0.12 * dt }));
+      if (elapsed >= 6) setRunning(false);
+    }, 90);
+    return () => clearInterval(id);
+  }, [running, reduced]);
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    const buffer = document.createElement("canvas");
+    buffer.width = 256;
+    buffer.height = 144;
+    const mini = buffer.getContext("2d");
+    if (!mini) return;
+    let frame = 0,
+      imageReady = false;
+    const draw = () => {
+      if (!imageReady) {
+        const image = mini.createImageData(buffer.width, buffer.height);
+        image.data.set(bankImage(cells, view, buffer.width, buffer.height));
+        mini.putImageData(image, 0, 0);
+        imageReady = true;
       }
-      previous = now;
-      id = requestAnimationFrame(frame);
+      const cssWidth = canvas.getBoundingClientRect().width;
+      if (cssWidth < 1) return;
+      const dpr = Math.min(2, window.devicePixelRatio || 1),
+        width = Math.round(cssWidth * dpr),
+        height = Math.round(((cssWidth * 9) / 16) * dpr);
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
+      context.imageSmoothingEnabled = false;
+      context.drawImage(buffer, 0, 0, width, height);
     };
-    id = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(id);
-  }, [paused, reduced, stage]);
-  const data = useMemo(() => scene(stage, preset, slice), [stage, preset, slice]);
-  const image = useMemo(() => renderScene(data.mesh, camera, depth), [data.mesh, camera, depth]);
-  useEffect(() => {
-    const ctx = canvas.current?.getContext("2d");
-    if (ctx) draw(ctx, size, image, data.chunk, stage, slice, selected);
-  }, [size, image, data.chunk, stage, slice, selected]);
-  const reset = () => {
-    stop();
-    setPreset(initialPreset);
-    setCamera(initialCamera);
-    setSlice(stage < 3 ? 7 : 15);
-    setSelected([7, 7, 7]);
-    setDepth(true);
-    setResult("Chưa kiểm");
-  };
-  const pick = (x: number, y: number) => {
-    const box = layout(size),
-      cell = pickCell(x - box.gridX, y - box.gridY, slice);
-    if (cell) setSelected(cell);
-    return cell !== null;
-  };
-  const down = (e: PointerEvent<HTMLCanvasElement>) => {
-    if (e.button !== 0 || pointer.current) return;
-    const p = canvasPoint(e, e.currentTarget),
-      grid = stage >= 6 && pick(p.x, p.y);
-    if (!grid && stage < 5) return;
-    const box = layout(size);
-    if (
-      !grid &&
-      (p.x < box.left ||
-        p.x >= box.left + 320 * box.scale ||
-        p.y < box.top ||
-        p.y >= box.top + 240 * box.scale)
-    )
-      return;
-    stop();
-    e.currentTarget.focus();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    pointer.current = { id: e.pointerId, x: p.x, y: p.y, kind: grid ? "grid" : "orbit" };
-  };
-  const move = (e: PointerEvent<HTMLCanvasElement>) => {
-    const p = pointer.current;
-    if (!p || p.id !== e.pointerId) return;
-    const next = canvasPoint(e, e.currentTarget);
-    if (p.kind === "grid") pick(next.x, next.y);
-    else {
-      const dx = (next.x - p.x) * 0.5,
-        dy = (next.y - p.y) * 0.5;
-      setCamera((c) => orbit(c, dx, dy));
-    }
-    pointer.current = { ...p, x: next.x, y: next.y };
-  };
-  const key = (e: KeyboardEvent<HTMLCanvasElement>) => {
-    if (e.repeat && [" ", "r"].includes(e.key.toLowerCase())) {
-      e.preventDefault();
+    const schedule = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(draw);
+    };
+    const observer = new ResizeObserver(schedule);
+    observer.observe(canvas.parentElement!);
+    schedule();
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, [cells, view]);
+  function key(event: React.KeyboardEvent<HTMLCanvasElement>) {
+    const k = fieldCommand(event.key, event.repeat);
+    if (!k) return;
+    if (k === "handled") {
+      event.preventDefault();
       return;
     }
-    if (e.key.toLowerCase() === "r") {
-      e.preventDefault();
-      reset();
+    if (k === "reset") {
+      event.preventDefault();
+      reset(initial);
       return;
     }
     if (stage < 5) return;
-    const actions: Record<string, () => void> = {
-      ArrowLeft: () => setCamera((c) => orbit(c, -8, 0)),
-      ArrowRight: () => setCamera((c) => orbit(c, 8, 0)),
-      ArrowUp: () => setCamera((c) => orbit(c, 0, -8)),
-      ArrowDown: () => setCamera((c) => orbit(c, 0, 8)),
-      "+": () => setCamera((c) => zoom(c, 1)),
-      "=": () => setCamera((c) => zoom(c, 1)),
-      "-": () => setCamera((c) => zoom(c, -1)),
-      " ": () => {
-        release();
-        if (!reduced) setPaused((v) => !v);
-      },
+    const moves: Record<string, [number, number, number]> = {
+      w: [0.5, 0, 0],
+      s: [-0.5, 0, 0],
+      a: [0, -0.5, 0],
+      d: [0, 0.5, 0],
+      q: [0, 0, -0.5],
+      e: [0, 0, 0.5],
     };
-    if (actions[e.key]) {
-      e.preventDefault();
-      actions[e.key]();
+    if (moves[k]) {
+      event.preventDefault();
+      setView((v) => travel(v, ...moves[k]));
     }
-  };
-  const currentIndex = index(selected[0], slice, selected[2]);
+    if (["arrowleft", "arrowright", "arrowup", "arrowdown"].includes(k)) {
+      event.preventDefault();
+      rotate(
+        Number(k === "arrowright") * 0.08 - Number(k === "arrowleft") * 0.08,
+        Number(k === "arrowdown") * 0.08 - Number(k === "arrowup") * 0.08,
+      );
+    }
+    if (k === "pause" && !reduced) {
+      event.preventDefault();
+      setRunning((v) => !v);
+    }
+  }
+  const index = localIndex(x, slice, z);
   return (
-    <div
-      className="interactive-lab"
-      data-testid="voxel-chunk-lab"
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) stop();
+    <fieldset
+      className="voxel-walklab"
+      data-ready={ready}
+      disabled={!ready}
+      inert={!ready}
+      style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) setRunning(false);
       }}
     >
+      <div style={{ width: "100%", aspectRatio: "16/9" }}>
+        <canvas
+          ref={ref}
+          tabIndex={0}
+          aria-label="Bờ suối nhìn từ camera"
+          onKeyDown={key}
+          onPointerDown={(e) => {
+            if (stage < 5 || drag.current) return;
+            e.currentTarget.focus();
+            e.currentTarget.setPointerCapture(e.pointerId);
+            drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY };
+          }}
+          onPointerMove={(e) => {
+            const p = drag.current;
+            if (!p || p.id !== e.pointerId) return;
+            rotate((e.clientX - p.x) * 0.006, (e.clientY - p.y) * 0.006);
+            p.x = e.clientX;
+            p.y = e.clientY;
+          }}
+          onPointerUp={(e) => {
+            if (e.currentTarget.hasPointerCapture(e.pointerId))
+              e.currentTarget.releasePointerCapture(e.pointerId);
+            drag.current = null;
+          }}
+          onLostPointerCapture={() => {
+            drag.current = null;
+          }}
+          onPointerCancel={() => {
+            drag.current = null;
+          }}
+          style={{
+            width: "100%",
+            height: "100%",
+            display: "block",
+            touchAction: stage >= 5 ? "none" : "auto",
+          }}
+        >
+          Ảnh phối cảnh bên bờ suối. Các nút bên dưới cũng điều khiển được vị trí mắt.
+        </canvas>
+      </div>
+      <p>
+        {stage >= 5
+          ? "Nhấn W/A/S/D để đi, Q/E để đổi độ cao; kéo để nhìn hoặc dùng các phím mũi tên."
+          : "Nhìn các mặt gần, xa và hướng của họa tiết. Từ bài 05 bạn sẽ tự di chuyển camera."}{" "}
+        Canvas lấy mẫu ảnh thu nhỏ; bộ đếm bên dưới là số tam giác của mesh C++ chưa tối ưu.
+      </p>
       <div className="lab-controls">
-        <button onClick={reset}>Đặt lại</button>
         {stage >= 4 && (
           <label>
-            Khối mẫu{" "}
+            Cảnh mẫu{" "}
             <select
-              aria-label="Khối mẫu"
+              aria-label="Cảnh mẫu"
               value={preset}
-              onChange={(e) => {
-                stop();
-                setPreset(Number(e.target.value) as Preset);
-                setResult("Chưa kiểm");
-              }}
+              onChange={(e) => reset(e.target.value as BankPreset)}
             >
-              <option value={0}>Một block</option>
-              <option value={1}>Khối đặc 16³</option>
-              <option value={2}>Đất bậc thang</option>
-              <option value={3}>Toàn Air</option>
+              <option value="bank">Bờ suối</option>
+              <option value="stone">Một viên đá</option>
+              <option value="solid">Khối đặc</option>
+              <option value="empty">Toàn không khí</option>
             </select>
           </label>
         )}
-        {stage < 4 && <button onClick={reset}>Preset của bài</button>}
         {stage >= 5 && (
           <>
+            <button type="button" onClick={() => setView((v) => travel(v, 0.75, 0))}>
+              Bước tới
+            </button>
+            <button type="button" onClick={() => rotate(0.14, 0)}>
+              Nhìn sang phải
+            </button>
             <button
+              type="button"
               disabled={reduced}
-              onClick={() => {
-                release();
-                setPaused((v) => !v);
-              }}
+              aria-pressed={running}
+              onClick={() => setRunning((v) => !v)}
             >
-              {paused ? "Chạy xoay" : "Tạm dừng"}
+              {running ? "Tạm dừng" : "Quan sát tự động"}
             </button>
-            <button
-              onClick={() => {
-                stop();
-                setCamera((c) => orbit(c, 8, 0));
-              }}
-            >
-              Xoay một bước
-            </button>
-            <label>
-              Zoom{" "}
-              <input
-                aria-label="Zoom"
-                type="range"
-                min="0.5"
-                max="1.5"
-                step="0.05"
-                value={camera.zoom}
-                onChange={(e) => {
-                  stop();
-                  const value = Number(e.target.value);
-                  setCamera((c) => ({ ...c, zoom: value }));
-                }}
-              />
-            </label>
-            <label>
-              <input type="checkbox" checked={depth} onChange={(e) => setDepth(e.target.checked)} />
-              Z-buffer
-            </label>
           </>
         )}
-        {stage >= 6 && (
-          <>
-            <label>
-              Lớp y{" "}
-              <input
-                aria-label="Lớp y"
-                type="range"
-                min="0"
-                max="15"
-                step="1"
-                value={slice}
-                onChange={(e) => {
-                  stop();
-                  setSlice(Number(e.target.value));
-                }}
-              />
-            </label>
-            <label>
-              Ô x{" "}
-              <input
-                aria-label="Ô x"
-                type="number"
-                min="0"
-                max="15"
-                value={selected[0]}
-                onChange={(e) => {
-                  const x = Number(e.target.value);
-                  if (Number.isInteger(x) && x >= 0 && x < 16) setSelected((p) => [x, p[1], p[2]]);
-                }}
-              />
-            </label>
-            <label>
-              Ô z{" "}
-              <input
-                aria-label="Ô z"
-                type="number"
-                min="0"
-                max="15"
-                value={selected[2]}
-                onChange={(e) => {
-                  const z = Number(e.target.value);
-                  if (Number.isInteger(z) && z >= 0 && z < 16) setSelected((p) => [p[0], p[1], z]);
-                }}
-              />
-            </label>
-          </>
-        )}
+        <button type="button" onClick={() => reset(initial)}>
+          Đặt lại
+        </button>
         {stage >= 7 && (
           <button
+            type="button"
             onClick={() => {
-              stop();
-              setResult(audit());
+              const full = bankData("solid"),
+                empty = bankData("empty");
+              setAudit(
+                full.every((b) => b === 3) && empty.every((b) => b === 0)
+                  ? "Đạt: khối đặc 49.152 tam giác, không khí 0."
+                  : "Không đạt",
+              );
             }}
           >
             Kiểm chứng
           </button>
         )}
       </div>
-      <canvas
-        ref={canvas}
-        style={{ width: "100%", height: 580, touchAction: "none" }}
-        tabIndex={0}
-        aria-label="Voxel Chunk Lab"
-        aria-describedby={help}
-        onKeyDown={key}
-        onPointerDown={down}
-        onPointerMove={move}
-        onPointerUp={release}
-        onPointerCancel={stop}
-        onLostPointerCapture={() => {
-          pointer.current = null;
-        }}
-      />
-      <p id={help}>
-        Trên: hình chiếu trực giao với Z-buffer CPU 320×240. Dưới: lớp dữ liệu x/z, Air là ô tối.{" "}
-        {stage >= 5
-          ? "Kéo hình hoặc dùng phím mũi tên để xoay, +/− để zoom, Space để chạy/dừng. "
-          : "Camera cố định ở các bài đầu. "}
-        {stage >= 6
-          ? "Chọn ô trong bảng hoặc nhập x/z; đây không phải ray picking hay thao tác phá block. "
-          : ""}
-        R đặt lại.{" "}
-        {reduced ? "Reduced motion: chỉ xoay thủ công." : "Mở bài ở trạng thái tạm dừng."}
-      </p>
-      <LabReadout
-        items={[
-          { label: "Block đặc trong dữ liệu", value: solidCount(data.chunk) },
-          { label: "Tam giác đang gửi rasterizer", value: data.mesh.length },
-          { label: "Mặt quad", value: data.mesh.length / 2 },
-          {
-            label: "Ô đang đọc",
-            value: `(${selected[0]}, ${slice}, ${selected[2]}) → index ${currentIndex}, block ${data.chunk[currentIndex]}`,
-          },
-          {
-            label: "Camera",
-            value: `yaw ${camera.yaw.toFixed(2)}, pitch ${camera.pitch.toFixed(2)}, zoom ${camera.zoom.toFixed(2)}`,
-          },
-          { label: "Kiểm chứng", value: result },
-        ]}
-      />
+      {stage >= 6 && (
+        <fieldset>
+          <legend>Đọc một ô, không sửa đất</legend>
+          {(
+            [
+              ["Ô x", x, setX],
+              ["Lớp y", slice, setSlice],
+              ["Ô z", z, setZ],
+            ] as const
+          ).map(([label, value, change]) => (
+            <label key={label}>
+              {label}{" "}
+              <input
+                aria-label={label}
+                type="range"
+                min="0"
+                max="15"
+                value={value}
+                onChange={(e) => change(Number(e.target.value))}
+              />{" "}
+              {value}{" "}
+            </label>
+          ))}
+          <p>
+            Ô ({x}, {slice}, {z}) · index {index} · {tileNames[cells[index]]}.
+          </p>
+        </fieldset>
+      )}
+      <dl className="lab-readout">
+        <div>
+          <dt>Block đặc</dt>
+          <dd>{count}</dd>
+        </div>
+        <div>
+          <dt>Tam giác của mesh</dt>
+          <dd>{count * 12}</dd>
+        </div>
+        <div>
+          <dt>Vị trí mắt</dt>
+          <dd>{view.eye.map((n) => n.toFixed(2)).join(", ")}</dd>
+        </div>
+        <div>
+          <dt>Góc nhìn ngang</dt>
+          <dd>{view.yaw.toFixed(2)} rad</dd>
+        </div>
+      </dl>
+      {audit && <p role="status">{audit}</p>}
       {stage === 1 && <VoxelFaceInspector />}
-      <p>
-        Mesh vẫn chứa mặt bên trong và mặt quay lưng. Z-buffer chỉ quyết định pixel được thấy, không
-        làm giảm số tam giác. Màu đậm/nhạt theo hướng mặt là quy ước minh họa, không phải ánh sáng
-        vật lý.
-      </p>
-    </div>
+    </fieldset>
   );
 }
+
 export default function VoxelChunkLab({ mode }: { mode?: string }) {
   const match = mode?.match(/^voxel58-([1-7])$/);
   const stage = match ? Number(match[1]) : 7;
-  return <ChunkLab key={stage} stage={stage} />;
+  return <BankLab key={stage} stage={stage} />;
 }

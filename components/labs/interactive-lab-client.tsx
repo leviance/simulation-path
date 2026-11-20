@@ -17,7 +17,9 @@ export function InteractiveLabClient({
 }) {
   const modeInfo = mode ? metadata.modes[mode] : undefined;
   const info = { ...metadata.base, ...modeInfo };
-  const Lab = labComponents[demo];
+  if (!(demo in labComponents))
+    throw new Error(`Missing presentation for ${demo}/${mode ?? "overview"}`);
+  const Lab = labComponents[demo as keyof typeof labComponents];
 
   return (
     <section className="interactive-lab">

@@ -7,73 +7,66 @@ import * as terrain from "../lib/labs/voxel-procedural-terrain.ts";
 import * as sandbox from "../lib/labs/voxel-sandbox.ts";
 import * as controls from "../lib/labs/simulator-controls.ts";
 import { verifyTriangles } from "../lib/labs/voxel-chunk-streaming/mesh-audit.ts";
+import * as field from "../lib/labs/voxel-expedition/field.ts";
+const fieldLab = "voxel-expedition/field-lab.tsx";
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-12, `${a} != ${b}`);
 
-test("review63: the actual Canvas audit rejects a missing render buffer even when quads still pass", async () => {
+test("review63: a missing render buffer still fails the retained geometry audit", () => {
   const state = terrain.createTerrain();
   state.world.chunks.get("0,0").mesh.length = 0;
-  let message = "";
-  const audit = await componentCallback("voxel-procedural-terrain-lab.tsx", "audit", {
-    state,
-    stop() {},
-    verifySchedule: stream.verifySchedule,
-    verifySurface: stream.verifySurface,
-    verifyColumns: terrain.verifyColumns,
-    verifyTriangles,
-    setMessage(value) {
-      message = value;
-    },
-  });
-  audit();
-  assert.match(message, /FAIL.*triangle count/);
+  assert.ok(stream.verifySurface(state.world) > 0);
+  assert.throws(() => verifyTriangles(state.world), /triangle count/);
 });
 
-test("review64: actual frame/pick callbacks share the adaptive near/far rather than camera defaults", async () => {
-  const state = sandbox.createSandbox();
-  stream.drain(state.world);
-  stream.movePlayer(state.world, 512, -512);
-  const camera = { ...stream.streamingCamera, scale: 2, yaw: -0.7 };
-  const volume = sandbox.cameraVolume(state.world, camera);
-  assert.ok(volume.near > 64);
-  const env = {
-    state,
-    camera,
-    aim: { x: 171, y: 149 },
-    stage: 3,
-    cached: { current: null },
-    pickDirty: { current: true },
-    rasters: { current: 0 },
-    queries: { current: 0 },
-    cameraVolume: sandbox.cameraVolume,
-    flushEdits: sandbox.flushEdits,
-    sceneMesh: stream.sceneMesh,
-    raster(mesh, cam, useDepth, range) {
-      assert.deepEqual(range, volume);
-      return stream.raster(mesh, cam, useDepth, range);
-    },
-    cameraRay(cam, player, x, y, nearDepth) {
-      assert.equal(nearDepth, volume.near);
-      return sandbox.cameraRay(cam, player, x, y, nearDepth);
-    },
-    traceWorld: sandbox.traceWorld,
-    setView() {},
-  };
-  const effect = await componentEffect("voxel-sandbox-lab.tsx", "flushEdits(state)", env);
-  effect();
-  assert.equal(env.rasters.current, 1);
-  assert.equal(env.queries.current, 1);
-  const action = await componentCallback("voxel-sandbox-lab.tsx", "action", {
-    ...env,
-    material: 1,
-    stop() {},
-    setMessage() {},
-    publish() {},
-    editRay(s, ray) {
-      assert.deepEqual(ray, sandbox.cameraRay(camera, state.world.player, 171, 149, volume.near));
-      return false;
+test("review64: every field frame passes its exact clock, position, overlays and wind to the renderer", async () => {
+  let seen;
+  const view = { yaw: 0.7, pitch: -0.4 },
+    streamState = { x: 40, z: -32 };
+  const ctx = {},
+    rects = [],
+    bank = {};
+  const effect = await componentEffect(fieldLab, "drawField(", {
+    canvas: { current: { getContext: () => ctx } },
+    geometry: { rects },
+    bank,
+    id: 64,
+    stage: 4,
+    clock: 3.5,
+    wind: 2,
+    angle: 0.7,
+    sceneHour: 17,
+    mark: 4,
+    clouds: false,
+    snow: true,
+    wire: false,
+    probe: true,
+    view,
+    stream: streamState,
+    drawField(...args) {
+      seen = args;
     },
   });
-  action(false);
+  effect();
+  assert.deepEqual(seen, [
+    ctx,
+    {
+      id: 64,
+      stage: 4,
+      rects,
+      time: 3.5,
+      wind: 2,
+      angle: 0.7,
+      hour: 17,
+      mark: 4,
+      clouds: false,
+      snow: true,
+      wire: false,
+      probe: true,
+      view,
+      stream: streamState,
+    },
+    bank,
+  ]);
 });
 
 test("review65: actual Canvas down callback does not enable scene clicks before lesson 06", async () => {
@@ -251,37 +244,55 @@ test("review65: each lesson enables only its checkpoint's input and final remain
   }
 });
 
-test("review61: actual playback waits 150ms, pause/resume starts a fresh clock and stalls do not catch up", async () => {
-  const frames = [];
-  let shown = 0;
-  const effect = await componentEffect("voxel-greedy-meshing-lab.tsx", "playbackDue", {
-    paused: false,
+test("review61: field playback never catches up an entire stall, stops at its deadline and respects reduced motion", async () => {
+  let now = 1000,
+    timer = null,
+    stopped = false,
+    releases = 0;
+  const samples = [],
+    listeners = new Map();
+  const target = {
+    addEventListener: (k, v) => listeners.set(k, v),
+    removeEventListener: (k) => listeners.delete(k),
+  };
+  const env = {
+    running: true,
     reduced: false,
-    stage: 7,
-    rects: Array(4),
-    createPlaybackClock: greedy.createPlaybackClock,
-    playbackDue: greedy.playbackDue,
-    requestAnimationFrame(fn) {
-      frames.push(fn);
-      return frames.length;
+    performance: { now: () => now },
+    window: target,
+    document: { ...target, hidden: false },
+    setRunning(value) {
+      stopped = !value;
     },
-    cancelAnimationFrame() {},
-    setShown(update) {
-      shown = update(shown);
+    setInterval(fn) {
+      timer = fn;
+      return 7;
     },
-  });
-  effect();
-  for (const now of [1000, 1100, 1149]) {
-    frames.shift()(now);
-    assert.equal(shown, 0);
-  }
-  frames.shift()(1150);
-  assert.equal(shown, 1);
-  const clock = greedy.createPlaybackClock();
-  assert.equal(greedy.playbackDue(clock, 5000), false);
-  assert.equal(greedy.playbackDue(clock, 50000), false);
-  assert.equal(greedy.playbackDue(clock, 50050), true);
-  assert.equal(greedy.playbackDue(clock, NaN), false);
+    clearInterval(id) {
+      assert.equal(id, 7);
+      releases++;
+    },
+    tick(dt) {
+      samples.push(dt);
+    },
+  };
+  const effect = await componentEffect(fieldLab, "const end = last", env);
+  const dispose = effect();
+  now += 100;
+  timer();
+  now += 4000;
+  timer();
+  assert.deepEqual(samples, [0.1, 0.16]);
+  now = 21000;
+  timer();
+  assert.equal(stopped, true);
+  assert.equal(samples.length, 2);
+  dispose();
+  assert.equal(releases, 1);
+  assert.equal(listeners.size, 0);
+  timer = null;
+  (await componentEffect(fieldLab, "const end = last", { ...env, reduced: true }))();
+  assert.equal(timer, null);
 });
 
 test("review61: the 4x4 teaching mask has four rectangles and explains both rejection cells", () => {
@@ -320,78 +331,72 @@ test("review61: the 4x4 teaching mask has four rectangles and explains both reje
   assert.equal(full.height.cell, null);
 });
 
-test("review62: actual position preset retains radius, budget, resident buffers and cumulative counters", async () => {
-  const world = stream.createWorld();
-  stream.drain(world);
-  stream.settings(world, 2, 1);
-  stream.pump(world);
-  const before = {
-    loads: world.loads,
-    chunks: world.chunks,
-    count: world.chunks.size,
-    ticks: world.ticks,
-    cancelled: world.cancelled,
-  };
-  const choose = await componentCallback("voxel-chunk-streaming-lab.tsx", "choose", {
-    world,
-    presets: stream.presets,
-    movePlayer: stream.movePlayer,
-    centerOf: stream.centerOf,
-    stop() {},
-    setPreset() {},
-    setSelected() {},
-    publish() {},
-    createWorld() {
-      throw Error("Preset must not create a new World");
+test("review62: moving the actual field queue keeps nearby loaded chunks and cancels work that is no longer wanted", async () => {
+  let current = field.pump(field.planStream(undefined, 0, 0), 3);
+  const initial = [...current.resident],
+    previous = current.wanted.slice();
+  const move = await componentCallback(fieldLab, "move", {
+    id: 62,
+    planStream: field.planStream,
+    clamp: field.clamp,
+    setStream(next) {
+      current = next(current);
     },
   });
-  choose(2);
-  assert.equal(world.radius, 2);
-  assert.equal(world.budget, 1);
-  assert.equal(world.loads, before.loads);
-  assert.equal(world.chunks, before.chunks);
-  assert.equal(world.chunks.size, before.count);
-  assert.equal(world.ticks, before.ticks);
-  assert.equal(world.player.x, 200);
-  assert.equal(world.player.z, -200);
-  assert.ok(world.cancelled > before.cancelled);
-  stream.pump(world);
-  assert.equal(world.lastBudget, 1);
-  assert.equal(world.lastJobs, 1);
+  move(1, 0);
+  assert.ok(initial.every((key) => current.resident.has(key)));
+  assert.notDeepEqual(current.wanted, previous);
+  const before = current.resident.size;
+  current = field.pump(current, 2);
+  assert.equal(current.resident.size, before + 2);
+  move(20, -20);
+  assert.equal(current.resident.size, 0);
+  assert.equal(current.unloaded, before + 2);
+  assert.equal(current.wanted[0], "21,-20");
+  assert.ok(previous.every((key) => !current.wanted.includes(key)));
 });
 
-for (const file of [
-  "voxel-greedy-meshing-lab.tsx",
-  "voxel-chunk-streaming-lab.tsx",
-  "voxel-procedural-terrain-lab.tsx",
-  "voxel-sandbox-lab.tsx",
-]) {
-  test(`review63/64: ${file} ignores a second pointer and unrelated up/cancel/lost-capture`, async () => {
-    const pointer = { current: { id: 11 } },
+for (const attribute of ["onPointerUp", "onPointerCancel", "onLostPointerCapture"]) {
+  test("field diagrams: " + attribute + " can end only the owner's gesture", async () => {
+    const pointer = { current: null },
       calls = [];
-    const env = {
-      pointer,
-      release() {
-        calls.push("release");
-        pointer.current = null;
+    let captured;
+    const target = {
+      focus() {
+        calls.push("focus");
       },
-      stop() {
-        throw Error("Second down stole gesture");
+      setPointerCapture(id) {
+        captured = id;
+      },
+      hasPointerCapture(id) {
+        return captured === id;
+      },
+      releasePointerCapture(id) {
+        calls.push(id);
+        captured = null;
       },
     };
-    if (file === "voxel-greedy-meshing-lab.tsx" || file === "voxel-chunk-streaming-lab.tsx")
-      env.down = await componentCallback(file, "down", env);
-    const down = await canvasCallback(file, "onPointerDown", env);
-    down({ button: 0, pointerId: 22 });
-    for (const attribute of ["onPointerUp", "onPointerCancel", "onLostPointerCapture"]) {
-      const handler = await canvasCallback(file, attribute, env);
-      handler({ pointerId: 22 });
-      assert.equal(pointer.current.id, 11);
-    }
-    const up = await canvasCallback(file, "onPointerUp", env);
-    up({ pointerId: 11 });
+    const down = await canvasCallback(fieldLab, "onPointerDown", { pointer });
+    const input = (id) => ({
+      button: 0,
+      pointerId: id,
+      clientX: 2,
+      clientY: 3,
+      currentTarget: target,
+    });
+    down({ ...input(30), button: 2 });
     assert.equal(pointer.current, null);
-    assert.deepEqual(calls, ["release"]);
+    down(input(11));
+    down(input(22));
+    assert.equal(pointer.current.id, 11);
+    const finishDrag = await componentCallback(fieldLab, "finishDrag", { pointer });
+    const stop = await canvasCallback(fieldLab, attribute, { finishDrag });
+    stop(input(22));
+    assert.equal(pointer.current.id, 11);
+    stop(input(11));
+    stop(input(11));
+    assert.equal(pointer.current, null);
+    assert.deepEqual(calls, ["focus", 11]);
   });
 }
 
@@ -417,41 +422,14 @@ test("review63: interpolation corners, negative coordinate fixture and linear/sm
   assert.throws(() => terrain.interpolationCell(3, 0, 0.5, 0.5, 42));
 });
 
-test("review64: actual audit and tick callbacks cannot keep a PASS label after topology changes", async () => {
-  const state = sandbox.createSandbox(),
-    topologyRevision = { current: 0 },
-    pickDirty = { current: false };
-  let result = null;
-  const env = {
-    state,
-    topologyRevision,
-    pickDirty,
-    setVersion() {},
-    setPaused() {},
-    stop() {},
-    flushEdits: sandbox.flushEdits,
-    verifySchedule: stream.verifySchedule,
-    verifySurface: stream.verifySurface,
-    verifyTriangles,
-    pump: stream.pump,
-    setAuditResult(value) {
-      result = value;
-    },
-  };
-  env.publish = await componentCallback("voxel-sandbox-lab.tsx", "publish", env);
-  const audit = await componentCallback("voxel-sandbox-lab.tsx", "audit", env),
-    tick = await componentCallback("voxel-sandbox-lab.tsx", "tickOnce", env);
-  audit();
-  assert.match(sandbox.auditLabel(result, topologyRevision.current), /PASS.*874/);
-  tick();
-  assert.equal(state.world.chunks.size, 3);
-  assert.match(sandbox.auditLabel(result, topologyRevision.current), /Cần kiểm lại/);
-  audit();
-  assert.match(sandbox.auditLabel(result, topologyRevision.current), /PASS.*2494/);
-  stream.drain(state.world);
-  audit();
-  tick();
-  assert.match(sandbox.auditLabel(result, topologyRevision.current), /PASS/);
+test("review64: an audit result is valid only for the terrain revision it checked", () => {
+  const state = sandbox.createSandbox();
+  const stamp = (revision) => ({ revision, message: "PASS " + stream.verifySurface(state.world) });
+  const before = stamp(0);
+  assert.match(sandbox.auditLabel(before, 0), /PASS.*874/);
+  stream.pump(state.world);
+  assert.match(sandbox.auditLabel(before, 1), /Cần kiểm lại/);
+  assert.match(sandbox.auditLabel(stamp(1), 1), /PASS.*2494/);
 });
 
 test("review65: pointerup commits the final slider position, while cancel never invents a final sample", () => {

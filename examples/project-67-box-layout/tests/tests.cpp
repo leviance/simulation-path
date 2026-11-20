@@ -24,17 +24,22 @@ int main() {
     ensureLayout(state, ui);
     const auto group = locate(state.scene.tree, state.scene.group);
     const auto pause = locate(state.scene.tree, state.scene.pause);
-    check(group && group->bounds.height == 252, "Group auto height = 28 + 192 + 32");
+    check(group && group->bounds.height == 352, "Group auto height = 28 + 276 + 48");
     check(pause && pause->bounds.x == 656 && pause->bounds.y == 96 && pause->bounds.width == 240 && pause->bounds.height == 36, "independent nested world fixture");
-    check(state.sizes.at(1).naturalHeight == 360 && state.scene.tree.root->local.height == 492, "natural height is not fixed height");
-    check(auditLayout(state) == 9, "valid initial state");
+    check(state.sizes.at(1).naturalHeight == 460 && state.scene.tree.root->local.height == 492, "natural height is not fixed height");
+    check(auditLayout(state) == 11, "valid initial state");
 
     // Ẩn bỏ một outer height 44 và một gap 8; hiện lại phục hồi Rect.
     const Rect sliderBefore = find(*state.scene.tree.root, state.scene.slider)->local;
     toggleReset(state, ui);
     ensureLayout(state, ui);
-    check(state.sizes.at(state.scene.group).height == 200, "hidden removes margins and one gap");
+    check(state.sizes.at(state.scene.group).height == 300, "hidden removes margins and one gap");
     check(find(*state.scene.tree.root, state.scene.slider)->local.y == sliderBefore.y - 52, "following children move automatically");
+    const auto moved = locate(state.scene.tree, state.scene.slider);
+    const Point middle{moved->bounds.x + 120, moved->bounds.y + 16};
+    check(pointerDown(state.scene.tree, model, ui, middle) && ui.active == state.scene.slider, "reflow also moves the slider hit area");
+    pointerUp(state.scene.tree, model, ui, middle);
+    check(model.colony.params.radius == 80 && !ui.active, "reflow slider writes the live flock radius");
     toggleReset(state, ui);
     ensureLayout(state, ui);
     check(find(*state.scene.tree.root, state.scene.slider)->local.y == sliderBefore.y, "show restores layout");
@@ -63,7 +68,8 @@ int main() {
         check(appendLabel(state, ui), "append within cap");
     check(!appendLabel(state, ui), "reject fifth extra Label");
     ensureLayout(state, ui);
-    check(state.sizes.at(1).naturalHeight == 520 && state.sizes.at(state.scene.group).height == 412, "vertical overflow is not shrink");
+    // Mỗi Label thêm 24 + 4 + 4 + 8 = 40; root vẫn có khung cố định 492.
+    check(state.sizes.at(1).naturalHeight == 620 && state.sizes.at(state.scene.group).height == 512, "vertical overflow is not shrink");
     const WidgetId removed = state.extras.back();
     const WidgetId idBefore = state.scene.tree.nextId;
     check(removeLabel(state, ui), "remove last Label");
@@ -77,29 +83,30 @@ int main() {
     // Core hủy active khi geometry đổi; capture của hệ điều hành thuộc host.
     const auto slider = locate(state.scene.tree, state.scene.slider);
     pointerDown(state.scene.tree, model, ui, {slider->bounds.x + 120, slider->bounds.y + 10});
-    check(ui.active == state.scene.slider && model.gravity == 600, "slider begins at old geometry");
+    check(ui.active == state.scene.slider && model.colony.params.radius == 80, "slider begins at old geometry");
     setWidth(state, ui, 220);
     check(ui.active == 0 && state.dirty, "resize cancels old gesture before layout");
-    const double gravity = model.gravity;
+    const double radiusBefore = model.colony.params.radius;
     ensureLayout(state, ui);
     pointerUp(state.scene.tree, model, ui, {1200, 250});
-    check(model.gravity == gravity, "orphan release does not apply old sample");
+    check(model.colony.params.radius == radiusBefore, "orphan release does not apply old sample");
     const auto narrow = locate(state.scene.tree, state.scene.slider);
     check(narrow && narrow->bounds.x == 756 && narrow->bounds.width == 140, "input sees new Fill geometry before draw");
     pointerDown(state.scene.tree, model, ui, {826, narrow->bounds.y + 10});
     pointerUp(state.scene.tree, model, ui, {826, narrow->bounds.y + 10});
-    check(model.gravity == 600, "new slider midpoint after resize");
+    check(model.colony.params.radius == 80, "new slider midpoint after resize");
     setOverflow(state, ui, true);
     ensureLayout(state, ui);
     const auto overflow = locate(state.scene.tree, state.scene.slider);
     check(overflow && overflow->bounds.width == 320 && overflow->clip.width == 158, "fixed bounds are not clip bounds");
     check(hitTest(state.scene.tree, {920, overflow->bounds.y + 10}) != state.scene.slider, "clipped area cannot start drag");
     pointerDown(state.scene.tree, model, ui, {836, overflow->bounds.y + 10});
-    check(model.gravity == 300, "mapping divides full bounds width not clip");
+    check(model.colony.params.radius == 50, "mapping divides full bounds width not clip");
     pointerUp(state.scene.tree, model, ui, {1200, overflow->bounds.y + 10});
-    check(model.gravity == 1200 && ui.active == 0, "captured final release clamps outside viewport");
+    check(model.colony.params.radius == 140 && ui.active == 0, "captured final release clamps outside viewport");
 
-    // Gravity/ticks/Reset không làm dirty layout hoặc dựng lại cây.
+    // [snippet idle-layout]
+    // Radius/ticks/Reset không làm dirty layout hoặc dựng lại cây.
     const int passes = state.passes;
     const Widget* rootAddress = state.scene.tree.root.get();
     const WidgetId nextId = state.scene.tree.nextId;
@@ -110,6 +117,7 @@ int main() {
         advance(model, fixedDt);
     }
     check(state.passes == passes && state.scene.tree.root.get() == rootAddress && state.scene.tree.nextId == nextId, "1000 frames retain layout and ownership");
+    // [/snippet idle-layout]
     check(setWidth(state, ui, 220) && !state.dirty, "same constraint is a no-op");
     check(!setWidth(state, ui, std::numeric_limits<double>::quiet_NaN()) && !state.dirty, "invalid width is atomic");
     check(!setSpacing(state, ui, -1, 16) && !state.dirty, "invalid gap rejected before mutation");

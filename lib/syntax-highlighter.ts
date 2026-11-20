@@ -1,6 +1,6 @@
 export const CODE_THEME = "one-dark-pro";
 
-export type HighlightLanguage = "bash" | "cmake" | "cpp" | "glsl" | "diff" | "markdown" | "text";
+export type HighlightLanguage = "bash" | "cmake" | "cpp" | "glsl" | "diff" | "markdown" | "html" | "css" | "tinyscript" | "text";
 
 const colors = {
   foreground: "#abb2bf",
@@ -151,6 +151,21 @@ function tokenColor(token: string, line: string, end: number, language: Highligh
 }
 
 function highlightLine(line: string, language: HighlightLanguage) {
+  if (language === "html" || language === "css" || language === "tinyscript") {
+    const tokens = /"[^"]*"|'[^']*'|<\/?[\w-]+|[#.][\w-]+|[\w-]+(?=\s*[:=({])|\b(?:let|function|if|else|return|true|false)\b|\b\d+(?:\.\d+)?(?:px)?\b/g;
+    let pos = 0;
+    let html = "";
+    for (const token of line.matchAll(tokens)) {
+      const value = token[0], start = token.index!;
+      let ink = colors.type;
+      if (/^["']/.test(value)) ink = colors.string;
+      else if (value.startsWith("<") || /^(let|if|else|return|function)$/.test(value)) ink = colors.keyword;
+      else if (/^(\d|#[\da-fA-F]{6}$)/.test(value)) ink = colors.number;
+      html += escapeHtml(line.slice(pos, start)) + span(value, ink);
+      pos = start + value.length;
+    }
+    return html + escapeHtml(line.slice(pos));
+  }
   if (language === "diff") {
     if (line.startsWith("+++ ") || line.startsWith("--- ")) return span(line, colors.type);
     if (line.startsWith("+")) return span(line, colors.string);

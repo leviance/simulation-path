@@ -1,0 +1,80 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hai thanh trượt: chim thấy ai và tránh nhau mạnh đến đâu?
+
+## Vấn đề cần giải quyết
+
+Hai thanh trượt đều khiến đàn thay đổi, nhưng không theo cùng cách. Nếu dừng đàn và kéo Radius, bạn vẫn phải thấy danh sách hàng xóm đổi ngay. Nếu kéo Separation, chim không thể dịch chuyển khi thời gian đang dừng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một bên là câu hỏi hình học: con nào đang nằm trong vòng tròn? Bên kia là trọng số trong phép tính vận tốc kế tiếp. Cả hai cùng dùng tỷ lệ $t=(x-x_0)/w$, kẹp trong $[0,1]$. Ở giữa thanh, Radius phải bằng 80 px; Separation phải bằng 2,5.
+
+<InteractiveLab demo="simulator-controls" mode="controls65-4" />
+
+## Viết code từng bước
+
+### Chuyển vị trí chuột thành tham số solver
+
+Từ mép trái tới mép phải, nội suy bán kính từ 20 tới 140 pixel của thế giới và lực tách từ 0 tới 5. Nếu chuột kéo ra ngoài, vẫn cập nhật control đang giữ nhưng không để giá trị vượt miền.
+
+{/* snippet include/controls.hpp#slider-model */}
+
+```cpp title="include/controls.hpp — Chuyển vị trí chuột thành tham số solver"
+inline void setSlider(Model& model, Control control, double t) {
+    if (!std::isfinite(t)) return;
+    const double fraction = std::clamp(t, 0.0, 1.0);
+    if (control == Control::Radius)
+        model.colony.params.radius = std::lerp(20.0, 140.0, fraction);
+    if (control == Control::Separation)
+        model.colony.params.separationWeight = std::lerp(0.0, 5.0, fraction);
+}
+
+inline void dragSlider(Model& model, Control control, double x) {
+    const Rect track = bounds(control);
+    setSlider(model, control, (x - track.x) / track.width);
+}
+```
+
+### Vẽ núm từ giá trị thật, không từ chuột
+
+Phép ngược là lấy tỷ lệ của giá trị hiện tại để đặt núm trên track. Khi Reset bằng nút hoặc chỉnh bằng bàn phím, núm vẫn đúng vì nó đọc `model.colony.params`, không lưu một tọa độ x riêng.
+
+{/* snippet include/view.hpp#paint-track */}
+
+```cpp title="include/view.hpp — Vẽ núm từ giá trị thật, không từ chuột"
+inline void paintTrack(SDL_Renderer* r, const Ui& ui, Control id, double fraction, const char* label) {
+    const SDL_FRect rect = asSDL(bounds(id));
+    const float knob = rect.x + rect.w * float(fraction);
+    text(r, rect.x, rect.y - 22, label, paper);
+    box(r, {rect.x, rect.y + 13, rect.w, 4}, {68, 96, 99, 255});
+    box(r, {rect.x, rect.y + 13, knob - rect.x, 4}, mint);
+    SDL_Color handle = mint;
+    if (ui.hot == id) handle = paper;
+    if (ui.active == id) handle = {255, 195, 101, 255};
+    box(r, {knob - 3, rect.y + 5, 6, 20}, handle);
+}
+```
+
+## Ghép các phần lại
+
+Pause, để checkbox bật và chọn cùng một con. So các ảnh chụp tại hai đầu thanh Radius, rồi tự kéo trên bản C++. Sau đó Reset, đổi riêng Separation, cho chạy và so đàn sau cùng số tick.
+
+```bash title="Terminal — chạy checkpoint của bài"
+cmake --build build --config Release --target project_65_checkpoint_4 --parallel 2
+.\build\Release\project_65_checkpoint_4.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Đảo phép nhân và phép chia khi đổi tọa độ, hoặc gán Radius cho một biến giao diện riêng. Núm vẫn chạy đẹp nhưng số hàng xóm không đổi: lỗi ở chỗ nối UI với model.
+
+## Tự kiểm tra kết quả
+
+Ở cùng tick, bán kính lớn không làm mất một hàng xóm cũ nào. Kéo ra ngoài cả hai đầu vẫn dừng đúng 20 và 140. Đổi Separation khi Pause không làm chim nhảy sang chỗ khác.
+
+## Bài tập mở rộng
+
+Chọn hai con ở hai mép đối diện. Hãy dự đoán câu trả lời khi khoảng cách nhìn trên màn hình rất lớn nhưng khoảng cách tuần hoàn lại nhỏ.
+
+[Bài 5: Rời chuột mà vẫn điều khiển được toàn bộ bảng](/projects/simulator-controls/05-dieu-khien-bang-ban-phim).

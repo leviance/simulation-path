@@ -25,6 +25,7 @@ inline bool eraseChild(Widget& parent, WidgetId id, Tree& tree) {
     return false;
 }
 
+// [snippet remove]
 inline bool removeSubtree(Tree& tree, WidgetId id, Ui& ui) {
     if (id == tree.root->id)
         return false;
@@ -32,6 +33,7 @@ inline bool removeSubtree(Tree& tree, WidgetId id, Ui& ui) {
     reconcile(tree, ui);
     return removed;
 }
+// [/snippet remove]
 
 inline void setVisible(Tree& tree, WidgetId id, bool visible, Ui& ui) {
     Widget* node = find(*tree.root, id);

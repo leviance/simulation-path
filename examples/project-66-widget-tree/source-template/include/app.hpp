@@ -9,6 +9,7 @@ struct App {
     std::uint64_t frames = 0;
 #if LAB_CHECKPOINT >= 1
     BuiltTree built = buildTree();
+    bool inspect = false;
     int builds = 1;
     int preset = 0;
     int extraLabels = 0;
@@ -41,11 +42,27 @@ inline void draw(SDL_Renderer* renderer, App& app) {
     for (const WidgetView& node : nodes)
         drawWidget(renderer, node, app.model, app.ui);
     require(SDL_SetRenderClipRect(renderer, nullptr));
-    text(renderer, 48, 480, "nodes=" + std::to_string(app.built.tree.count) + " builds=" + std::to_string(app.builds) + " frame=" + std::to_string(app.frames));
-    text(renderer, 48, 500, "hot/active/focus=" + std::to_string(app.ui.hot) + "/" + std::to_string(app.ui.active) + "/" + std::to_string(app.ui.focus));
-    text(renderer, 24, 522, app.message);
+    bench::text(renderer, 24, 512, "F2 inspector  /  Shift + arrows: move panel  /  P: presets", {160,185,184,255});
+    if (app.inspect) {
+        auto selected = locate(app.built.tree, app.ui.hot);
+        if (!selected) selected = locate(app.built.tree, app.ui.focus);
+        if (!selected) selected = locate(app.built.tree, app.built.pause);
+        if (selected) {
+            const auto& chosen = *selected;
+            const auto rect = [](Rect r) { return std::to_string(int(r.x)) + "," + std::to_string(int(r.y)) + "  " +
+                std::to_string(int(r.width)) + "x" + std::to_string(int(r.height)); };
+            bench::box(renderer, {30, 96, 305, 97}, {25,49,55,255});
+            text(renderer, 38, 104, "ID " + std::to_string(chosen.node->id) + " / " + app.message);
+            text(renderer, 38, 125, "local  " + rect(chosen.node->local));
+            text(renderer, 38, 145, "world  " + rect(chosen.bounds));
+            text(renderer, 38, 165, "clip   " + rect(chosen.clip));
+            const SDL_FRect border{float(chosen.clip.x), float(chosen.clip.y), float(chosen.clip.width), float(chosen.clip.height)};
+            bench::ink(renderer, {253,193,97,255});
+            SDL_RenderRect(renderer, &border);
+        }
+    }
 #endif
-    require(SDL_RenderPresent(renderer));
+
     ++app.frames;
 }
 } // namespace lab

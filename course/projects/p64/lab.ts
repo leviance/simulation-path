@@ -1,61 +1,113 @@
 import type { ProjectLabMeta } from "../../labs/types";
 const data = {
+  native: {
+    directory: "/field-notes/voxel-expedition",
+    overview: ["walk", "coast", "ravine", "snow", "fire"],
+    lessons: {
+      "voxel64-1": ["snow"],
+      "voxel64-2": ["am", "pm"],
+      "voxel64-3": ["walk"],
+      "voxel64-4": ["fire"],
+      "voxel64-5": ["coast", "valley", "ravine", "snow", "fire", "walk"],
+    },
+    takes: {
+      snow: {
+        title: "Tuyết rơi trong rừng thông",
+        source: "Project 64 · Bài 01",
+        poster: "flakes.png",
+        video: "flakes.webm",
+        alt: "Bông tuyết rơi ở nhiều khoảng cách trước các sườn dốc và tán thông.",
+        caption:
+          "Nhìn một bông tuyết đi ngang qua mép tán thông. So những bông gần mắt với những bông xa phía sau cây.",
+      },
+      am: {
+        title: "Buổi sáng · 7 giờ",
+        source: "Project 64 · Bài 02",
+        poster: "sunrise.png",
+        alt: "Ánh sáng sớm chiếu lên vách đá cạnh lòng sông.",
+        caption:
+          "Đổi sang 17 giờ: camera, seed và thời điểm lấy mẫu chuyển động giống nhau, chỉ giờ chiếu sáng thay đổi.",
+      },
+      pm: {
+        title: "Buổi chiều · 17 giờ",
+        source: "Project 64 · Bài 02",
+        poster: "sunset.png",
+        alt: "Cùng đoạn hẻm và cùng các bậc đá dưới ánh chiều.",
+        caption:
+          "Quan sát cùng một mặt đá ở hai ảnh. Đừng lấy độ sáng toàn ảnh làm kết luận về hướng chiếu.",
+      },
+      walk: {
+        title: "Đi bộ dọc bờ",
+        source: "Project 64 · Bài 03",
+        poster: "walk.png",
+        video: "walk.webm",
+        alt: "Góc nhìn di chuyển ở tầm mắt trên con đường cỏ cạnh dòng sông.",
+        caption:
+          "Để ý bậc đất gần chân đi qua nhanh hơn đồi phía xa. Đây là di chuyển qua hàm đi bộ của chương trình, không phải phóng to ảnh.",
+      },
+      fire: {
+        title: "Lửa ở chỗ nghỉ",
+        source: "Project 64 · Bài 04",
+        poster: "embers.png",
+        video: "embers.webm",
+        alt: "Đốm lửa vàng cam bay lên khỏi vòng đá; bờ cỏ và vách núi đứng yên.",
+        caption:
+          "Nhìn chân ngọn lửa rồi nhìn các đốm ở phía trên. Vòng đá giữ nguyên, chỉ các đốm đổi màu và vị trí.",
+      },
+      coast: {
+        title: "Bãi biển",
+        source: "Project 64 · Bản hoàn chỉnh",
+        poster: "coast.png",
+        alt: "Bãi cát nhìn ra đại dương xanh với một mỏm đá ở xa.",
+        caption:
+          "Mỏm đá giúp định hướng khi mới rời bãi biển. Hãy chạy bản C++ nếu muốn tự theo một con sóng.",
+      },
+      valley: {
+        title: "Thung lũng",
+        source: "Project 64 · Bản hoàn chỉnh",
+        poster: "valley.png",
+        alt: "Lòng sông mở rộng giữa bờ cỏ và hai sườn đồi.",
+        caption: "Lần theo bờ cỏ để tìm hướng đi về phía hẻm.",
+      },
+      ravine: {
+        title: "Hẻm đá",
+        source: "Project 64 · Bản hoàn chỉnh",
+        poster: "ravine.png",
+        alt: "Hai vách đá cao ép sát lòng sông giữa hẻm.",
+        caption: "So bề rộng lòng sông với ảnh thung lũng; đường đi vẫn liên tục giữa hai mốc.",
+      },
+    },
+  },
   base: {
-    label: "VOXEL SANDBOX",
-    title: "Xây một góc world của riêng bạn",
+    label: "MỘT NGÀY TRONG THẾ GIỚI VOXEL",
+    title: "Gió, tuyết và giờ trên cùng một con đường",
     description:
-      "Ngắm, phá/đặt, đi xa rồi quay về; quan sát delta, mesh và lịch sử, sau đó xuất bản lưu text để khôi phục.",
+      "Đi bộ trong một thế giới do C++/SDL3 dựng; nhìn tuyết rơi theo gió, mây trôi, sóng chạy và ánh sáng đổi theo Mặt Trời.",
   },
   modes: {
-    "sandbox64-1": {
-      title: "Chạy world đang có và thêm tâm ngắm",
+    "voxel64-1": {
+      title: "Đứng giữa tuyết rơi, không đứng trước một tấm rèm",
       description:
-        "Chạy terrain/streaming trước, đặt tâm ngắm vào ảnh CPU và phân biệt thao tác xem với sửa dữ liệu.",
+        "Đến rừng thông tuyết, thay đổi gió và thử dừng thời gian. Hình cắt minh họa hướng rơi, bản C++ kiểm cả che khuất.",
     },
-    "sandbox64-2": {
-      title: "Đưa tia từ camera về đúng world",
+    "voxel64-2": {
+      title: "Một Mặt Trời cho cả trời, đá và sóng",
       description:
-        "Bù offset player, đi qua tâm pixel và giữ t là khoảng cách từ mặt phẳng origin của camera trực giao.",
+        "Thử cùng một cảnh lúc 7 giờ, 12 giờ và 17 giờ; để ý phía chân trời mà Mặt Trời xuất hiện.",
     },
-    "sandbox64-3": {
-      title: "Chọn block đầu tiên qua nhiều chunk",
+    "voxel64-3": {
+      title: "Đặt chân lên đất thay vì cho camera bay xuyên đồi",
       description:
-        "DDA world có giới hạn; xử lý tọa độ âm, tie và vùng chưa tải mà không chọn xuyên qua dữ liệu chưa biết.",
+        "Giữ một giờ cố định và chọn điểm đứng trên đường đi. Thử bậc và va chạm bằng phím di chuyển trong bản C++.",
     },
-    "sandbox64-4": {
-      title: "Phá, đặt và chọn vật liệu",
-      description:
-        "Mỗi action truy vấn lại ray rồi sửa tối đa một cell; không ghi đè, không đặt vượt tầng hoặc vào chunk chưa tải.",
+    "voxel64-4": {
+      title: "Một bếp lửa nhỏ làm mốc giữa chiều xuống",
+      description: "Chọn bếp lửa, dừng ở hai thời điểm và nhìn vị trí đốm lửa so với vòng đá.",
     },
-    "sandbox64-5": {
-      title: "Giữ thay đổi khi chunk bị gỡ khỏi RAM",
+    "voxel64-5": {
+      title: "Tự đi mười phút để kiểm một thế giới sống",
       description:
-        "Tách terrain nền với delta world, lưu cả Air khi phá và phủ lại delta sau regeneration.",
-    },
-    "sandbox64-6": {
-      title: "Cập nhật mesh và preview đúng lúc",
-      description:
-        "Gộp dirty Key sau edit, xử lý mặt biên và tách bộ đếm mesh edit khỏi batch streaming.",
-    },
-    "sandbox64-7": {
-      title: "Undo và redo bằng địa chỉ world",
-      description:
-        "Command giữ cell/before/after, lịch sử hữu hạn và có thể hoàn tác cả khi chunk đã gỡ.",
-    },
-    "sandbox64-8": {
-      title: "Xuất và nhập một bản lưu có thể kiểm tra",
-      description:
-        "Định dạng VXL1 dùng chung C++/Canvas; parse toàn bộ, kiểm giới hạn rồi mới thay world.",
-    },
-    "sandbox64-9": {
-      title: "Hoàn thiện điều khiển và vòng đời tương tác",
-      description:
-        "Thêm preset di chuyển giữ edit, ngắm bằng phím, pause/reset, capture/blur và thao tác không auto-repeat.",
-    },
-    "sandbox64-10": {
-      title: "Kiểm chứng và nghiệm thu sandbox",
-      description:
-        "Đối chiếu picking bằng oracle AABB, kiểm surface, session delta, bản lưu và source hoàn chỉnh.",
+        "Đi qua năm mốc ở đây để lên kế hoạch, rồi tự đi liên tục trong chương trình C++; đừng dùng ảnh chụp thay cho phiên kiểm.",
     },
   },
 } satisfies ProjectLabMeta;

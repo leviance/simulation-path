@@ -1,0 +1,4 @@
+// Thiếu dấu ngoặc sau tham số: file này chỉ dùng để học cách đọc lỗi.
+function onRadius(value {
+    radius(value);
+}

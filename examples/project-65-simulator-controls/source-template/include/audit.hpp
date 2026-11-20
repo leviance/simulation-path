@@ -1,27 +1,23 @@
 #pragma once
-
-#ifndef LAB_CHECKPOINT
-#define LAB_CHECKPOINT 7
-#endif
-
 #include "controls.hpp"
 
 namespace lab {
-
-// Audit chỉ đọc dữ liệu, không tự sửa state để che đi lỗi của chương trình.
+// Audit chỉ đọc. Hàng xóm được đối chiếu với vòng duyệt vét cạn của P28.
 #if LAB_CHECKPOINT >= 7
-inline bool validControl(Control control) {
-    return control == Control::None || control == Control::Pause || control == Control::Reset || control == Control::Gravity;
-}
-
+// [snippet audit-grid]
 inline bool audit(const Model& model, const Ui& ui) {
-    const bool finite = std::isfinite(model.y) && std::isfinite(model.velocity) && std::isfinite(model.gravity) && std::isfinite(model.accumulator);
-    const bool bounds = model.y >= 48.0 && model.y <= floorY - ballRadius && model.gravity >= 0.0 && model.gravity <= 1200.0;
-    const bool clock = model.accumulator >= 0.0 && model.accumulator < fixedDt + 1e-12;
-    const bool controls = validControl(ui.hot) && validControl(ui.active) && validControl(ui.focus);
-
-    return finite && bounds && clock && controls && model.scenePresses >= 0;
+    const auto& colony = model.colony;
+    if (!validParams(colony.params) || colony.selected >= colony.birds.size()) return false;
+    if (model.accumulator < 0 || model.accumulator >= fixedDt + 1e-12) return false;
+    auto actual = colony.observe().neighbors;
+    std::vector<std::size_t> expected;
+    findNeighbors(colony.birds, colony.selected, colony.params, expected);
+    std::sort(actual.begin(), actual.end());
+    if (actual != expected) return false;
+    for (Control c : {ui.active, ui.hot, ui.focus})
+        if (c != Control::None && std::find(order.begin(), order.end(), c) == order.end()) return false;
+    return true;
 }
+// [/snippet audit-grid]
 #endif
-
 } // namespace lab

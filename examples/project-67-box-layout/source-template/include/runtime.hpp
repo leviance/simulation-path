@@ -15,11 +15,14 @@ struct LayoutState {
 #endif
 };
 
+// [snippet pending]
 inline void invalidate(LayoutState& state, Ui& ui) {
     state.dirty = true;
     cancel(ui);
 }
+// [/snippet pending]
 
+// [snippet before-input]
 inline bool ensureLayout(LayoutState& state, Ui& ui) {
 #if LAB_CHECKPOINT >= 7
     if (!state.dirty)
@@ -37,6 +40,7 @@ inline bool ensureLayout(LayoutState& state, Ui& ui) {
     reconcile(state.scene.tree, ui);
     return true;
 }
+// [/snippet before-input]
 
 #if LAB_CHECKPOINT >= 4
 inline bool setSpacing(LayoutState& state, Ui& ui, double gap, double padding) {
@@ -64,12 +68,15 @@ inline bool setSpacing(LayoutState& state, Ui& ui, double gap, double padding) {
 #endif
 
 #if LAB_CHECKPOINT >= 6
+// [snippet hide]
 inline void toggleReset(LayoutState& state, Ui& ui) {
     Widget* reset = find(*state.scene.tree.root, state.scene.reset);
     reset->visible = !reset->visible;
     invalidate(state, ui);
 }
+// [/snippet hide]
 
+// [snippet extra]
 inline bool appendLabel(LayoutState& state, Ui& ui) {
     if (state.extras.size() >= 4)
         return false;
@@ -79,6 +86,7 @@ inline bool appendLabel(LayoutState& state, Ui& ui) {
     invalidate(state, ui);
     return true;
 }
+// [/snippet extra]
 
 inline bool removeLabel(LayoutState& state, Ui& ui) {
     if (state.extras.empty())
@@ -101,6 +109,7 @@ inline bool removeLabel(LayoutState& state, Ui& ui) {
 #endif
 
 #if LAB_CHECKPOINT >= 7
+// [snippet width]
 inline bool setWidth(LayoutState& state, Ui& ui, double value) {
     if (!std::isfinite(value) || value < 220 || value > 420)
         return false;
@@ -110,9 +119,11 @@ inline bool setWidth(LayoutState& state, Ui& ui, double value) {
     }
     return true;
 }
+// [/snippet width]
 #endif
 
 #if LAB_CHECKPOINT >= 8
+// [snippet overflow]
 inline void setOverflow(LayoutState& state, Ui& ui, bool enabled) {
     if (state.overflow == enabled)
         return;
@@ -124,5 +135,6 @@ inline void setOverflow(LayoutState& state, Ui& ui, bool enabled) {
     state.overflow = enabled;
     invalidate(state, ui);
 }
+// [/snippet overflow]
 #endif
 } // namespace lab

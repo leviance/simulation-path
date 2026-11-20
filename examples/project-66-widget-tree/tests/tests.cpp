@@ -21,6 +21,7 @@ int main() {
     auto built = buildTree();
     Tree& tree = built.tree;
     Model model;
+    setPaused(model, true);
     Ui ui;
     const auto pause = locate(tree, built.pause);
     check(pause && pause->bounds.x == 688 && pause->bounds.y == 80 && pause->bounds.width == 224, "independent world coordinate fixture");
@@ -59,11 +60,20 @@ int main() {
     check(!model.paused, "exactly one click action");
     pointerDown(tree, model, ui, {800, 252});
     pointerUp(tree, model, ui, {1200, 252});
-    check(model.gravity == 1200 && ui.active == 0, "release commits final slider sample");
+    check(model.colony.params.radius == 140 && ui.active == 0, "release commits final slider sample");
     pointerDown(tree, model, ui, {800, 252});
     cancel(ui);
     pointerUp(tree, model, ui, {-200, 252});
-    check(model.gravity == 600, "cancel does not invent a final sample");
+    check(model.colony.params.radius == 80, "cancel does not invent a final sample");
+
+    const auto before = model.colony.birds.front().position;
+    const auto chosen = model.colony.selected;
+    pointerDown(tree, model, ui, {720,200});
+    pointerUp(tree, model, ui, {720,200});
+    check(!model.colony.showNeighbors && model.colony.selected == chosen, "observe toggle never chooses a bird");
+    pointerDown(tree, model, ui, {700,322});
+    pointerUp(tree, model, ui, {950,322});
+    check(model.colony.params.separationWeight == 5 && model.colony.birds.front().position.x == before.x, "second slider changes the solver weight without moving a bird");
 
     ui = Ui{};
     keyDown(tree, model, ui, Key::Tab, false, false);
@@ -74,10 +84,11 @@ int main() {
     check(model.paused != paused, "button key repeat suppressed");
     keyDown(tree, model, ui, Key::Tab, false, false);
     keyDown(tree, model, ui, Key::Tab, false, false);
+    keyDown(tree, model, ui, Key::Tab, false, false);
     check(ui.focus == built.slider, "focus order follows tree");
     keyDown(tree, model, ui, Key::End, false, false);
     keyDown(tree, model, ui, Key::Left, false, true);
-    check(model.gravity == 1180, "slider arrow may repeat");
+    check(model.colony.params.radius == 134, "slider arrow may repeat");
 
     pointerDown(tree, model, ui, {800, 252});
     setVisible(tree, built.group, false, ui);
@@ -128,6 +139,7 @@ int main() {
     }
     check(rejected, "depth cap");
 
+    // [snippet retained-check]
     auto retained = buildTree();
     const Widget* rootAddress = retained.tree.root.get();
     const WidgetId lastId = retained.tree.nextId;
@@ -138,7 +150,8 @@ int main() {
         advance(model, fixedDt);
     }
     resetSimulation(model);
-    check(retained.tree.root.get() == rootAddress && retained.tree.nextId == lastId && audit(retained.tree, Ui{}) == 9, "retained state survives render/query/physics/reset");
+    check(retained.tree.root.get() == rootAddress && retained.tree.nextId == lastId && audit(retained.tree, Ui{}) == 11, "retained state survives render/query/physics/reset");
+    // [/snippet retained-check]
     rejected = false;
     ui.focus = 999;
     try {

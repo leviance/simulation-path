@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Khi bước qua mép chunk, đất mới đến từ đâu?
+
+## Vấn đề cần giải quyết
+
+Ở phần trước bạn sớm gặp mép cuối cùng của mảnh đất. Giờ ta mang một cửa sổ nhỏ của bản đồ đi cùng người quan sát: ô mới phía trước được nạp, những ô còn gần phía sau vẫn ở đó nếu ta quay đầu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Dùng khoảng cách lớn hơn giữa chênh lệch hai tọa độ chunk để chia vành vuông. Vành 0 là chân người đi; vành 1 và 2 bổ sung đủ vùng 5×5. Tạo theo thứ tự gần trước để không có một hòn đảo đẹp phía xa nhưng ngay dưới chân lại trống.
+
+<InteractiveLab demo="voxel-chunk-streaming" mode="voxel62-1" />
+
+## Viết code từng bước
+
+Ở Project 61, đi đủ xa thì ta ra khỏi những cột dựng sẵn. Lần này, lấy cột chứa mắt người làm tâm: vùng gần cần đến trước, vùng vừa đi qua nên nán lại một chút để lúc quay đầu không phải nạp lại ngay.
+
+### Vẽ hai vòng quanh cột đang đứng
+
+Trong `stream.hpp`, `plan` đổi tọa độ mắt sang chunk rồi lập danh sách khi tâm chuyển cột. Lần lượt đi qua các vành vuông 0, 1, 2 theo khoảng cách Chebyshev: vành gần đứng trước trong hàng. Vành 3 là vùng đệm để giữ cột cũ, không phải lời hứa luôn nạp đủ 7×7 cột.
+
+{/* snippet include/trail/stream.hpp#load-rings */}
+
+```cpp title="include/trail/stream.hpp — Xếp các vị trí từ gần tới xa"
+for (int ring = 0; ring <= radius; ++ring)
+    for (int dz = -ring; dz <= ring; ++dz)
+        for (int dx = -ring; dx <= ring; ++dx) {
+            if (std::max(std::abs(dx), std::abs(dz)) != ring)
+                continue;
+            const Key key{eye.first + dx, eye.second + dz};
+            if (!world.tiles.contains(key))
+                wanted.push_back(key);
+        }
+```
+
+{/* snippet include/trail/stream.hpp#keep-ring */}
+
+```cpp title="include/trail/stream.hpp — Chừa một vành ngoài trước khi gỡ"
+for (auto it = world.tiles.begin(); it != world.tiles.end();) {
+    const Key key = it->first;
+    const int distance = std::max(std::abs(key.first - eye.first), std::abs(key.second - eye.second));
+    if (distance > radius + 1) {
+        it = world.tiles.erase(it);
+        world.dirty.erase(key);
+        world.markNeighborhood(key);
+        ++world.unloads;
+    } else {
+        ++it;
+    }
+}
+```
+
+<VoxelWorkFile project="62" step={1} file="stream" />
+
+### Làm từng việc, dù người vừa ngừng đi
+
+Trong `Stream::tick`, lấy một số cột từ đầu hàng, nạp và dựng chúng, sau đó cho `region.buildSome(1)` sửa phần mép còn bẩn. Trong `field-scene.hpp`, giữ `Stream` trong cảnh, nạp cột dưới chân trước, gọi `plan` rồi `tick` trong `update` ở preset cảnh quan. Không đợi thêm một lần nhấn W mới làm tiếp hàng việc còn lại.
+
+{/* snippet include/trail/field-scene.hpp#advance-region */}
+
+```cpp title="include/trail/field-scene.hpp — Nạp quanh mắt từ vòng cập nhật"
+stream.plan(region, positionKey());
+changed = stream.tick(region, mode);
+```
+
+<VoxelWorkFile project="62" step={1} file="field-scene" />
+
+### Cho ảnh chụp và cửa sổ dùng cùng cảnh
+
+Trong `window.hpp`, ở đường chạy smoke, gọi thêm các lượt cập nhật với `dt = 0` để vùng quanh mắt kịp nạp trước khi chụp. Đó là chuẩn bị cho phép kiểm một khung, không phải vòng lặp đặc biệt của người đang đi. HUD của cảnh thật mới cho thấy queue, số cột bẩn và số đã gỡ thay đổi theo bước chân.
+
+<VoxelWorkFile project="62" step={1} file="window" />
+
+## Ghép các phần lại
+
+Đi qua một biên chunk rồi đứng lại. Quan sát F1: hàng đợi phải tiếp tục giảm về 0, vùng ổn định có ít nhất 5×5 cột. Bước lùi ngay qua biên: nhờ vòng đệm, vùng vừa rời không phải bị gỡ đồng loạt.
+
+Mở terminal cạnh `CMakeLists.txt` của ZIP đã giải nén. Lần cấu hình đầu tạo `work/` từ starter; chỉnh tệp trong đó, rồi build lại cùng target. Cấu hình lần nữa không ghi đè bài làm.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake -S . -B build-work -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_62_work --parallel 1
+.\build-work\Release\project_62_work.exe
+```
+
+Với Ninja hoặc Make trên Linux/macOS, chạy `./build-work/project_62_work` thay cho dòng mở `.exe`.
+
+## Thử làm sai để hiểu đúng
+
+Dùng phép chia nguyên cắt về 0 cho tọa độ âm. Chỉ một bước từ x=0 sang x=-1 đã được gán nhầm vào chunk phía dương.
+
+## Tự kiểm tra kết quả
+
+Khi đã ổn định có đủ 25 vị trí quanh tâm; không giữ cột xa hơn vành đệm. Đi sang phần âm rồi quay về vẫn đặt cây đúng ô.
+
+## Bài tập mở rộng
+
+Lập bảng cho x bằng -17, -16, -1, 0, 15 và 16. Hãy thử dự đoán trước khi đối chiếu với hàm chuyển tọa độ.
+
+[Bài 2: Đừng sinh cả con đường trong một khung hình](/projects/voxel-chunk-streaming/02-chia-ngan-sach).

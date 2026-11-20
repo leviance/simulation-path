@@ -1,26 +1,26 @@
 export const voxelFaceGlossaryTerms = [
   {
     id: "voxel-neighbor-face-elimination",
-    term: "Loại mặt tiếp giáp voxel",
+    term: "Bỏ mặt tiếp giáp",
     definition:
-      "Với block opaque, chỉ dựng một mặt khi ô bên kia là Air hoặc ngoài miền đang hiển thị. Hai block opaque kề mặt làm mất hai mặt đối nhau, kể cả khác Block ID. Quy tắc không phụ thuộc camera, khác back-face culling, occlusion culling và greedy meshing. Project 59 xét một chunk đơn lẻ; biên không có chunk lân cận được coi là Air theo phạm vi đó.",
+      "Xét vật liệu trong ô và ô phía bên kia mặt. Hai viên đá chung mặt không cần mặt ở giữa. Tại mép cát–nước, chỉ một phía giữ mặt; không để hai quad cùng che một diện tích.",
   },
   {
     id: "voxel-face-count-oracle",
-    term: "Oracle số mặt F=6N−2E",
+    term: "Đếm mặt bằng F = 6N − 2E",
     definition:
-      "N là số block opaque trong miền đang hiển thị, E là số cặp block kề mặt vô hướng. Ban đầu mỗi block có sáu mặt; mỗi cặp kề loại hai mặt đối nhau. Đếm E theo ba chiều dương để không đếm đôi. Công thức kiểm tổng số quad của mesher không gộp mặt, nhưng cần thêm face keys và winding để phát hiện mặt sai vị trí/hướng.",
+      "Với N block opaque và E cặp chung mặt, mỗi cặp làm mất hai mặt. Công thức không thay bảng xử lý nước, cũng không phát hiện mọi lỗi ở vị trí: mất một mặt và thừa một mặt khác có thể cho cùng tổng.",
   },
   {
     id: "voxel-active-cut",
-    term: "Miền voxel sau mặt cắt",
+    term: "Mặt ngoài của hốc",
     definition:
-      "Khi chỉ hiển thị y<=slice, cả block nguồn và neighbor phải được xét trong cùng miền đó. Neighbor trên cut được coi là Air hiển thị để giữ mặt nắp, không phải xóa Block ID khỏi chunk. Ngoài chunk, ngoài cut và Air thật là ba lý do khác nhau cùng dẫn đến giữ mặt.",
+      "Hốc là khoảng Air trong dữ liệu: sáu mặt hướng vào một ô Air kín vẫn thuộc bề mặt mesh dù camera ở ngoài không thấy. Khác với bảng lớp, nơi ta chỉ đọc một tầng mà không thay block.",
   },
   {
     id: "voxel-mesh-invalidation",
-    term: "Mesh dirty và frame dirty",
+    term: "Khi nào phải dựng lại mesh?",
     definition:
-      "Preset, chế độ mesher hoặc lớp cắt thay đổi geometry nên đánh dấu meshDirty. Camera chỉ đổi phép chiếu nên frameDirty. Rebuild thành công làm frameDirty; rasterize xong mới clear frameDirty. Chọn ô debug chỉ đổi overlay. Tách hai bước giúp tránh dựng lại geometry khi xoay mà không cần một benchmark vô hạn.",
+      "Đi bộ hay đổi hướng nắng cần vẽ lại ảnh nhưng không đổi hình học của nền đất. Nạp thêm cột sát cạnh thì khác: những mặt tạm giữ ở đường nối có thể phải mất đi, nên đánh dấu đúng các cột có chung mặt.",
   },
 ];

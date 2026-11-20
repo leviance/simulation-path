@@ -406,15 +406,17 @@
     "id": "53",
     "slug": "volume-slicer",
     "sourceDirectory": "project-53-volume-slicer",
-    "checkpointCount": 7,
-    "contentRevision": 2,
+    "checkpointCount": 9,
+    "contentRevision": 3,
     "demoId": "volume-slicer"
   },
   {
     "id": "54",
     "slug": "volume-ray-marching",
     "sourceDirectory": "project-54-volume-ray-marching",
-    "checkpointCount": 9,
+    "checkpointCount": 10,
+    "contentRevision": 2,
+    "shaderRuntimePerTarget": true,
     "demoId": "volume-ray-marching"
   },
   {
@@ -443,53 +445,69 @@
     "slug": "voxel-chunk",
     "sourceDirectory": "project-58-voxel-chunk",
     "checkpointCount": 7,
+    "sourceSeries": "voxel-expedition",
+    "contentRevision": 2,
     "demoId": "voxel-chunk"
   },
   {
     "id": "59",
     "slug": "voxel-hidden-faces",
     "sourceDirectory": "project-59-voxel-hidden-faces",
-    "checkpointCount": 8,
-    "demoId": "voxel-hidden-faces"
+    "checkpointCount": 3,
+    "demoId": "voxel-hidden-faces",
+    "sourceSeries": "voxel-expedition",
+    "contentRevision": 2
   },
   {
     "id": "60",
     "slug": "voxel-ray-editor",
     "sourceDirectory": "project-60-voxel-ray-editor",
-    "checkpointCount": 9,
-    "demoId": "voxel-ray-editor"
+    "checkpointCount": 3,
+    "demoId": "voxel-ray-editor",
+    "sourceSeries": "voxel-expedition",
+    "contentRevision": 2
   },
   {
     "id": "61",
     "slug": "voxel-greedy-meshing",
     "sourceDirectory": "project-61-voxel-greedy-meshing",
-    "checkpointCount": 9,
-    "demoId": "voxel-greedy-meshing"
+    "checkpointCount": 4,
+    "demoId": "voxel-greedy-meshing",
+    "sourceSeries": "voxel-expedition",
+    "contentRevision": 2
   },
   {
     "id": "62",
     "slug": "voxel-chunk-streaming",
     "sourceDirectory": "project-62-voxel-chunk-streaming",
-    "checkpointCount": 10,
-    "demoId": "voxel-chunk-streaming"
+    "checkpointCount": 4,
+    "demoId": "voxel-chunk-streaming",
+    "sourceSeries": "voxel-expedition",
+    "contentRevision": 2
   },
   {
     "id": "63",
     "slug": "voxel-procedural-terrain",
     "sourceDirectory": "project-63-voxel-procedural-terrain",
-    "checkpointCount": 9,
-    "demoId": "voxel-procedural-terrain"
+    "checkpointCount": 5,
+    "demoId": "voxel-procedural-terrain",
+    "sourceSeries": "voxel-expedition",
+    "contentRevision": 2
   },
   {
     "id": "64",
     "slug": "voxel-sandbox",
     "sourceDirectory": "project-64-voxel-sandbox",
-    "checkpointCount": 10,
-    "demoId": "voxel-sandbox"
+    "checkpointCount": 5,
+    "demoId": "voxel-sandbox",
+    "sourceSeries": "voxel-expedition",
+    "contentRevision": 2
   },
   {
     "id": "65",
     "slug": "simulator-controls",
+    "sourceSeries": "flock-workbench",
+    "contentRevision": 2,
     "sourceDirectory": "project-65-simulator-controls",
     "checkpointCount": 7,
     "demoId": "simulator-controls"
@@ -497,6 +515,8 @@
   {
     "id": "66",
     "slug": "widget-tree",
+    "sourceSeries": "flock-workbench",
+    "contentRevision": 2,
     "sourceDirectory": "project-66-widget-tree",
     "checkpointCount": 8,
     "demoId": "widget-tree"
@@ -504,8 +524,50 @@
   {
     "id": "67",
     "slug": "box-layout",
+    "sourceSeries": "flock-workbench",
+    "contentRevision": 2,
     "sourceDirectory": "project-67-box-layout",
     "checkpointCount": 9,
     "demoId": "box-layout"
+  },
+  {
+    "id": "68",
+    "slug": "tiny-html",
+    "sourceDirectory": "project-68-tiny-html",
+    "sourceSeries": "flock-workbench",
+    "checkpointCount": 6,
+    "demoId": "tiny-html"
+  },
+  {
+    "id": "69",
+    "slug": "tiny-css",
+    "sourceDirectory": "project-69-tiny-css",
+    "sourceSeries": "flock-workbench",
+    "checkpointCount": 5,
+    "demoId": "tiny-css"
+  },
+  {
+    "id": "70",
+    "slug": "tiny-flex",
+    "sourceDirectory": "project-70-tiny-flex",
+    "sourceSeries": "flock-workbench",
+    "checkpointCount": 6,
+    "demoId": "tiny-flex"
+  },
+  {
+    "id": "71",
+    "slug": "event-bindings",
+    "sourceDirectory": "project-71-event-bindings",
+    "sourceSeries": "flock-workbench",
+    "checkpointCount": 5,
+    "demoId": "event-bindings"
+  },
+  {
+    "id": "72",
+    "slug": "tiny-script",
+    "sourceDirectory": "project-72-tiny-script",
+    "sourceSeries": "flock-workbench",
+    "checkpointCount": 7,
+    "demoId": "tiny-script"
   }
 ]

@@ -1,0 +1,88 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Vì sao đám mây không được dán lên màn hình?
+
+## Vấn đề cần giải quyết
+
+Chọn ngọn cây làm mốc, ngẩng đầu nhìn một cụm mây bên cạnh nó, rồi đặt chuột xuống. Mây phải tiếp tục trôi. Nếu quay đầu và quay lại, nó vẫn ở trên bầu trời của thế giới chứ không ở nguyên một góc cửa sổ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Cho tia nhìn cắt một mặt phẳng ở cao độ 96. Điểm cắt cho tọa độ để đọc lượng mây. Trừ độ dời của gió tầng cao theo thời gian để hình mây chạy theo gió. Gần chân trời không chia cho một hướng gần như nằm ngang.
+
+<InteractiveLab demo="voxel-chunk-streaming" mode="voxel62-3" />
+
+## Viết code từng bước
+
+Nếu mây chỉ là hoa văn ở một vị trí cố định trên màn hình, ta quay đầu mà đám mây vẫn đi theo mắt. Thay vào đó, hãy tưởng tượng một tầng mây nằm thật ở độ cao 96 block và bầu trời là thứ ta thấy qua nó.
+
+### Tính chỗ tia mắt đi qua tầng mây
+
+Trong `cloud.hpp`, viết `valueNoise` để độ phủ chuyển êm giữa các điểm lưới. `cloudCover` bỏ tia nhìn xuống hoặc quá sát đường chân trời; với những tia còn lại, tìm giao với mặt phẳng y = 96. Trừ độ dời của gió theo thời gian khỏi tọa độ lấy mẫu: hình mây sẽ trôi ngay cả khi mắt đứng yên.
+
+{/* snippet include/trail/cloud.hpp#cloud-layer */}
+
+```cpp title="include/trail/cloud.hpp — Tìm chỗ tia nhìn gặp tầng mây"
+inline double cloudCover(Vec3 eye, Vec3 ray, double seconds, Vec3 drift, std::uint32_t seed) {
+    if (ray.y <= 0.035)
+        return 0;
+    const double travel = (96.0 - eye.y) / ray.y;
+    if (travel <= 0)
+        return 0;
+    const Vec3 sample = eye + ray * travel - drift * seconds;
+    const double puffs = 0.72 * valueNoise(sample.x / 43, sample.z / 34, seed) + 0.28 * valueNoise(sample.x / 17, sample.z / 14, seed + 7);
+    return smooth(0.51, 0.67, puffs) * smooth(0.035, 0.18, ray.y);
+}
+```
+
+{/* snippet include/trail/cloud.hpp#cloud-noise */}
+
+```cpp title="include/trail/cloud.hpp — Nối mềm các mẫu lưới kề nhau"
+inline double valueNoise(double x, double z, std::uint32_t seed) {
+    const int ix = static_cast<int>(std::floor(x)), iz = static_cast<int>(std::floor(z));
+    const double sx = smooth(0, 1, x - ix), sz = smooth(0, 1, z - iz);
+    const auto sample = [seed](int a, int b) { return double(hash(a, b, seed) & 65535u) / 65535.0; };
+    return std::lerp(std::lerp(sample(ix, iz), sample(ix + 1, iz), sx), std::lerp(sample(ix, iz + 1), sample(ix + 1, iz + 1), sx), sz);
+}
+```
+
+<VoxelWorkFile project="62" step={3} file="cloud" />
+
+### Pha mây vào bầu trời trước khi vẽ cây
+
+Trong `field-render.hpp`, gọi `cloudCover` trong `fieldSky`, pha màu theo độ phủ rồi mới vẽ địa hình lên phía trước. Lấy mẫu theo từng ô pixel nhỏ giúp bầu trời không chiếm toàn bộ thời gian vẽ. Trong `field-controls.hpp`, phím C tắt/bật lớp mây. Gió tầng cao có tốc độ riêng; các phím tăng giảm gió ở mặt đất không phải công tắc mây.
+
+<VoxelWorkFile project="62" step={3} file="field-render" />
+
+{/* snippet include/trail/field-controls.hpp#cloud-key */}
+
+```cpp title="include/trail/field-controls.hpp — Ẩn riêng lớp mây"
+if (key == SDLK_C)
+    scene.weather.clouds = !scene.weather.clouds;
+```
+
+<VoxelWorkFile project="62" step={3} file="field-controls" />
+
+## Ghép các phần lại
+
+Đứng cạnh ngọn cây để có mốc cố định. Chờ một lát: mây đổi vị trí so với cây. Nhấn P, quay sang bên rồi quay lại: mây vẫn ở chỗ cũ trong thế giới. Đi qua đường nối chunk không được làm mây giật ngược về vị trí ban đầu.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_62_work --parallel 1
+.\build-work\Release\project_62_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Dùng x/y của pixel thay vì tọa độ giao với tầng trời. Mây có vẻ đang trôi nhưng khi xoay camera thì cùng một mảng vẫn dính trên tâm ảnh.
+
+## Tự kiểm tra kết quả
+
+Cùng vị trí, hướng và giờ phải cho cùng độ phủ, bất kể chunk nào vừa nạp. Hai thời điểm khác nhau dịch được mép mây khi camera đứng yên.
+
+## Bài tập mở rộng
+
+Tại sao gió tầng cao có thể trôi chậm trong ảnh dù một ngọn cỏ ngay trước mắt nghiêng rất rõ?
+
+[Bài 4: Đi xa rồi quay về: bộ nhớ có chịu buông không?](/projects/voxel-chunk-streaming/04-di-xa-va-quay-lai).

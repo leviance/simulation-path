@@ -1,84 +1,29 @@
-# Project 66 — Cây giao diện sống qua nhiều frame
+# Project 66 — Cây giao diện của bàn quan sát Boids
 
-Từ ba control riêng lẻ của Project 65, ta xây một cây dữ liệu: Panel chứa Label, Panel con chứa Button và Slider. Cây được tạo một lần, không dựng lại trong `draw`. Cùng node được dùng để vẽ, chọn bằng chuột, đi focus và dọn một nhánh đã bị xóa.
+Đàn chim và năm control vẫn như P65. Điều mới là **ai sở hữu các control**. Dịch một Panel cha: Pause, Reset, Neighbors và các slider theo nó cùng lúc. Xóa cả nhóm trong lúc kéo rồi thả chuột: chương trình vẫn phải an toàn và đàn không bị khởi tạo lại.
 
-## Tự thử trước khi đọc lời giải
+## Chạy chương trình
 
-Hãy tự làm một cửa sổ bóng rơi có panel bên phải. Dịch panel phải kéo mọi descendant theo; phần đã bị cắt không được nhận chuột. Khi đang kéo Slider, thử ẩn hoặc xóa cả nhóm control: chương trình phải hủy gesture, không crash hoặc gửi release cho một widget khác. Reset bóng phải giữ cây và trọng lực.
-
-Đây là bước từ các Rect viết riêng sang retained UI, không phải một trình duyệt thu nhỏ. Project 67 mới thêm layout tự động; parser HTML/CSS, TinyFlex, event binding và scripting thuộc các project sau.
-
-## Đi qua tám checkpoint
-
-| Mốc | Sản phẩm nhìn thấy được |
-| --- | --- |
-| starter | Cửa sổ SDL3, bóng/sàn, Space chạy/dừng, N bước tay, R reset cảnh; chưa có Widget |
-| 01 | Widget/Kind/ID, Panel sở hữu Label và Button, cây nằm trong App ngoài vòng while |
-| 02 | Panel con chứa Pause/Reset; DFS cộng offset, Shift+arrow dịch root |
-| 03 | Giao clip tổ tiên, SDL clip, preset cắt mép Group |
-| 04 | Reverse hit-test, hover ID, preset hai Button chồng nhau |
-| 05 | Action theo ID, pointer owner, slider world-space và input consumption |
-| 06 | Focus order từ cây, Tab, Enter/Space, arrow/Home/End |
-| 07 | Ẩn/hiện, enable/disable, thêm Label, xóa cả nhánh, reconcile ID |
-| 08/final | Audit cấu trúc, test độc lập, source hoàn chỉnh và nghiệm thu |
-
-`source-template/` là nguồn chuẩn trong repository website. `npm run generate:course` tạo CMake và các snapshot; không sửa trực tiếp output. ZIP có README, starter, tám checkpoint, final và tests, không cần source từ module khác. Mỗi bài trên web cũng có source đầy đủ tại đúng mốc.
-
-## Build và chạy
-
-Yêu cầu C++20, CMake ≥3.24, Visual Studio 2022 hoặc compiler tương đương. CMake dùng FetchContent khóa SDL3 3.4.8 và link qua `SDL3::SDL3`; lần configure đầu cần mạng.
-
-```bash
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
-./build/Debug/project_66_final.exe
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 20
-```
-
-Với Ninja/Make single-config, configure riêng với `-DCMAKE_BUILD_TYPE=Debug` hoặc Release và chạy executable trong `build/`. Target `project_66_checkpoint_3` chạy riêng bài 03. Final là target ứng dụng mặc định; checkpoint bật bằng `BUILD_CHECKPOINTS`.
-
-Mỗi build phải có watchdog bên ngoài, tối đa hai compiler; CTest `--timeout` không giới hạn thời gian compile. Không chạy một vòng build/retry vô hạn.
+Giải nén ZIP và mở terminal cạnh `CMakeLists.txt`. Cần C++20, SDL3 3.4.8, CMake 3.24+. ZIP chứa sẵn mô hình của P28 và session của P65.
 
 ```powershell
-$trial = Start-Process -FilePath ".\build\Debug\project_66_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
-if (-not $trial.WaitForExit(10000)) {
-    taskkill.exe /PID $trial.Id /T /F
-    throw "Smoke vượt 10 giây."
-}
-if ($trial.ExitCode -ne 0) { throw "Smoke thất bại." }
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+.\build\Release\project_66_final.exe
 ```
 
-Smoke chỉ vẽ một frame ẩn, không ghi file/clipboard và không thay desktop QA.
+Single-config: đặt `-DCMAKE_BUILD_TYPE=Release` lúc cấu hình, bỏ `Release/` trong đường dẫn executable. Kiểm thêm Debug với `-C Debug` sau khi build đúng cấu hình.
 
-## Điều khiển native
+## Thử ngay
 
-- Space chạy/dừng khi chưa focus button; N bước 1/120 s lúc Pause, R reset cảnh. Esc hủy gesture, đóng bằng nút window.
-- T dựng lại cây mặc định; giữ y/v/gravity nhưng pause và xóa Ui/capture. ID mở phiên mới.
-- Từ bài 02: P đổi preset phù hợp checkpoint; Shift+arrow dịch Panel 4 logical pixel. Rect local của con không đổi.
-- Từ bài 05: chuột nhấn/thả cùng Button; Slider cập nhật cả mẫu ở release, kể cả kéo ngoài khung. Capture thất bại thì hủy gesture.
-- Từ bài 06: Tab/Shift+Tab đi vòng control; Enter/Space không repeat action; arrow/Home/End cho Slider. Shift+arrow chỉ dịch Panel, không chỉnh gravity.
-- Từ bài 07: H ẩn/hiện Group, E enable/disable Group, D xóa Group, A thêm tối đa bốn Label vào root.
-- Từ bài 08: F1 audit state hiện tại. Kết quả không thay test thứ tự input hoặc kiểm toàn bộ tương tác desktop.
+- Pause/Resume, Reset, Neighbors, Radius, Separation: điều khiển thật cùng đàn chim. Bấm vào viewport để chọn cá thể. N tiến đúng một bước khi Pause.
+- F2: xem hoặc ẩn ID, local, world và clip của node đang hover/focus; nếu chưa chọn thì xem Pause. Shift+mũi tên: dịch cả Panel.
+- P: lần lượt cây thường, Panel bị cắt, hai nút chồng, Panel lệch vị trí. H/E ẩn hoặc disable nhóm. D xóa cả nhánh, A thêm Label, T khôi phục cây.
+- Thử giữ một slider, bấm H rồi thả chuột. Không hành động nào được phát tới slider cũ. Reset đàn không phải T: root, ID và cây vẫn giữ nguyên.
 
-Native dùng nhãn ASCII của SDL_RenderDebugText. Canvas có nhãn tiếng Việt, Inspector cây/local/world/clip, preset, control HTML thay thế, pause/reset/bước tay, DPR, pointer capture/cancel và reduced-motion. Canvas cho Tab thoát ở hai đầu; native Tab đi vòng. Website không chạy C++ qua WebAssembly, không dùng backend để lưu cây.
+## Tám checkpoint
 
-## Ownership, tọa độ và input
+01 quyền sở hữu và ID; 02 duyệt cha–con; 03 clip; 04 chọn node trên cùng; 05 input và binding; 06 focus theo cây; 07 mutation; 08 audit. Mỗi mốc và starter chạy độc lập. Trong các bài đầu, không phải tất cả phím của bản final đã hoạt động.
 
-- Root depth=0; tối đa 32 node, depth≤6; chỉ Panel được chứa children. C++ parent sở hữu child bằng `unique_ptr`, TypeScript dùng object tree có cùng cấu trúc.
-- ID 0 là None, ID tăng tới 1,000,000 và không tái dùng trong cùng cây; thêm sai bị reject trước khi đổi count/nextId. Không có reparent hoặc nhận một subtree bên ngoài nên API không tạo cycle.
-- Local Rect dùng góc parent; world là tổng offset. Chưa scale/rotation/layout tự động. Ví dụ dùng tọa độ nguyên; SDL clip nguyên và Canvas raster có thể khác pixel ở mép phân số, test không đòi ảnh byte-identical.
-- Root ở (664,24), Group ở local (24,56), Pause ở (0,0): Pause world (688,80), kích thước 224×44. Trong preset clip Group cao 96, Reset vẫn 224×44 nhưng phần nhìn thấy chỉ cao 36.
-- Paint preorder parent→children; pick child cuối trước, rồi parent. Label pass-through. Panel trống và control disable chặn input xuống cảnh; control disable không nhận action/focus.
-- `find` đọc ownership, `locate` đọc view có visibility/clip kế thừa. WidgetView có con trỏ chỉ hợp lệ trong thao tác hiện tại; Ui chỉ giữ ID. Không giữ Widget* hoặc iterator qua mutation.
-- Hide giữ node/ID; remove nhánh hủy descendants; reconcile hủy active/focus không còn tương tác được. Host giải phóng capture khi active về 0. Cancel không tự hoàn tác gravity đã áp dụng.
-- Model là owner riêng: Reset cảnh giữ Tree và gravity/Pause; preset/rebuild tree pause, giữ y/v/gravity, xóa Ui. Cây và mô phỏng không lưu qua reload; localStorage tiến độ bài học là việc khác.
-
-## Giới hạn và kiểm chứng
-
-Vật lý kế thừa Project 65: gravity logical px/s², fixedDt=1/120, tối đa 0.1 s/12 bước mỗi frame. Cây không được cấp phát lại bởi render/input hoặc bước vật lý; builds chỉ tăng khi người dùng chọn dựng lại/preset.
-
-CTest dùng check/EXIT_FAILURE, vẫn có hiệu lực ở Release. Fixture tính world Rect bằng hằng số độc lập, kiểm reverse paint order, clip, ID, node/depth caps, input/cancel, ẩn/xóa trong lúc active, ID không tái dùng, root protection và 1000 lần đọc/cập nhật không dựng lại cây. Audit chỉ kiểm cấu trúc và ID hiện tại, không chứng minh UI dùng thuận tiện. Node test dùng cùng fixture và thêm callback thật của Canvas; test trình duyệt kiểm riêng.
-
-Trước nghiệm thu desktop: thử preset chồng/cắt, slider kéo ngoài window, hai pointer, cancel/blur/resize, keyboard repeat, Tab thoát Canvas, DPR và reduced-motion. Tiếp tục với Project 67 về bố cục hộp tự động; Project 68–78 chưa phát hành vẫn ghi Sắp ra mắt trên roadmap.
+CTest đối chiếu bounds/clip với tọa độ tính tay, kiểm ẩn/xóa khi đang kéo, giới hạn 32 node và 6 cấp, ID không tái sử dụng và 1.000 frame không thay cây. Ảnh trên web được lấy từ framebuffer của đúng executable; chúng không thay cho việc tự kéo thử control.

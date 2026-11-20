@@ -2,173 +2,111 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
-#include <string_view>
 
 namespace {
-
 int failures = 0;
+void check(bool ok, const char* what) {
+    if (!ok) { std::cerr << "FAIL: " << what << '\n'; ++failures; }
+}
 
-void check(bool condition, std::string_view label) {
-    if (!condition) {
-        ++failures;
-        std::cerr << "FAIL: " << label << '\n';
+bool sameBirds(const std::vector<lab::Boid>& a, const std::vector<lab::Boid>& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (a[i].id != b[i].id || a[i].position.x != b[i].position.x || a[i].position.y != b[i].position.y ||
+            a[i].velocity.x != b[i].velocity.x || a[i].velocity.y != b[i].velocity.y) return false;
     }
+    return true;
 }
 
-bool near(double actual, double expected) {
-    return std::abs(actual - expected) < 1e-8;
+void click(lab::Model& model, lab::Ui& ui, lab::Point p) {
+    check(lab::pointerDown(model, ui, p), "panel consumes press");
+    lab::pointerUp(model, ui, p);
 }
 
-void testGeometry() {
+void testGestures() {
     using namespace lab;
-    check(contains(pauseButton, {688.0, 80.0}), "top-left included");
-    check(!contains(pauseButton, {912.0, 80.0}), "right excluded");
-    check(!contains(pauseButton, {688.0, 124.0}), "bottom excluded");
-    check(hitTest({800.0, 252.0}) == Control::Gravity, "slider hit");
-    check(hitTest({800.0, 320.0}) == Control::None, "blank panel not button");
-    check(!windowToLogical({}, 0.0, 540.0).has_value(), "zero viewport rejected");
-    const auto logical = windowToLogical({800.0, 180.0}, 960.0, 720.0);
-    check(logical && near(logical->x, 800.0) && near(logical->y, 90.0), "tall letterbox offset");
-    const auto bar = windowToLogical({800.0, 20.0}, 960.0, 720.0);
-    check(bar && hitTest(*bar) == Control::None, "letterbox bar misses UI");
-    for (const Point viewport : {Point{960.0, 540.0}, Point{1920.0, 1080.0}, Point{1440.0, 540.0}, Point{480.0, 720.0}}) {
-        const double scale = std::min(viewport.x / canvasWidth, viewport.y / canvasHeight);
-        const double x = (viewport.x - canvasWidth * scale) / 2.0 + 800.0 * scale;
-        const double y = (viewport.y - canvasHeight * scale) / 2.0 + 100.0 * scale;
-        const auto point = windowToLogical({x, y}, viewport.x, viewport.y);
-        check(point && hitTest(*point) == Control::Pause, "round-trip button in resized window");
-    }
-}
-
-void testClock() {
-    using namespace lab;
-    Model a;
-    check(advance(a, 50.0) == 0 && a.ticks == 0, "paused time never accumulates");
-    setPaused(a, false);
-    for (int i = 0; i < 60; ++i) {
-        advance(a, fixedDt);
-    }
-    const double n = 60.0;
-    const double expectedVelocity = a.gravity * fixedDt * n;
-    const double expectedY = 90.0 + a.gravity * fixedDt * fixedDt * n * (n + 1.0) / 2.0;
-    // Đối chiếu công thức tổng cấp số cộng, không gọi lại vòng lặp của simulator.
-    check(near(a.velocity, expectedVelocity) && near(a.y, expectedY), "semi-implicit free-flight oracle");
-    Model b;
-    setPaused(b, false);
-    for (int i = 0; i < 15; ++i) {
-        advance(b, 4.0 * fixedDt);
-    }
-    check(a.ticks == b.ticks && near(a.y, b.y), "dt partitions have same fixed steps");
-    check(advance(b, 1e9) == 12, "long frame limited to twelve steps");
-    check(advance(b, std::numeric_limits<double>::quiet_NaN()) == 0, "NaN frame ignored");
-    const auto ticks = b.ticks;
-    setPaused(b, true);
-    advance(b, 3600.0);
-    check(b.ticks == ticks && b.accumulator == 0.0, "pause drops wait time");
-    setGravity(b, 1000.0);
-    resetSimulation(b);
-    check(b.paused && b.gravity == 1000.0 && b.y == 90.0 && b.ticks == 0, "reset keeps pause and gravity");
-    setGravity(b, std::numeric_limits<double>::infinity());
-    check(b.gravity == 1000.0, "nonfinite parameter ignored");
-}
-
-void testPointer() {
-    using namespace lab;
-    Model model;
+    Model m;
     Ui ui;
-    pointerUp(model, ui, {800.0, 100.0});
-    check(model.paused, "orphan release does not click");
-    check(pointerDown(model, ui, {800.0, 100.0}), "panel consumes down");
-    pointerMove(model, ui, {100.0, 100.0});
-    pointerUp(model, ui, {100.0, 100.0});
-    check(model.paused && ui.active == Control::None, "release outside cancels button");
-    pointerDown(model, ui, {800.0, 100.0});
-    pointerUp(model, ui, {800.0, 160.0});
-    check(model.paused, "release another button does not activate");
-    pointerDown(model, ui, {800.0, 100.0});
-    pointerMove(model, ui, {800.0, 160.0});
-    check(ui.active == Control::Pause && ui.focus == Control::Pause, "hover never steals active or focus");
-    pointerMove(model, ui, {800.0, 100.0});
-    pointerUp(model, ui, {800.0, 100.0});
-    check(!model.paused, "leave and reenter same button is click");
-
-    pointerDown(model, ui, {800.0, 252.0});
-    check(near(model.gravity, 600.0), "slider midpoint");
-    pointerMove(model, ui, {-500.0, 50.0});
-    check(model.gravity == 0.0 && ui.active == Control::Gravity, "drag left outside clamps");
-    pointerDown(model, ui, {800.0, 100.0});
-    check(ui.active == Control::Gravity, "second down cannot replace owner");
-    pointerMove(model, ui, {5000.0, 50.0});
-    check(model.gravity == 1200.0, "drag right outside clamps");
-    suspend(model, ui);
-    pointerUp(model, ui, {800.0, 100.0});
-    check(model.paused && ui.active == Control::None, "blur cancels before release");
-
-    pointerDown(model, ui, {800.0, 252.0});
-    pointerUp(model, ui, {1200.0, 252.0});
-    check(model.gravity == 1200.0 && ui.active == Control::None, "up commits final slider position without motion");
-    pointerDown(model, ui, {800.0, 252.0});
-    pointerUp(model, ui, {-100.0, 252.0});
-    check(model.gravity == 0.0, "up outside left clamps without motion");
-
-    const Point blank{800.0, 320.0};
-    if (!pointerDown(model, ui, blank)) {
-        scenePointerDown(model, blank);
-    }
-    check(model.scenePresses == 0, "blank panel consumed");
-    const Point scenePoint{320.0, 200.0};
-    if (!pointerDown(model, ui, scenePoint)) {
-        scenePointerDown(model, scenePoint);
-    }
-    check(model.scenePresses == 1 && model.y == 200.0, "scene receives unconsumed click");
+    const auto initial = m.colony.birds;
+    check(initial.size() == 192 && !m.paused, "known running preset");
+    check(hitTest({676,100}) == Control::Pause && hitTest({788,100}) == Control::None, "half-open bounds");
+    pointerDown(m, ui, {690,120});
+    pointerUp(m, ui, {500,120});
+    check(!m.paused, "outside release cancels click");
+    click(m, ui, {690,120});
+    check(m.paused && advance(m, 1.0) == 0, "pause freezes the solver");
+    pointerDown(m, ui, {700,260});
+    pointerMove(m, ui, {-500,260});
+    const auto small = m.colony.observe().neighbors.size();
+    pointerUp(m, ui, {1400,260});
+    check(m.colony.params.radius == 140 && m.colony.observe().neighbors.size() > small, "drag outside; query changes while paused");
+    check(sameBirds(initial, m.colony.birds), "inspection does not move birds");
+    click(m, ui, {740,180});
+    check(!m.colony.showNeighbors, "checkbox toggles once");
+    Model comparison = m;
+    comparison.colony.showNeighbors = true;
+    stepPhysics(m); stepPhysics(comparison);
+    check(sameBirds(m.colony.birds, comparison.colony.birds), "hide overlay does not affect solver");
+    check(pointerDown(m, ui, {670,390}), "blank panel consumes event");
+    const auto chosen = m.colony.selected;
+    scenePointerDown(m, {680,450});
+    check(m.scenePresses == 0 && m.colony.selected == chosen, "panel never selects bird");
+    scenePointerDown(m, {110,185});
+    check(m.scenePresses == 1, "one scene pick");
+    click(m, ui, {830,120});
+    check(m.paused && sameBirds(initial, m.colony.birds) && m.ticks == 0 &&
+          m.colony.params.radius == 64 && m.colony.params.separationWeight == 1.5 && m.colony.showNeighbors, "deterministic reset");
 }
 
-void testKeyboard() {
+void testKeyboardAndLoss() {
     using namespace lab;
-    Model model;
-    Ui ui;
-    keyDown(model, ui, Key::Tab, false, false);
-    check(ui.focus == Control::Pause, "first Tab selects Pause");
-    keyDown(model, ui, Key::Space, false, false);
-    keyDown(model, ui, Key::Space, false, true);
-    check(!model.paused, "Space repeat does not toggle twice");
-    keyDown(model, ui, Key::Tab, true, false);
-    check(ui.focus == Control::Gravity, "Shift Tab wraps to slider");
-    keyDown(model, ui, Key::Home, false, false);
-    keyDown(model, ui, Key::Right, false, true);
-    check(model.gravity == 20.0, "slider arrows allow repeat");
-    keyDown(model, ui, Key::End, false, false);
-    check(model.gravity == 1200.0, "End selects maximum");
-    keyDown(model, ui, Key::Tab, true, false);
-    check(ui.focus == Control::Reset, "reverse slider to Reset");
-    keyDown(model, ui, Key::Enter, false, false);
-    check(!model.paused && model.gravity == 1200.0 && model.ticks == 0, "keyboard reset preserves choices");
-    pointerDown(model, ui, {800.0, 252.0});
-    keyDown(model, ui, Key::Escape, false, false);
-    check(ui.active == Control::None, "Escape cancels gesture");
+    Model m; Ui ui;
+    for (auto control : order) {
+        keyDown(m, ui, Key::Tab, false, false);
+        check(ui.focus == control, "tab follows draw order");
+    }
+    keyDown(m, ui, Key::Home, false, false);
+    check(m.colony.params.separationWeight == 0, "separation home");
+    keyDown(m, ui, Key::End, false, false);
+    check(m.colony.params.separationWeight == 5, "separation end");
+    keyDown(m, ui, Key::Tab, true, false);
+    check(ui.focus == Control::Radius, "reverse tab");
+    setSlider(m, Control::Radius, std::numeric_limits<double>::quiet_NaN());
+    check(m.colony.params.radius == 64, "NaN cannot reach solver");
+    pointerDown(m, ui, {750,260});
+    suspend(m, ui);
+    check(ui.active == Control::None && m.paused, "lost focus releases drag");
+    const auto p = windowToLogical({800,210}, 960,720);
+    check(p && p->x == 800 && p->y == 120, "letterbox input");
+    check(!windowToLogical({},0,100), "invalid viewport");
 }
 
-} // namespace
+// [snippet oracle]
+void testBoids() {
+    using namespace lab;
+    Model a, b;
+    Ui ui;
+    for (double t : {0.0, 0.5, 1.0}) {
+        setSlider(a, Control::Radius, t);
+        check(audit(a, ui), "grid neighbor IDs equal independent brute force");
+    }
+    setSlider(b, Control::Radius, 1.0);
+    setSlider(a, Control::Separation, 0);
+    setSlider(b, Control::Separation, 1);
+    stepPhysics(a); stepPhysics(b);
+    check(!sameBirds(a.colony.birds, b.colony.birds), "separation changes trajectories");
+    resetSimulation(a); resetSimulation(b);
+    advance(a, fixedDt); advance(a, fixedDt);
+    advance(b, 2 * fixedDt);
+    check(a.ticks == 2 && sameBirds(a.colony.birds, b.colony.birds), "fixed step partition");
+    check(advance(a, 9.0) == 6, "bounded catch-up");
+}
+// [/snippet oracle]
+}
 
 int main() {
-    testGeometry();
-    testClock();
-    testPointer();
-    testKeyboard();
-
-    lab::Model model;
-    lab::Ui ui;
-    lab::setPaused(model, false);
-    for (int i = 0; i < 12000; ++i) {
-        lab::setGravity(model, double(i % 1201));
-        lab::advance(model, 1.0 / 60.0);
-        check(lab::audit(model, ui), "bounded stress state");
-    }
-    model.gravity = -1.0;
-    check(!lab::audit(model, ui), "audit reports corrupted model without fixing it");
-    if (failures != 0) {
-        return EXIT_FAILURE;
-    }
-    std::cout << "Project 65 validation passed\n";
+    testGestures(); testKeyboardAndLoss(); testBoids();
+    if (failures) return EXIT_FAILURE;
+    std::cout << "PASS: 192 P28 Boids, panel gestures, keyboard, reset, spatial oracle\n";
     return EXIT_SUCCESS;
 }

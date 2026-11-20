@@ -1,0 +1,86 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vì sao riêng nút Pause có màu khác các nút bên cạnh?
+
+## Vấn đề cần giải quyết
+
+Pause là button, có hai class action và primary, đồng thời có ID pause. Bốn rule có thể cùng nói về nó. Nếu cứ nạp cái nào vào map sau thì thắng, việc đổi vị trí rule chung của button có thể xóa mất điểm nhấn riêng của Pause.
+
+## Hiểu ý tưởng trước khi viết code
+
+So độ cụ thể trước: ID thắng class, class thắng tag. Nếu ngang nhau, declaration xuất hiện sau thắng. Quan trọng nhất: so *từng thuộc tính*; thắng background không hề xóa color đã lấy từ rule khác.
+
+<InteractiveLab demo="tiny-css" mode="css69-3" />
+
+## Viết code từng bước
+
+### Xác định điều kiện có khớp không
+
+Element có nhiều class. .action và .primary đều có thể đúng, nhưng chỉ #pause nhắm riêng nút Pause. Rank 0 có nghĩa không tham gia.
+
+{/* snippet include/style/cascade.hpp#match */}
+
+```cpp title="include/style/cascade.hpp — Xác định điều kiện có khớp không"
+inline int match(const Selector& selector, const Element& e) {
+    if (selector.prefix == '#' && selector.name == e.id)
+        return 3;
+    if (selector.prefix == '.' && std::find(e.classes.begin(), e.classes.end(), selector.name) != e.classes.end())
+        return 2;
+    if (!selector.prefix && selector.name == e.tag)
+        return 1;
+    return 0;
+}
+```
+
+### Giữ người thắng và vết về nguồn
+
+Mỗi property lưu rule nguồn, độ ưu tiên và giá trị. Việc giữ matched rules giúp inspector sau này giải thích được cả rule khớp nhưng không thắng.
+
+{/* snippet include/style/cascade.hpp#compete */}
+
+```cpp title="include/style/cascade.hpp — Giữ người thắng và vết về nguồn"
+inline Computed cascade(const Element& e, lab::BoxStyle base, const Sheet& sheet) {
+    Computed c;
+    c.box = base;
+    for (std::size_t index = 0; index < sheet.rules.size(); ++index) {
+        const auto& rule = sheet.rules[index];
+        const int rank = match(rule.selector, e);
+        if (!rank)
+            continue;
+        c.matches.push_back(index);
+        for (const auto& d : rule.properties) {
+            const auto previous = c.winner.find(d.key);
+            if (previous != c.winner.end() && previous->second.priority > rank)
+                continue;
+            c.winner[d.key] = {rank, index, d};
+        }
+    }
+    for (const auto& [key, pick] : c.winner)
+        apply(c, pick.declaration);
+    return c;
+}
+```
+
+## Ghép các phần lại
+
+Chạy checkpoint 3. Đổi `#pause { background: ...; }`, F5, rồi chuyển qua theme sáng. Các nút khác không bị nhuộm cùng màu. Bấm Pause: đàn vẫn dừng, điều đang thay chỉ là cách vẽ control.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_69_checkpoint_3 --parallel 2
+.\build\Release\project_69_checkpoint_3.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Đảo hai rule cùng độ ưu tiên rồi đảo một rule tag với ID. Trường hợp đầu có thể đổi kết quả; trường hợp sau thì không. Đừng nhầm 'gần cuối file' với 'cụ thể hơn'.
+
+## Tự kiểm tra kết quả
+
+Màu từ computed style thật sự đến nét vẽ SDL. Dùng fixture màu #111111, #222222, #333333 để phân biệt người thắng trước khi so giao diện bằng mắt.
+
+## Bài tập mở rộng
+
+Làm cho hai class cùng đặt color và chỉ một class đặt border-color. Tự dự đoán kết quả của cả hai property.
+
+[Bài 4: Đổi màu không có nghĩa là phải đo lại cả bảng](/projects/tiny-css/04-doi-mau-hay-xep-lai).

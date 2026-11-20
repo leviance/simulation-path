@@ -1,103 +1,131 @@
-#include "audit.hpp"
-#include "inspector.hpp"
+#include "trail/scene.hpp"
 #include <cstdlib>
 #include <iostream>
+#include <set>
+#include <stdexcept>
 #include <string_view>
 
 namespace {
 int failures = 0;
 
-// CTest phải nhận exit code lỗi ở cả Debug lẫn Release.
-void check(bool condition, std::string_view label) {
+void check(bool condition, std::string_view message) {
     if (!condition) {
         ++failures;
-        std::cerr << "FAIL: " << label << '\n';
+        std::cerr << message << '\n';
     }
+}
+
+void testStorage() {
+    std::set<int> indices;
+    for (int y = 0; y < 16; ++y) {
+        for (int z = 0; z < 16; ++z) {
+            for (int x = 0; x < 16; ++x)
+                indices.insert(trail::localIndex(x, y, z));
+        }
+    }
+    check(indices.size() == 4096 && *indices.rbegin() == 4095, "indices must be unique");
+    check(trail::localIndex(1, 0, 0) == 1 && trail::localIndex(0, 0, 1) == 16 && trail::localIndex(0, 1, 0) == 256, "axis strides");
+    for (const auto c : std::array<trail::Cell, 6>{{{-1, 0, 0}, {16, 0, 0}, {0, -1, 0}, {0, 16, 0}, {0, 0, -1}, {0, 0, 16}}}) {
+        bool rejected = false;
+        try {
+            trail::localIndex(c.x, c.y, c.z);
+        } catch (const std::out_of_range&) {
+            rejected = true;
+        }
+        check(rejected, "reject local coordinates outside section");
+    }
+    for (int x = -49; x <= 49; ++x) {
+        const auto [chunk, local] = trail::splitCoordinate(x);
+        if (local < 0 || local >= 16 || chunk * 16 + local != x) {
+            throw std::runtime_error("world=" + std::to_string(x) + " chunk=" + std::to_string(chunk) + " local=" + std::to_string(local));
+        }
+    }
+}
+
+void testCameraAndDepth() {
+    trail::Camera eye;
+    eye.eye = {0, 0, 0};
+    eye.yaw = 0;
+    eye.pitch = 0;
+    trail::Frame frame(160, 90);
+    const trail::Atlas atlas;
+    trail::Drawing draw(frame, atlas, eye);
+    const auto near = draw.project({{1, 0, 2}, 0, 0});
+    const auto far = draw.project({{1, 0, 4}, 0, 0});
+    check(std::abs((near.x - 80) - 2 * (far.x - 80)) < 1e-9, "perspective halves apparent width");
+    check(std::abs(trail::dot(trail::walkDirection(0, 1, 1), trail::walkDirection(0, 1, 1)) - 1) < 1e-9, "normalize diagonal input");
+    const trail::Face front{{-1, -1, 3}, 5, 2, 2, trail::Block::Grass};
+    const trail::Face back{{-1, -1, 5}, 5, 2, 2, trail::Block::Stone};
+    frame.clear();
+    draw.drawFace(front);
+    draw.drawFace(back);
+    const int middle = 45 * 160 + 80;
+    const trail::Color first = frame.pixels[middle];
+    check(std::abs(frame.depth[middle] - 1.0f / 3) < 1e-5, "near surface depth");
+    frame.clear();
+    draw.drawFace(back);
+    draw.drawFace(front);
+    check(frame.pixels[middle].g == first.g && frame.pixels[middle].r == first.r, "draw order independence");
+    frame.clear();
+    draw.quad({trail::Vec3{-1, -1, -1}, {1, -1, -1}, {1, 1, -1}, {-1, 1, -1}}, 1, 1, trail::Block::Stone, 0, 1);
+    const auto untouched = [](float z) {
+        return z == 0;
+    };
+    const auto drawn = [](float z) {
+        return z > 0;
+    };
+    const auto withinClip = [](float z) {
+        return std::isfinite(z) && z <= 10.0001f;
+    };
+    check(std::all_of(frame.depth.begin(), frame.depth.end(), untouched), "face behind eye");
+    draw.quad({trail::Vec3{-0.4, -0.2, -1}, {0.4, -0.2, 1}, {0.4, 0.2, 1}, {-0.4, 0.2, -1}}, 1, 1, trail::Block::Stone, 0, 1);
+    check(std::all_of(frame.depth.begin(), frame.depth.end(), untouched), "plane through the eye projects to a line");
+    draw.quad({trail::Vec3{-0.4, -0.2, -1}, {0.1, -0.2, 1}, {0.1, 0.2, 1}, {-0.4, 0.2, -1}}, 1, 1, trail::Block::Stone, 0, 1);
+    check(std::any_of(frame.depth.begin(), frame.depth.end(), drawn), "near-plane crossing draws");
+    check(std::all_of(frame.depth.begin(), frame.depth.end(), withinClip), "bounded clipped depth");
+}
+
+void testBank() {
+    auto pair = trail::singleStone();
+    pair.put(8, 7, 7, trail::Block::Stone);
+    check(trail::naiveMesh(pair).size() == 12, "pair keeps shared face twice");
+    trail::Scene scene;
+    scene.inspectFixtures();
+    const auto before = scene.column.sections;
+    for (int z = 0; z < trail::side; ++z) {
+        bool hasWater = false;
+        for (int x = 0; x < trail::side; ++x) {
+            if (scene.column.get(x, 3, z) == trail::Block::Water)
+                hasWater = true;
+        }
+        check(hasWater, "creek has a wet channel along all sixteen rows");
+    }
+    const int builds = scene.rebuilds;
+    trail::travel(scene, 1, 0, 0, 0.05);
+    check(scene.rebuilds == builds && scene.column.sections == before, "view cannot change world");
+    std::array<int, trail::materialCount> counts{};
+    for (auto block : scene.column.sections.front())
+        ++counts[static_cast<int>(block)];
+    for (auto block : {trail::Block::Air, trail::Block::Wood, trail::Block::Leaves, trail::Block::Sand, trail::Block::Grass, trail::Block::Water})
+        check(counts[static_cast<int>(block)] > 0, "bank requires distinct materials");
+    check(scene.solids + counts[0] == 4096 && scene.mesh.size() == static_cast<std::size_t>(scene.solids) * 6, "real geometry count");
+    const auto a = trail::paintTexel(trail::Block::Grass, 0, 0, 0);
+    const auto b = trail::paintTexel(trail::Block::Grass, 0, 0, 15);
+    check(a.r > a.g && b.g > b.r, "grass fringe has soil below grass");
 }
 } // namespace
 
 int main() {
     try {
-        // Duyệt toàn bộ miền để chứng minh ánh xạ không trùng và không vượt mảng.
-        std::array<bool, voxel::capacity> visited{};
-        for (int y = 0; y < 16; ++y) {
-            for (int z = 0; z < 16; ++z) {
-                for (int x = 0; x < 16; ++x) {
-                    const int i = voxel::index(x, y, z);
-                    voxel::check(!visited.at(i), "duplicate index");
-                    visited.at(i) = true;
-                }
-            }
-        }
-        voxel::check(voxel::index(15, 15, 15) == 4095, "last index");
-        voxel::check(voxel::index(1, 0, 0) == 1 && voxel::index(0, 0, 1) == 16 && voxel::index(0, 1, 0) == 256, "published axis strides");
-        for (auto p : std::array<std::array<int, 3>, 6>{{{-1, 0, 0}, {16, 0, 0}, {0, -1, 0}, {0, 16, 0}, {0, 0, -1}, {0, 0, 16}}}) {
-            bool rejected = false;
-            try {
-                voxel::index(p[0], p[1], p[2]);
-            } catch (const std::out_of_range&) {
-                rejected = true;
-            }
-            voxel::check(rejected, "bounds rejection");
-        }
-
-        // Hai cube kề nhau vẫn có 24 triangles, chưa loại mặt chung ở Project 58.
-        voxel::Chunk pair{};
-        voxel::set(pair, 0, 0, 0, voxel::Block::Stone);
-        voxel::set(pair, 1, 0, 0, voxel::Block::Grass);
-        voxel::check(voxel::buildMesh(pair).size() == 24, "no hidden face elimination yet");
-        voxel::check(voxel::solidCount(voxel::makeChunk(2)) == 1408, "steps fixture");
-        const auto steps = voxel::makeChunk(2);
-        voxel::check(voxel::get(steps, 0, 0, 0) == voxel::Block::Stone, "bottom Stone");
-        voxel::check(voxel::get(steps, 0, 2, 0) == voxel::Block::Dirt, "two Dirt layers under Grass");
-        voxel::check(voxel::get(steps, 0, 3, 0) == voxel::Block::Grass, "top Grass");
-        voxel::check(voxel::get(steps, 0, 4, 0) == voxel::Block::Air, "height is exclusive");
-        for (const auto& triangle : voxel::buildMesh(voxel::makeChunk(1))) {
-            for (const auto& vertex : triangle.points) {
-                voxel::check(vertex.x >= 0 && vertex.x <= 16 && vertex.y >= 0 && vertex.y <= 16 && vertex.z >= 0 && vertex.z <= 16, "mesh world bounds");
-            }
-        }
-        const auto before = pair;
-        voxel::buildMesh(pair, 0);
-        voxel::check(pair == before, "mesh must not mutate data");
-        const std::array<voxel::Vec3, 6> normals{{{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}}};
-        for (int face = 0; face < 6; ++face) {
-            const auto q = voxel::faces.at(face);
-            const voxel::Vec3 a{q[1].x - q[0].x, q[1].y - q[0].y, q[1].z - q[0].z};
-            const voxel::Vec3 b{q[2].x - q[0].x, q[2].y - q[0].y, q[2].z - q[0].z};
-            const voxel::Vec3 n{a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
-            const auto expected = normals.at(face);
-            voxel::check(n.x == expected.x && n.y == expected.y && n.z == expected.z, "outward winding");
-        }
-
-        // Kiểm camera, picking half-open và depth mà không mở cửa sổ SDL.
-        voxel::Camera camera;
-        const auto center = voxel::project({8, 8, 8}, camera);
-        voxel::check(center.x == 160 && center.y == 120 && center.depth == 0, "projection center");
-        voxel::orbit(camera, 1e5, 1e5);
-        voxel::zoom(camera, 100);
-        voxel::check(camera.pitch == 1.2 && camera.zoom == 1.5, "camera bounds");
-        voxel::check(voxel::pickCell(660, 60, 0).value() == std::array<int, 3>{0, 0, 0}, "grid origin");
-        voxel::check(!voxel::pickCell(916, 60, 0).has_value(), "right edge exclusive");
-        voxel::check(!voxel::pickCell(660, 316, 0).has_value(), "bottom edge exclusive");
-        voxel::Mesh overlap;
-        overlap.push_back({{{{7, 7, 9}, {9, 7, 9}, {8, 9, 9}}}, {0, 255, 0, 255}});
-        overlap.push_back({{{{7, 7, 6}, {9, 7, 6}, {8, 9, 6}}}, {255, 0, 0, 255}});
-        voxel::Camera front;
-        front.yaw = 0;
-        front.pitch = 0;
-        front.scale = 30;
-        voxel::Frame frame;
-        voxel::render(frame, overlap, front);
-        voxel::check(frame.pixels[120 * 320 + 160].g == 255, "near triangle wins over later far triangle");
-        voxel::audit();
-        check(true, "pure audit completed");
-        std::cout << "Project58 PASS: storage, winding, counts, slices, camera, depth\n";
+        // Test thuần: không mở SDL window, assertion vẫn hoạt động ở Release.
+        testStorage();
+        testCameraAndDepth();
+        testBank();
+        if (failures != 0)
+            return EXIT_FAILURE;
+        std::cout << "PASS: signed cells, all boundaries, naive mesh, bank, perspective, near clip and Z-buffer\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
-        check(false, error.what());
-    }
-    if (failures != 0) {
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;

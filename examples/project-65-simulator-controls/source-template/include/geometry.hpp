@@ -27,10 +27,12 @@ struct Rect {
 };
 
 #if LAB_CHECKPOINT >= 2
+// [snippet half-open]
 inline bool contains(Rect rect, Point point) {
     // Cạnh phải/dưới không thuộc hình: hai control kề nhau không nhận cùng một điểm.
     return std::isfinite(point.x) && std::isfinite(point.y) && point.x >= rect.x && point.x < rect.x + rect.width && point.y >= rect.y && point.y < rect.y + rect.height;
 }
+// [/snippet half-open]
 #endif
 
 #if LAB_CHECKPOINT >= 6

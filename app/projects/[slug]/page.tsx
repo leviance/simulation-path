@@ -117,15 +117,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ slug: 
 
         {project.demoId && (
           <section className="project-demo" aria-labelledby="project-demo-title">
-            <header>
-              <span className="section-index">MÔ HÌNH TƯƠNG TÁC</span>
-              <h2 id="project-demo-title">Thử ý tưởng chính trước khi tự viết</h2>
-              <p>
-                Canvas không chạy mã C++, nhưng dùng cùng biến và công thức với project. Hãy thay
-                tham số, dự đoán kết quả rồi quan sát xem suy luận của bạn đúng đến đâu.
-              </p>
-            </header>
-            <InteractiveLab demo={project.demoId} />
+            <InteractiveLab demo={project.demoId} overview />
           </section>
         )}
 

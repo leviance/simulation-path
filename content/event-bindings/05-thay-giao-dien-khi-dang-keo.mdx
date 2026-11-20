@@ -1,0 +1,97 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đổi cả bảng giữa một lần kéo
+
+## Vấn đề cần giải quyết
+
+Giữ chuột trên Radius rồi chuyển từ bảng thường sang bảng khảo sát. Hai cây có thể dùng lại cùng một WidgetId dạng số cho hai element khác nhau. Đừng để lần thả thuộc cây cũ điều khiển nhầm cây mới.
+
+## Hiểu ý tưởng trước khi viết code
+
+Nạp một phiên hoàn chỉnh bên cạnh phiên hiện hành. Chỉ khi markup, stylesheet, layout và năm binding đều hợp lệ mới thay cả bộ. Mỗi dispatcher thuộc một lần nạp; generation không khớp thì từ chối.
+
+<InteractiveLab demo="event-bindings" mode="event71-5" />
+
+## Viết code từng bước
+
+### Thay cả phiên sau khi mọi bước thành công
+
+Hủy gesture trước khi thử đổi cây. File HTML có thể đúng cú pháp mà vẫn thiếu #reset, trường hợp đó giữ lại bảng và callback hợp lệ, báo tên binding thiếu.
+
+{/* snippet include/events/reload.hpp#switch-document */}
+
+```cpp title="include/events/reload.hpp — Thay cả phiên sau khi mọi bước thành công"
+inline bool reloadBound(Desk& live, Palette& paint, FlexState& flex, Bus& bus, const std::filesystem::path& html, const std::filesystem::path& css, Command command = hostCommand) {
+    lab::cancel(live.ui);
+    try {
+        Desk candidate;
+        candidate.edition = live.edition;
+        candidate.page.layout.width = live.page.layout.width;
+        candidate.model.colony.params = live.model.colony.params;
+        install(candidate, readFile(html));
+        Palette nextPaint;
+        nextPaint.defaults = candidate.page.layout.scene.styles;
+        FlexState nextFlex;
+        if (!changeFlexSheet(candidate, nextPaint, nextFlex, css))
+            throw Error(candidate.status);
+        Bus next;
+        next.stopAtGroup = bus.stopAtGroup;
+        connect(candidate, next, std::move(command));
+        live.page = std::move(candidate.page);
+        live.edition = candidate.edition;
+        live.model.colony.params = candidate.model.colony.params;
+        live.ui = {};
+        live.observed = 0;
+        live.name = html.filename().string();
+        live.status = live.name + "   /   five controls connected";
+        live.error = false;
+        paint = std::move(nextPaint);
+        flex = std::move(nextFlex);
+        bus = std::move(next);
+        return true;
+    } catch (const std::exception& e) {
+        live.error = true;
+        live.status = html.filename().string() + ": " + e.what();
+        return false;
+    }
+}
+```
+
+### Đếm lệnh thật bên cạnh đường truyền
+
+Kiểm độc lập hai tình huống có và không stop. Các ca sau đó kéo, resize, thay tài liệu, thả muộn, đối chiếu radius, lực tách, checkbox và trạng thái Pause.
+
+{/* snippet tests/tests.cpp#one-action */}
+
+```cpp title="tests/tests.cpp — Đếm lệnh thật bên cạnh đường truyền"
+click("pause");
+check(d.model.paused && b.commands == 1 && b.ancestorCalls == 1, "one click toggles exactly once");
+check(b.route == std::vector<std::string>{"pause", "tools", "desk"}, "target to ancestors in order");
+b.stopAtGroup = true;
+click("pause");
+check(!d.model.paused && b.commands == 2 && b.route == std::vector<std::string>{"pause", "tools"}, "handled is not stop; explicit stop cuts root");
+```
+
+## Ghép các phần lại
+
+Trong final nhấn 2: nhóm tham số lên trước. Nhấn 3 thử tài liệu thiếu binding: bảng khảo sát vẫn làm việc. Nhấn 1 hoặc sửa file rồi F4; F5 chỉ nạp CSS. Tắt E để trở về bàn sạch, chạy CTest ở Debug và Release.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_71_final --parallel 2
+.\build\Release\project_71_final.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Giữ registry cũ và cho nó tra cây mới bằng mỗi số ID. Trường hợp dễ lộ nhất là đổi bố cục giữa lần nhấn và thả, không phải click sạch sau reload.
+
+## Tự kiểm tra kết quả
+
+Có năm chức năng tác động đúng mô phỏng; trace không làm thay tác dụng của lệnh. Giao diện mới dùng được bằng chuột và Tab, file sai không xóa phiên cũ.
+
+## Bài tập mở rộng
+
+Đổi hành vi Pause thành chọn một preset mà không biên dịch C++: hiện tại phải sửa chỗ nào? Project 72 sẽ chuyển quyết định đó ra file script.
+
+[Tải toàn bộ mã nguồn C++ và các file thực hành](/downloads/project-71-event-bindings.zip) · [Trở lại lộ trình](/roadmap#project-71).

@@ -1,0 +1,174 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Làm rõ chi tiết mà không sửa dữ liệu
+
+## Vấn đề cần giải quyết
+
+Trong mẫu vật, matrix, vỏ và các lõi có scalar khác nhau nhưng không phải lúc nào cũng dễ phân biệt trên ảnh xám. Nếu sửa trực tiếp volume để làm sáng một vùng, ta sẽ làm mất dữ liệu gốc và không còn so sánh sampler đúng cách.
+
+Ta cần điều khiển cách nhìn, không phải thay dữ liệu. Bài này thêm window/level, palette và histogram để biết mình đang làm nổi bật khoảng giá trị nào.
+
+## Hiểu ý tưởng trước khi viết code
+
+Level là tâm của khoảng scalar đang xem; width là độ rộng khoảng ấy. Điểm ở đáy khoảng được đưa về 0, đỉnh khoảng về 1, phần giữa được ánh xạ tuyến tính. Các giá trị ở ngoài bị kẹp khi hiển thị, không bị xóa khỏi volume.
+
+Với level = 0,5 và width = 0,5, khoảng quan sát là [0,25;0,75]. Scalar 0,5 nằm giữa nên có brightness 0,5. Hai scalar 0,8 và 0,9 có thể cùng bị hiển thị ở đầu sáng; ảnh không còn đủ thông tin để phân biệt chúng, nhưng inspector vẫn phải đọc được hai giá trị khác nhau.
+
+Histogram đếm scalar gốc, không đếm màu hoặc brightness đã kẹp. Ứng dụng dùng chiều cao `log(1+n)` để nhìn được cả các bin ít voxel; số mẫu trong các bin vẫn là số đếm nguyên ban đầu.
+
+<InteractiveLab demo="volume-slicer" mode="slice53-5" />
+
+## Viết code từng bước
+
+### 1. Ánh xạ một scalar qua khoảng đang xem
+
+Width phải dương. Ta xử lý scalar không hữu hạn ở đây thay vì chuyển NaN sang byte rồi tiếp tục vẽ một ảnh có vẻ bình thường.
+
+{/* snippet include/display.hpp#window-level */}
+
+```cpp title="include/display.hpp — Level là tâm, width là độ rộng"
+inline double windowValue(double scalar, Window window) {
+    if (!std::isfinite(scalar) || !std::isfinite(window.level) || !std::isfinite(window.width) || window.width <= 0)
+        throw std::invalid_argument("Finite scalar and positive window width required");
+    const double low = window.level - window.width * 0.5;
+    return std::clamp((scalar - low) / window.width, 0.0, 1.0);
+}
+```
+
+Kẹp [0,1] là quyết định của đường hiển thị. Không đặt phép kẹp này trong `Volume::set`, vì một volume tổng quát có thể chứa các giá trị không thuộc khoảng ấy; chính fixture x+10y+100z cũng là một ví dụ.
+
+### 2. Tạo RGBA từ ảnh scalar đã lấy mẫu
+
+`scalarColor` dùng window trước, sau đó chọn mức xám hoặc bảng màu. Sáu mốc màu chia brightness thành năm đoạn; trong mỗi đoạn chỉ nội suy hai màu kề nhau. Màu không được gán ý nghĩa vật liệu hay mô sinh học tự động.
+
+{/* snippet include/display.hpp#scalar-palette */}
+
+```cpp title="include/display.hpp — Từ brightness đến một màu"
+inline Color scalarColor(double scalar, Window window, bool colored) {
+    double t = std::clamp(scalar, 0.0, 1.0);
+    t = windowValue(scalar, window);
+    if (colored) {
+        // The transfer table is display only. Never interpolate these colors as volume data.
+        constexpr std::array<Color, 6> stops{{
+            {0.025, 0.035, 0.055},
+            {0.10, 0.27, 0.35},
+            {0.24, 0.51, 0.52},
+            {0.86, 0.67, 0.42},
+            {0.98, 0.42, 0.24},
+            {1.0, 0.94, 0.78}
+        }};
+        const double position = t * 5;
+        const int lower = std::min(static_cast<int>(position), 4);
+        return mix(stops[lower], stops[lower + 1], position - lower);
+    }
+    return {t, t, t};
+}
+```
+
+`colorImage` chỉ đọc mảng scalar và ghi sang một mảng RGBA khác. Đây là nơi gọi hàm ánh xạ vừa viết, không phải một lời gọi nằm đâu đó ngoài vòng dựng ảnh.
+
+{/* snippet include/display.hpp#color-image */}
+
+```cpp title="include/display.hpp — Đổi ảnh mà không sửa scalar"
+inline void colorImage(const SliceImage& image, std::vector<std::uint32_t>& rgba, Window window, bool colored) {
+    rgba.resize(image.scalar.size());
+    for (std::size_t index = 0; index < image.scalar.size(); ++index) {
+        const double scalar = image.scalar[index];
+        if (!std::isfinite(scalar)) throw std::invalid_argument("Nonfinite slice sample");
+        rgba[index] = pack(scalarColor(scalar, window, colored));
+    }
+}
+```
+
+Giá trị trong inspector không lấy ngược từ RGBA. Nếu dùng một pixel màu làm đầu vào nội suy, bạn sẽ trộn cả việc lượng tử hóa 8-bit, clipping và palette vào phép đo.
+
+### 3. Đếm đúng dữ liệu cần khảo sát
+
+Histogram này dùng 64 bin cố định cho [0,1], phù hợp các dataset tổng hợp của ứng dụng. Scalar nằm ngoài khoảng vẫn được giữ trong volume và min/max; riêng bin đầu/cuối nhận các giá trị ngoài khoảng để tổng số đếm không bị mất.
+
+{/* snippet include/analysis.hpp#histogram */}
+
+```cpp title="include/analysis.hpp — Histogram từ toàn bộ volume"
+inline Statistics measure(const Volume& volume) {
+    Statistics result;
+    result.count = volume.values().size();
+    if (result.count != volume.grid().count() || result.count == 0)
+        throw std::invalid_argument("Storage does not match grid");
+    result.minimum = volume.values().front();
+    result.maximum = volume.values().front();
+    double sum = 0;
+    for (float scalar : volume.values()) {
+        if (!std::isfinite(scalar)) throw std::invalid_argument("Volume contains nonfinite scalar");
+        result.minimum = std::min(result.minimum, static_cast<double>(scalar));
+        result.maximum = std::max(result.maximum, static_cast<double>(scalar));
+        sum += scalar;
+        const int bin = std::clamp(static_cast<int>(std::floor(std::clamp(static_cast<double>(scalar), 0.0, 1.0) * 64)), 0, 63);
+        ++result.bins[bin];
+    }
+    result.mean = sum / static_cast<double>(result.count);
+    return result;
+}
+```
+
+Hàm cũng kiểm số phần tử và NaN/Inf. Một bảng histogram trông đẹp nhưng chỉ đếm lát đang xem không được gọi là histogram toàn volume. Tổng 64 bin phải đúng N³.
+
+### 4. Giữ dữ liệu cũ nếu tạo dataset mới thất bại
+
+Đổi một nút không nên làm mất dữ liệu đang dùng. `load` tạo volume/statistics mới trong biến tạm rồi mới commit chúng vào state. Ở checkpoint này chưa có mesh; bài sau bổ sung mesh vào cùng giao dịch ấy.
+
+{/* snippet include/state.hpp#transactional-load */}
+
+```cpp title="include/state.hpp — Chuẩn bị thành công rồi mới thay dataset"
+bool load(Preset nextPreset, int nextSide) {
+    paused = true;
+    const auto started = std::chrono::steady_clock::now();
+    try {
+        auto nextVolume = std::make_unique<Volume>(buildVolume(nextPreset, nextSide));
+        Statistics nextStatistics = measure(*nextVolume);
+        volume = std::move(nextVolume);
+        statistics = nextStatistics;
+        preset = nextPreset;
+        side = nextSide;
+        previousCut.fill(1e30);
+        previousWindow = {-1, -1};
+        buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        status = "Dataset ready. Measurements use the full scalar array.";
+        dirty = true;
+        return true;
+    } catch (const std::exception& error) {
+        status = std::string("Dataset unchanged: ") + error.what();
+        return false;
+    }
+}
+```
+
+Đổi window không gọi `load`. Chỉ đổi preset hoặc N mới tạo lại volume. Đây là ranh giới quan trọng giữa thao tác xem và thao tác thay dữ liệu.
+
+## Ghép các phần lại
+
+Trong checkpoint 5, sliders Level/Window đổi `state.window`, Palette đổi `state.colored`. `refresh` tính màu mới rồi upload texture; scalar trong volume không được ghi lại. Phím J/K đổi level, U/I đổi width ở bản C++.
+
+```bash
+cmake --build build --config Debug --target project_53_checkpoint_5 --parallel 1
+```
+
+Chọn Gaussian, giữ probe rồi giảm width. Những vùng có gradient nhỏ sẽ dễ thấy hơn nhưng nhiều vùng khác bị kẹp đen/sáng. Không diễn giải màu ấy thành loại mô, đơn vị HU hoặc kết quả chẩn đoán.
+
+## Thử làm sai để hiểu đúng
+
+1. Ghi scalar nearest/trilinear tại một điểm trước khi đổi window. Sau khi ảnh đổi mạnh, hai scalar ấy có được phép đổi không?
+2. Dự đoán histogram sẽ làm gì khi chỉ bật palette. Nếu các bin thay đổi, bạn đang đếm dữ liệu sau ánh xạ màu hoặc cập nhật nhầm volume.
+3. Thử width bằng 0 trong test, không qua slider có giới hạn. Hàm phải báo input sai, không chia cho 0 rồi tạo một ảnh trắng.
+
+## Tự kiểm tra kết quả
+
+- [ ] Window/level và palette không thay dataset, probe hay scalar đo được.
+- [ ] Histogram đếm đủ 262.144 hoặc 2.097.152 mẫu tùy N.
+- [ ] Tổng bin giữ nguyên khi quét lát, đổi camera hoặc đổi display window.
+- [ ] Dataset bị lỗi không được thay thế volume trước đó bằng một trạng thái dở dang.
+
+## Bài tập mở rộng
+
+Tạo một volume có hai cụm scalar rất gần nhau, chẳng hạn 0,41 và 0,44. Chọn một window làm hai cụm dễ phân biệt. Sau đó giải thích phần thông tin nào bị mất nếu chỉ lưu ảnh RGBA mà bỏ scalar gốc.
+
+Bài sau đặt các ảnh này trở lại trong khối 3D. Ta sẽ dùng ánh sáng để thấy chiều sâu, nhưng vẫn giữ ba ảnh phẳng và inspector làm nơi đọc scalar.

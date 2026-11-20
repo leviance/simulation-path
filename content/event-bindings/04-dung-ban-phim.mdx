@@ -1,0 +1,103 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đưa bàn phím vào cùng đường gọi với chuột
+
+## Vấn đề cần giải quyết
+
+Hãy bỏ tay khỏi chuột, dùng Tab tới Pause rồi giữ Space. Nếu xử lý key repeat như năm cú click, đàn lúc chạy lúc dừng. Trong khi đó với slider, giữ mũi tên để tăng đều lại là cách dùng bình thường.
+
+## Hiểu ý tưởng trước khi viết code
+
+Focus không chạy theo hover. Tab/Shift+Tab đi theo thứ tự các widget còn nhìn thấy; Enter/Space phát Click của đúng target một lần. Với slider, phím số học tạo đề xuất đã snap rồi phát cùng Input/Change như chuột.
+
+<InteractiveLab demo="event-bindings" mode="event71-4" />
+
+## Viết code từng bước
+
+### Nhận diện loại control đang có focus
+
+Button chặn lặp khi kích hoạt; slider dùng step trong HTML. Home/End đi thẳng về hai đầu. Không có focus phù hợp thì trả quyền xử lý về cảnh.
+
+{/* snippet include/events/gesture.hpp#keyboard-dispatch */}
+
+```cpp title="include/events/gesture.hpp — Nhận diện loại control đang có focus"
+inline bool navigate(Desk& d, Bus& bus, lab::Key key, bool shift, bool repeat) {
+    auto& tree = d.page.layout.scene.tree;
+    if (key == lab::Key::Tab || key == lab::Key::Escape)
+        return lab::keyDown(tree, d.model, d.ui, key, shift, repeat);
+    if (d.ui.active)
+        return true;
+    const auto v = lab::locate(tree, d.ui.focus);
+    if (!v || !control(*v))
+        return false;
+    if (v->node->kind == lab::Kind::Button && (key == lab::Key::Space || key == lab::Key::Enter)) {
+        if (!repeat)
+            dispatch(d, bus, {Topic::Click, d.ui.focus});
+        return true;
+    }
+    if (!d.page.values.contains(d.ui.focus))
+        return false;
+    const auto& r = *d.page.document.elements.at(d.page.elements.at(d.ui.focus)).range;
+    const double current = rangeValue(d, d.ui.focus);
+    double proposal = current;
+    if (key == lab::Key::Left)
+        proposal -= r.step;
+    else if (key == lab::Key::Right)
+        proposal += r.step;
+    else if (key == lab::Key::Home)
+        proposal = r.low;
+    else if (key == lab::Key::End)
+        proposal = r.high;
+    else
+        return false;
+    proposal = snap(r, proposal);
+    if (proposal != current) {
+        dispatch(d, bus, {Topic::Input, d.ui.focus, 0, proposal});
+        dispatch(d, bus, {Topic::Change, d.ui.focus, 0, proposal});
+    }
+    return true;
+}
+```
+
+### Không thêm một hàm Pause riêng cho keyboard
+
+Event đổi đường vào, không đổi nơi chịu trách nhiệm cập nhật model. Nhãn và trạng thái tick lấy từ model đó, không được tự cộng một tick cho đẹp.
+
+{/* snippet include/events/binding.hpp#host-binding */}
+
+```cpp title="include/events/binding.hpp — Không thêm một hàm Pause riêng cho keyboard"
+inline void hostCommand(Desk& d, const std::string& name, double value) {
+    if (name == "pause")
+        lab::setPaused(d.model, !d.model.paused);
+    if (name == "reset")
+        lab::resetSimulation(d.model);
+    if (name == "observe")
+        d.model.colony.showNeighbors = !d.model.colony.showNeighbors;
+    if (name == "radius" || name == "separation")
+        applyRange(d, elementById(d.page, name), value);
+}
+```
+
+## Ghép các phần lại
+
+Chuyển focus sang Separation, nhấn Home thì giá trị về 0, Right tăng một step. Chuyển sang Pause rồi giữ Enter. Sau đó Shift+Tab để quay lại; chỉ focus đổi, vị trí con chim không đổi.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_71_checkpoint_4 --parallel 2
+.\build\Release\project_71_checkpoint_4.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Cho cả bộ xử lý UI lẫn phím Space của scene chạy. Cú Space trên nút lập tức bị đảo hai lần. Khi UI đã consume, không chuyển tiếp cùng phím cho scene.
+
+## Tự kiểm tra kết quả
+
+Click và phím kích hoạt cho cùng kết quả; hover không tự giành focus. Một key repeat trên button không tạo lệnh thứ hai.
+
+## Bài tập mở rộng
+
+Với cửa sổ rất hẹp, node nào bị clip hoàn toàn? Dự đoán Tab sẽ bỏ qua nó hay cho focus vào chỗ không nhìn thấy.
+
+[Bài 5: Đổi cả bảng giữa một lần kéo](/projects/event-bindings/05-thay-giao-dien-khi-dang-keo).

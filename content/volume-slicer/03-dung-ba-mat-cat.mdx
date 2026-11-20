@@ -1,0 +1,136 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nhìn một điểm từ ba hướng
+
+## Vấn đề cần giải quyết
+
+Chỉ nhìn XY, hai lõi nằm trước–sau nhau có thể trùng vào một vùng ảnh. Ta cần thêm XZ và YZ để nhận ra vị trí trong không gian. Nhưng nếu mỗi ảnh tự đặt quy ước trục riêng, người dùng sẽ không biết kéo slider nào để tìm lại cùng một điểm.
+
+Bài này thêm một bảng trục chung cho cả việc lấy mẫu và cách đặt ảnh. Ba slider cùng điều khiển một `probe`: x/y/z là ba tọa độ của một điểm, không phải ba trạng thái không liên quan.
+
+## Hiểu ý tưởng trước khi viết code
+
+XY dùng x theo ngang, y theo dọc và giữ z. XZ dùng x theo ngang, z theo dọc và giữ y. YZ dùng y theo ngang, z theo dọc và giữ x. Chiều dọc world luôn hướng lên; hàng pixel luôn tăng xuống.
+
+Muốn đọc scalar tại một world point, bước đầu đơn giản nhất là nearest. Đổi world về grid liên tục, làm tròn tới tâm gần nhất rồi đọc mảng. Trước khi kẹp chỉ số, phải kiểm điểm có nằm trong physical box không; nếu không, một điểm ở rất xa cũng sẽ bị biến thành mẫu ở mép.
+
+Đây là quy ước toán của ứng dụng, không dùng radiology convention. Hình vẽ ghi rõ trục để người học không phải đoán hoặc dựa vào kiến thức y khoa.
+
+<InteractiveLab demo="volume-slicer" mode="slice53-3" />
+
+## Viết code từng bước
+
+### 1. Đọc mẫu gần nhất tại một điểm world
+
+Tại mặt dưới của box, grid coordinate bằng -0,5; tại mặt trên bằng N-0,5. Hai vị trí này vẫn ở trong physical box, nên được dùng mẫu tâm biên. Đi ra ngoài box mới là miss.
+
+{/* snippet include/sampling.hpp#nearest */}
+
+```cpp title="include/sampling.hpp — Nearest có kiểm miền truy vấn"
+inline std::optional<double> sampleNearest(const Volume& volume, Vec3 point) {
+    const Grid& grid = volume.grid();
+    if (!grid.contains(point)) return std::nullopt;
+    std::array<int, 3> voxel{};
+    for (int axis = 0; axis < 3; ++axis) {
+        const double q = grid.coordinate(point[axis], axis);
+        voxel[axis] = std::clamp(static_cast<int>(std::floor(q + 0.5)), 0, grid.size[axis] - 1);
+    }
+    return volume.at(voxel[0], voxel[1], voxel[2]);
+}
+```
+
+`optional` phân biệt một scalar bằng 0 với truy vấn không có kết quả. `floor(q + 0.5)` chọn chỉ số lớn hơn khi đúng giữa hai tâm. Sau phép chọn mới kẹp vào [0,N−1] để xử lý nửa voxel biên, không phải để chấp nhận mọi điểm ngoài world.
+
+### 2. Đổi view bằng một bảng trục
+
+Thay vì viết ba công thức pixel gần giống nhau, ta mô tả vai trò của ba trục. `slicePoint` giữ nguyên tọa độ vuông góc từ probe và chỉ thay hai tọa độ nằm trên ảnh.
+
+{/* snippet include/slice.hpp#slice-axes */}
+
+```cpp title="include/slice.hpp — Một quy ước cho ba mặt cắt"
+inline Axes axesFor(int view) {
+    if (view < 0 || view > 2) throw std::invalid_argument("View must be XY, XZ or YZ");
+    if (view == 1) return {0, 2, 1};
+    if (view == 2) return {1, 2, 0};
+    return {0, 1, 2};
+}
+
+inline Vec3 slicePoint(const Grid& grid, int view, double u, double v, Vec3 probe) {
+    const Axes axes = axesFor(view);
+    const Vec3 extent = grid.extent();
+    Vec3 point = probe;
+    point[axes.horizontal] = grid.origin[axes.horizontal] + u * extent[axes.horizontal];
+    point[axes.vertical] = grid.origin[axes.vertical] + v * extent[axes.vertical];
+    return point;
+}
+```
+
+Đọc riêng nhánh XZ: ngang là axis 0, dọc là axis 2, fixed là axis 1. Slider XZ phải đổi y. Nếu bạn đổi z ở đây chỉ vì tên mặt có chữ Z, bạn đang di chuyển điểm trên ảnh chứ chưa dời mặt cắt.
+
+### 3. Dùng cùng vòng lặp dựng cả ba ảnh
+
+Pixel được đặt vào world rồi gửi qua sampler. Không tạo thêm một volume cho mỗi hướng và không tráo kích thước storage để thuận tiện cho ảnh.
+
+{/* snippet include/slice.hpp#sample-slice */}
+
+```cpp title="include/slice.hpp — Dựng ảnh từ volume đang có"
+const Grid& grid = volume.grid();
+for (int row = 0; row < image.height; ++row) {
+    for (int column = 0; column < image.width; ++column) {
+        const double u = (column + 0.5) / image.width;
+        const double v = 1.0 - (row + 0.5) / image.height;
+        double value = 0;
+        const Vec3 point = slicePoint(grid, view, u, v, probe);
+        value = sample(volume, point, linear).value_or(0);
+        image.scalar[column + row * image.width] = static_cast<float>(value);
+    }
+}
+```
+
+Trong checkpoint này `sample` gọi nearest; tham số linear sẽ có tác dụng ở bài sau. Việc đổi một thành phần của probe chỉ làm đổi mặt cắt có thành phần đó là trục fixed. Hai ảnh còn lại giữ scalar image nhưng crosshair sẽ dời khi đã liên kết input ở Bài 7.
+
+### 4. Giữ tỉ lệ theo mm, không theo số pixel
+
+Tất cả ảnh làm việc đều 256² nhưng world extent khác nhau theo trục. Nếu cứ vẽ vào một hình vuông, một sphere có thể bị kéo thành ellipse trên màn hình.
+
+{/* snippet include/layout.hpp#fit-slice */}
+
+```cpp title="include/layout.hpp — Fit ảnh theo physical extent"
+inline Rect sliceRect(const Grid& grid, int view, Rect area) {
+    const Axes axes = axesFor(view);
+    const Vec3 extent = grid.extent();
+    const double scale = std::min(area.width / extent[axes.horizontal], area.height / extent[axes.vertical]);
+    const double width = extent[axes.horizontal] * scale;
+    const double height = extent[axes.vertical] * scale;
+    return {area.x + (area.width - width) * 0.5, area.y + (area.height - height) * 0.5, width, height};
+}
+```
+
+Một scale chung cho cả hai chiều giữ đúng tỉ lệ vật thể; phần thừa là khoảng trống quanh ảnh. Về sau picking phải dùng đúng rectangle này, không dùng toàn panel rồi chọn nhầm trong letterbox.
+
+## Ghép các phần lại
+
+`State::refresh` gọi `renderSlice` với view 0, 1, 2. `drawUi` dùng `smallImage`/`sliceRect` để đặt texture và dùng `axesFor` cho nhãn tọa độ. Cùng một quy ước xuất hiện ở cả hai đầu; không tự viết thêm phép hoán vị trục trong hàm vẽ chữ.
+
+```bash
+cmake --build build --config Debug --target project_53_checkpoint_3 --parallel 1
+```
+
+Chọn Layers trước khi thử một mẫu phức tạp. Dataset này chỉ thay đổi theo z: XY phải gần như đều màu trên một lát, còn XZ và YZ phải có các dải theo chiều dọc.
+
+## Thử làm sai để hiểu đúng
+
+1. Trước khi kéo XZ, dự đoán tọa độ nào sẽ đổi. Kiểm y thay đổi, x/z giữ nguyên; quan sát ảnh Layers để biết ảnh có đang thật sự dịch mặt hay chỉ đổi nhãn.
+2. Tạm đổi thứ tự horizontal/vertical của XZ. Lỗi nào xuất hiện trong ảnh và lỗi nào xuất hiện ở nhãn? Khôi phục bảng trục chuẩn trước khi thêm picking.
+3. Tạm bỏ fit theo extent, kéo cả ba texture thành hình vuông. Chọn Sphere để nhìn độ méo; sau đó giải thích vì sao thêm nhiều pixel hơn không sửa được một phép scale sai.
+
+## Tự kiểm tra kết quả
+
+- [ ] Ba ảnh lấy mẫu cùng một mảng và dùng đúng ba trục fixed z/y/x.
+- [ ] Layers phân biệt được hướng trên ảnh; Ramp tăng về các phía đã ghi nhãn.
+- [ ] Sphere không bị méo do fit ảnh, dù spacing x/y/z không bằng nhau.
+- [ ] Outside query là miss; scalar 0 vẫn là một giá trị hợp lệ.
+
+## Bài tập mở rộng
+
+Dùng fixture không vuông 3×2×4 và liệt kê một ảnh của từng hướng. Đánh dấu cùng một voxel bằng tay trên ba ảnh. Sau đó chọn một world point ở giữa các tâm: nearest sẽ nhảy khi nào? Câu hỏi ấy dẫn sang trilinear ở bài tiếp theo.

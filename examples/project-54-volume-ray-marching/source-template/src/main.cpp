@@ -1,265 +1,278 @@
+#include "input.hpp"
+#include "platform.hpp"
 #include "validation.hpp"
 #include <cstdlib>
-#include <iostream>
 #include <string_view>
 
-int main(int argc, char** argv) {
+namespace {
+struct Options {
+    bool hidden = false;
     bool verify = false;
     bool smoke = false;
+    bool benchmark = false;
+    bool showcase = false;
+    int frames = 0;
+    double seconds = 0;
+    int side = 0;
+    int preset = 0;
+    int mode = -1;
+    std::string capture;
+};
+
+int integer(const std::string& value) {
+    std::size_t consumed = 0;
+    const int result = std::stoi(value, &consumed);
+    if (consumed != value.size())
+        throw std::invalid_argument("Invalid integer argument");
+    return result;
+}
+
+double real(const std::string& value) {
+    std::size_t consumed = 0;
+    const double result = std::stod(value, &consumed);
+    if (consumed != value.size())
+        throw std::invalid_argument("Invalid real argument");
+    return result;
+}
+
+Options parse(int argc, char** argv) {
+    Options options;
     for (int i = 1; i < argc; ++i) {
-        if (std::string_view(argv[i]) == "--verify-gpu") {
-            verify = true;
+        const std::string_view argument = argv[i];
+        if (argument == "--hidden")
+            options.hidden = true;
+        else if (argument == "--verify-gpu") {
+            options.verify = true;
+            options.hidden = true;
+        } else if (argument == "--smoke-gpu") {
+            options.smoke = true;
+            options.hidden = true;
+            options.frames = 3;
+        } else if (argument == "--benchmark-gpu") {
+            options.benchmark = true;
+            options.hidden = true;
+            options.seconds = 20;
+        } else if (argument == "--showcase")
+            options.showcase = true;
+        else {
+            if (i + 1 >= argc)
+                throw std::invalid_argument("Missing command line value");
+            const std::string value = argv[++i];
+            if (argument == "--capture")
+                options.capture = value;
+            else if (argument == "--frames") {
+                options.frames = integer(value);
+                if (options.frames < 1 || options.frames > 600)
+                    throw std::invalid_argument("Frame limit 1..600");
+            } else if (argument == "--seconds") {
+                options.seconds = real(value);
+                if (!std::isfinite(options.seconds) || options.seconds <= 0 || options.seconds > 60)
+                    throw std::invalid_argument("Seconds limit 0..60");
+            } else if (argument == "--size") {
+                options.side = integer(value);
+                if (options.side != 64 && options.side != 128)
+                    throw std::invalid_argument("Size must be 64 or 128");
+            } else if (argument == "--preset") {
+                options.preset = integer(value);
+                if (options.preset < 0 || options.preset > 5)
+                    throw std::invalid_argument("Preset must be 0..5");
+            } else if (argument == "--mode") {
+                if (value == "mip")
+                    options.mode = 0;
+                else if (value == "average")
+                    options.mode = 1;
+                else if (value == "alpha")
+                    options.mode = 2;
+                else
+                    throw std::invalid_argument("Mode must be mip, average or alpha");
+            } else
+                throw std::invalid_argument("Unknown command line argument");
         }
-        if (std::string_view(argv[i]) == "--smoke-gpu") {
-            smoke = true;
-        }
     }
-    // Khởi tạo SDL và OpenGL trước khi load bất kỳ entry point nào.
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
-        std::cerr << SDL_GetError() << '\n';
-        return EXIT_FAILURE;
-    }
-    if (!SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3) || !SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3) || !SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE) || !SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1)) {
-        std::cerr << SDL_GetError() << '\n';
-        SDL_Quit();
-        return EXIT_FAILURE;
-    }
+    if (!options.capture.empty() && options.frames == 0)
+        options.frames = 3;
+    return options;
+}
+} // namespace
 
-    SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-    if (verify || smoke) {
-        flags |= SDL_WINDOW_HIDDEN;
-    }
-    SDL_Window* window = SDL_CreateWindow("Volume ray marching", 960, 720, flags);
-    if (!window) {
-        std::cerr << SDL_GetError() << '\n';
-        SDL_Quit();
-        return EXIT_FAILURE;
-    }
-    SDL_GLContext context = SDL_GL_CreateContext(window);
-    if (!context) {
-        std::cerr << SDL_GetError() << '\n';
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return EXIT_FAILURE;
-    }
-
-    fog::GlApi gl;
-    fog::Renderer renderer;
-    bool loaded = false;
-    bool failed = false;
+int main(int argc, char** argv) {
     try {
-        gl.load();
-        loaded = true;
-        std::cout << "GL: " << gl.GetString(GL_VERSION) << " | " << gl.GetString(GL_RENDERER) << '\n';
-        SDL_GL_SetSwapInterval(1);
-        [[maybe_unused]] fog::Camera camera;
-        [[maybe_unused]] fog::Settings settings;
-#if LAB_CHECKPOINT >= 1
-        renderer.initialize(gl, verify || smoke);
+        using namespace volume54;
+        const Options options = parse(argc, argv);
+        // Setup: create the context before resources that require OpenGL.
+        Platform platform;
+        platform.open(options.hidden);
+        platform.capabilities();
+        Renderer renderer(platform.gl);
+        renderer.open();
+        Overlay ui(platform.gl);
+        ui.open();
+        State state;
+        state.showcase = options.showcase;
+        if (options.mode >= 0)
+            state.settings.mode = static_cast<Mode>(options.mode);
+#if LAB_CHECKPOINT < 6
+        if (state.settings.mode == Mode::Alpha)
+            throw std::invalid_argument("Alpha is introduced in checkpoint 6");
 #endif
 #if LAB_CHECKPOINT >= 4
-        fog::Volume volume;
-        int preset = 0;
-        fog::fillVolume(volume, preset);
-        renderer.upload(gl, volume);
+        if (options.side != 0)
+            state.side = options.side;
+        state.load(renderer, static_cast<Preset>(options.preset), state.side);
 #endif
-#if LAB_CHECKPOINT >= 9
-        if (verify) {
-            fog::verifyGpu(gl, renderer);
+        Benchmark benchmark(platform.gl);
+        Comparison comparison(platform.gl);
+        Drag drag;
+#if LAB_CHECKPOINT >= 10
+        if (options.verify) {
+            verifyGpu(renderer);
+            return EXIT_SUCCESS;
         }
 #else
-        if (verify) {
-            throw std::runtime_error("GPU oracle is introduced at checkpoint 9");
-        }
+        if (options.verify)
+            throw std::runtime_error("GPU correctness suite is introduced in checkpoint 10");
 #endif
+#if LAB_CHECKPOINT >= 9
+        if (options.benchmark)
+            benchmark.start(state);
+#else
+        if (options.benchmark)
+            throw std::runtime_error("Benchmark is introduced in checkpoint 9");
+#endif
+        bool running = true;
+        int frames = 0;
+        const Uint64 started = SDL_GetTicks();
+        Uint64 previous = SDL_GetTicksNS();
+        int rayWidth = 0;
+        int rayHeight = 0;
 #if LAB_CHECKPOINT >= 1
-        if (smoke) {
-            renderer.render(gl, camera, settings);
-            gl.BindFramebuffer(GL_FRAMEBUFFER, renderer.framebuffer);
-            float value[4]{};
-            gl.ReadPixels(7, 5, 1, 1, GL_RGBA, GL_FLOAT, value);
-            for (float component : value)
-                if (!std::isfinite(component)) {
-                    throw std::runtime_error("Nonfinite shader smoke output");
-                }
-            if (gl.GetError() != GL_NO_ERROR) {
-                throw std::runtime_error("Shader smoke GL error");
-            }
-            gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
-            std::cout << "Shader smoke PASS\n";
-        }
+        int failedWidth = 0;
+        int failedHeight = 0;
 #endif
-        bool running = !verify && !smoke;
-#if LAB_CHECKPOINT >= 2
-        bool dragging = false;
-        bool paused = true;
-        std::uint64_t previous = SDL_GetTicksNS();
-        std::cout << "Drag/arrows orbit | wheel zoom | Space rotate/pause | I camera inside | R reset | Esc quit\n";
-#endif
-#if LAB_CHECKPOINT >= 4
-        std::cout << "P phantom/ramp/constant volume\n";
-#endif
-#if LAB_CHECKPOINT >= 5
-        std::cout << "+/- sigma\n";
-#endif
-#if LAB_CHECKPOINT >= 6
-        std::cout << "Q step 0.02/0.04/0.08/0.16\n";
-#endif
-#if LAB_CHECKPOINT >= 7
-        std::cout << "C transfer warm/cool\n";
-#endif
-#if LAB_CHECKPOINT >= 8
-        std::cout << "E early termination threshold 0.001\n";
-#endif
+        bool captured = false;
+        // [snippet application-loop]
         while (running) {
-            SDL_Event event{};
-            while (SDL_PollEvent(&event)) {
-                if (event.type == SDL_EVENT_QUIT) {
-                    running = false;
-                }
-                if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
-                    running = false;
-                }
-#if LAB_CHECKPOINT >= 2
-                if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_MINIMIZED) {
-                    paused = true;
-                    dragging = false;
-                    SDL_CaptureMouse(false);
-                }
-                if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
-                    paused = true;
-                    dragging = SDL_CaptureMouse(true);
-                }
-                if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT) {
-                    dragging = false;
-                    SDL_CaptureMouse(false);
-                }
-                if (event.type == SDL_EVENT_MOUSE_MOTION && dragging) {
-                    camera.yaw += event.motion.xrel * 0.005;
-                    camera.pitch = std::clamp(camera.pitch - event.motion.yrel * 0.005, -1.2, 1.2);
-                }
-                if (event.type == SDL_EVENT_MOUSE_WHEEL) {
-                    paused = true;
-                    camera.distance = std::clamp(camera.distance - event.wheel.y * 0.3, 4.0, 12.0);
-                }
-                if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
-                    if (event.key.key != SDLK_SPACE) {
-                        paused = true;
-                    }
-                    if (event.key.key == SDLK_SPACE) {
-                        paused = !paused;
-                    }
-                    if (event.key.key == SDLK_LEFT) {
-                        camera.yaw -= 0.1;
-                    }
-                    if (event.key.key == SDLK_RIGHT) {
-                        camera.yaw += 0.1;
-                    }
-                    if (event.key.key == SDLK_UP) {
-                        camera.pitch = std::min(1.2, camera.pitch + 0.1);
-                    }
-                    if (event.key.key == SDLK_DOWN) {
-                        camera.pitch = std::max(-1.2, camera.pitch - 0.1);
-                    }
-                    if (event.key.key == SDLK_I) {
-                        camera.inside = !camera.inside;
-                    }
-                    if (event.key.key == SDLK_R) {
-                        camera = {};
-                        settings = {};
-                        dragging = false;
-                        SDL_CaptureMouse(false);
-#if LAB_CHECKPOINT >= 4
-                        preset = 0;
-                        fog::fillVolume(volume, preset);
-                        renderer.upload(gl, volume);
-#endif
-                    }
-#if LAB_CHECKPOINT >= 4
-                    if (event.key.key == SDLK_P) {
-                        preset = (preset + 1) % 3;
-                        fog::fillVolume(volume, preset);
-                        renderer.upload(gl, volume);
-                    }
-#endif
-#if LAB_CHECKPOINT >= 5
-                    if (event.key.key == SDLK_EQUALS || event.key.key == SDLK_PLUS) {
-                        settings.sigma = std::min(8.0, settings.sigma + 0.25);
-                    }
-                    if (event.key.key == SDLK_MINUS) {
-                        settings.sigma = std::max(0.0, settings.sigma - 0.25);
-                    }
-#endif
-#if LAB_CHECKPOINT >= 6
-                    if (event.key.key == SDLK_Q) {
-                        settings.stepLength *= 2;
-                        if (settings.stepLength > 0.16) {
-                            settings.stepLength = 0.02;
-                        }
-                    }
-#endif
-#if LAB_CHECKPOINT >= 7
-                    if (event.key.key == SDLK_C) {
-                        settings.warm = !settings.warm;
-                    }
-#endif
-#if LAB_CHECKPOINT >= 8
-                    if (event.key.key == SDLK_E) {
-                        settings.early = !settings.early;
-                    }
-#endif
-                }
-#endif
-            }
-            if (!running) {
+            if (options.seconds > 0 && (SDL_GetTicks() - started) / 1000.0 >= options.seconds)
                 break;
-            }
-#if LAB_CHECKPOINT >= 2
-            const auto now = SDL_GetTicksNS();
-            const double dt = std::min(0.1, static_cast<double>(now - previous) / 1e9);
-            previous = now;
-            if (!paused) {
-                camera.yaw += dt * 0.3;
-            }
-#endif
             int width = 0;
             int height = 0;
-            if (!SDL_GetWindowSizeInPixels(window, &width, &height)) {
+            int pixelWidth = 0;
+            int pixelHeight = 0;
+            if (!SDL_GetWindowSize(platform.window, &width, &height) || !SDL_GetWindowSizeInPixels(platform.window, &pixelWidth, &pixelHeight))
                 throw std::runtime_error(SDL_GetError());
+            SDL_Event event;
+            while (SDL_PollEvent(&event)) {
+                try {
+                    if (!handleEvent(event, state, drag, benchmark, renderer, width, height))
+                        running = false;
+                } catch (const std::exception& error) {
+                    state.status = error.what();
+                    release(drag, state);
+                    benchmark.cancel();
+                }
             }
-            if (width <= 0 || height <= 0) {
+            if (!running)
+                break;
+            if (width < 1 || height < 1 || pixelWidth < 1 || pixelHeight < 1) {
+                release(drag, state);
                 SDL_Delay(16);
                 continue;
             }
+            const Uint64 now = SDL_GetTicksNS();
+            const double dt = std::min(0.05, static_cast<double>(now - previous) / 1e9);
+            previous = now;
+            if (!state.paused) {
+                state.camera.yaw += dt * 0.18;
+                state.camera.limit();
+                state.invalidate();
+            }
+            try {
+                benchmark.tick();
+            } catch (const std::exception& error) {
+                benchmark.cancel();
+                state.status = error.what();
+            }
+            if (options.benchmark && !benchmark.active)
+                break;
+            const int viewWidth = sceneWidth(width, state.showcase);
 #if LAB_CHECKPOINT >= 1
-            renderer.render(gl, camera, settings);
-            renderer.display(gl, width, height);
+            const int viewPixels = std::max(1, static_cast<int>(static_cast<double>(viewWidth) * pixelWidth / width));
 #else
-            gl.ClearColor(0.01F, 0.015F, 0.025F, 1);
-            gl.Clear(GL_COLOR_BUFFER_BIT);
+            (void)viewWidth;
 #endif
-            if (gl.GetError() != GL_NO_ERROR) {
-                throw std::runtime_error("Render GL error");
+            platform.gl.Viewport(0, 0, pixelWidth, pixelHeight);
+            platform.gl.ClearColor(0.025F, 0.045F, 0.06F, 1);
+            platform.gl.Clear(GL_COLOR_BUFFER_BIT);
+#if LAB_CHECKPOINT >= 1
+            // [snippet draw-frame]
+            int targetWidth = viewPixels;
+            int targetHeight = pixelHeight;
+            if (options.smoke) {
+                targetWidth = 24;
+                targetHeight = 18;
             }
-            if (!SDL_GL_SwapWindow(window)) {
+            if (targetWidth != failedWidth || targetHeight != failedHeight) {
+                try {
+                    renderer.resize(targetWidth, targetHeight);
+                    failedWidth = 0;
+                    failedHeight = 0;
+                } catch (const std::exception& error) {
+                    if (renderer.width == 0 || renderer.height == 0)
+                        throw;
+                    failedWidth = targetWidth;
+                    failedHeight = targetHeight;
+                    state.status = error.what();
+                }
+            }
+            renderer.pollGpu();
+            renderer.render(state.camera, state.settings, true);
+            if (options.smoke && frames == 0) {
+                const auto raw = renderer.read();
+                for (float value : raw)
+                    if (!std::isfinite(value))
+                        throw std::runtime_error("Nonfinite shader smoke output");
+            }
+            renderer.display(state.camera, state.settings, viewPixels, pixelHeight);
+            // [/snippet draw-frame]
+            rayWidth = renderer.width;
+            rayHeight = renderer.height;
+#endif
+#if LAB_CHECKPOINT >= 5
+            state.refreshTrace(static_cast<double>(viewPixels) / pixelHeight);
+            if (!options.smoke && !benchmark.active)
+                comparison.draw(state, viewWidth, height, width, pixelWidth, pixelHeight);
+#endif
+            drawUi(ui, state, benchmark, renderer, width, height);
+            ui.draw(width, height, pixelWidth, pixelHeight);
+            if (!options.capture.empty() && frames == 2) {
+                platform.capture(options.capture, pixelWidth, pixelHeight);
+                captured = true;
+            }
+            if (platform.gl.GetError() != GL_NO_ERROR)
+                throw std::runtime_error("OpenGL frame error");
+            if (!SDL_GL_SwapWindow(platform.window))
                 throw std::runtime_error(SDL_GetError());
-            }
-            SDL_Delay(16);
+            ++frames;
+            if (options.frames > 0 && frames >= options.frames)
+                break;
         }
+        // [/snippet application-loop]
+        // Cleanup: stop pending work; RAII releases GL resources before the context.
+        benchmark.cancel();
+        release(drag, state);
+        if (!options.capture.empty() && !captured)
+            throw std::runtime_error("Capture was not written before the frame/time limit");
+#if LAB_CHECKPOINT >= 4
+        std::cout << "VOLUME: side=" << state.side << " voxels=" << state.volume->values().size() << " bytes=" << state.volume->values().size() * sizeof(float) << '\n';
+#endif
+        std::cout << "RUN: stage=" << lessonStage << " frames=" << frames << " rayTarget=" << rayWidth << 'x' << rayHeight << " GPUms=" << renderer.gpuMilliseconds << " mode=" << modeName(state.settings.mode) << '\n';
+        for (const auto& result : benchmark.results)
+            std::cout << "BENCH: step=" << result.step << " maxError=" << result.maximumError << " GPUmedianMs=" << result.medianMs << " IQR=" << result.lowerMs << ',' << result.upperMs << '\n';
+        if (options.benchmark && benchmark.results.size() != 4)
+            throw std::runtime_error("Benchmark did not complete all four cases");
+        return EXIT_SUCCESS;
     } catch (const std::exception& error) {
-        failed = true;
-        std::cerr << error.what() << '\n';
-    }
-
-    // Giải phóng GL resource khi context còn sống, rồi context/window và SDL.
-    if (loaded) {
-        renderer.dispose(gl);
-    }
-    SDL_GL_DestroyContext(context);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
-    if (failed) {
+        std::cerr << "Project 54: " << error.what() << '\n';
         return EXIT_FAILURE;
     }
-    return EXIT_SUCCESS;
 }

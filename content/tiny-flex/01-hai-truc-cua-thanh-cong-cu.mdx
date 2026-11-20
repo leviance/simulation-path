@@ -1,0 +1,119 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Xoay cách nghĩ: xếp theo hàng hay theo cột?
+
+## Vấn đề cần giải quyết
+
+Tới đây bạn đổi được màu và khoảng đệm nhưng ba nút vẫn xếp hàng dọc. Trong bàn làm việc thật, Pause, Reset và Links hợp lý hơn khi đứng ngang nhau; hai slider dưới chúng vẫn cần chiều ngang để dễ kéo.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đừng xoay đàn chim hay hoán đổi tọa độ chuột! Chỉ thay ý nghĩa của hai trục trong *nhóm* đang xếp. Với row, đi dọc dòng nghĩa là tăng x; với column thì tăng y. Kết thúc phép tính mới đổi lại thành Rect thông thường.
+
+<InteractiveLab demo="tiny-flex" mode="flex70-1" />
+
+## Viết code từng bước
+
+### Toolbar ngang trong bảng dọc
+
+{/* asset assets/style.css */}
+
+```css title="assets/style.css — Toolbar ngang trong bảng dọc"
+.sheet { display: flex; flex-direction: column; background: #18343D; padding: 12px; gap: 5px; }
+h1 { background: #18343D; color: #A3E6CC; border: 0px; }
+.group { display: flex; flex-direction: column; padding: 6px; gap: 4px; background: #294A4F; }
+#tools { display: flex; flex-direction: row; justify-content: start; align-items: center; height: 56px; gap: 6px; }
+button { background: #365F6A; color: #E0F1E8; height: 30px; flex-basis: 60px; margin: 1px; }
+#pause { background: #286D5F; flex-grow: 1; }
+#observe { flex-basis: 82px; flex-grow: 2; }
+label { color: #DAEBDF; border: 0px; }
+input { color: #92E2C7; border-color: #586F73; height: 32px; }
+span { color: #94C6BA; background: #18343D; border: 0px; }
+```
+
+### Gói phép đổi trục vào một chỗ
+
+Một dòng có offset chính 12, offset ngang 4, dài 80 và dày 20. Row cho Rect (12,4,80,20); column cho (4,12,20,80).
+
+{/* snippet include/flex/line.hpp#axes */}
+
+```cpp title="include/flex/line.hpp — Gói phép đổi trục vào một chỗ"
+inline lab::Rect axisRect(Axis a, double main, double cross, double length, double thickness) {
+    if (a == Axis::Row)
+        return {main, cross, length, thickness};
+    return {cross, main, thickness, length};
+}
+```
+
+### Đọc các yêu cầu mới từ cùng một file
+
+Parser cũ vẫn đọc selector và declaration. Từ mốc này display, flex-direction cùng những property thuộc subset Flex được nhận biết, chưa dùng hết để di chuyển widget.
+
+{/* snippet include/style/sheet.hpp#rules */}
+
+```cpp title="include/style/sheet.hpp — Đọc các yêu cầu mới từ cùng một file"
+inline Sheet parseSheet(std::string_view source) {
+    checkUtf8(source);
+    Cursor c{source};
+    c.take("\xef\xbb\xbf");
+    Sheet sheet;
+    c.skip();
+    while (c.peek()) {
+        if (sheet.rules.size() >= 64)
+            fail(source, c.pos, "rule limit: 64");
+        Rule rule;
+        if (c.peek() == '#' || c.peek() == '.')
+            rule.selector.prefix = source[c.pos++];
+        rule.selector.name = c.word();
+        if (!identifier(rule.selector.name))
+            fail(source, c.pos, "expected simple selector");
+        c.skip();
+        c.need('{');
+        c.skip();
+        while (!c.take('}')) {
+            Declaration d;
+            d.offset = c.pos;
+            d.key = c.word();
+            c.skip();
+            c.need(':');
+            const auto begin = c.pos;
+            while (c.peek() && c.peek() != ';' && c.peek() != '}')
+                ++c.pos;
+            d.value = trim(source.substr(begin, c.pos - begin));
+            c.need(';');
+            validateProperty(d, source);
+            if (rule.properties.size() >= 24)
+                fail(source, d.offset, "declaration limit: 24");
+            rule.properties.push_back(d);
+            c.skip();
+        }
+        sheet.rules.push_back(std::move(rule));
+        c.skip();
+    }
+    return sheet;
+}
+```
+
+## Ghép các phần lại
+
+Chạy mốc 1, nhấn X và xem toolbar. Thử đọc #tools trước .sheet: một container có thể là row ngay bên trong một container column. Bản starter là bố cục cột cũ để có mốc đối chiếu.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_70_checkpoint_1 --parallel 2
+.\build\Release\project_70_checkpoint_1.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Hoán đổi x/y cho cả root. Bất chợt hai slider cũng đổi hướng dù bạn chỉ định thay toolbar. Hãy tìm xem thông số direction đang được giữ theo cây hay viết thành biến toàn ứng dụng.
+
+## Tự kiểm tra kết quả
+
+Chỉ đúng main axis và cross axis của từng container trước khi viết vòng lặp. Không có thay đổi nào với dữ liệu đàn chim.
+
+## Bài tập mở rộng
+
+Nếu hai container lồng nhau có hướng khác nhau, phép đổi trục thuộc parent hay child khi xếp vị trí của child?
+
+[Bài 2: Đặt ba nút lên một hàng](/projects/tiny-flex/02-basis-va-khoang-cach).

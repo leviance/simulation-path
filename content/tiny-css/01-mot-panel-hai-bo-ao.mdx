@@ -1,0 +1,101 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Một bàn quan sát, hai cách trình bày
+
+## Vấn đề cần giải quyết
+
+Bạn đem bàn quan sát ra nơi nhiều ánh sáng. Chữ nhạt trên nền tối khó đọc; bạn muốn một bản nền sáng mà vẫn giữ đúng chim đang chọn, thông số đang thử và cả thứ tự Tab. Không có lý do gì phải dựng lại đàn để đổi màu nút.
+
+## Hiểu ý tưởng trước khi viết code
+
+panel.html nói có những gì và chúng nằm trong nhóm nào. style.css là danh sách: với những element thỏa điều kiện này, ghi đè một số thuộc tính. Đầu tiên hãy chắc mình đang sửa đúng file mà chương trình mở.
+
+<InteractiveLab demo="tiny-css" mode="css69-1" />
+
+## Viết code từng bước
+
+### Stylesheet của bàn quan sát
+
+{/* asset assets/style.css */}
+
+```css title="assets/style.css — Stylesheet của bàn quan sát"
+.sheet { background: #172F3A; padding: 14px; gap: 5px; border-color: #396070; }
+.group { background: #24444B; padding: 7px; gap: 3px; border-color: #385D60; }
+h1 { background: #172F3A; color: #9BF0D0; border: 0px; }
+button { background: #325568; color: #E5F3F0; height: 34px; }
+.action { background: #36576B; border-color: #587A83; }
+.primary { background: #286F6A; }
+#pause { background: #217564; }
+label { background: #24444B; color: #E0EFE7; border: 0px; }
+input { background: #193E45; color: #83E2C2; border-color: #466C73; }
+span { background: #172F3A; color: #A5CBC3; border: 0px; }
+```
+
+### Dùng lại bộ đọc file nhỏ
+
+CSS cũng có giới hạn 16 KiB. Không viết thêm một đường đọc riêng chỉ vì phần mở rộng đổi từ html thành css.
+
+{/* snippet include/markup/source.hpp#read-file */}
+
+```cpp title="include/markup/source.hpp — Dùng lại bộ đọc file nhỏ"
+inline std::string readFile(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input)
+        throw Error("1:1 cannot open " + path.filename().string());
+    const std::streamoff length = input.tellg();
+    if (length < 0 || length > static_cast<std::streamoff>(maxBytes))
+        throw Error("1:1 file exceeds 16 KiB");
+    std::string bytes(static_cast<std::size_t>(length), '\0');
+    input.seekg(0);
+    if (!input.read(bytes.data(), length))
+        throw Error("1:1 incomplete file");
+    return bytes;
+}
+```
+
+### Cho F5 nạp lại kiểu trình bày
+
+Ở mốc này chỉ đọc file và hiện số byte; bàn HTML của Project 68 vẫn dùng style mặc định. Đây là chỗ tách lỗi đường dẫn khỏi lỗi parser.
+
+{/* snippet include/style/editor.hpp#read-sheet */}
+
+```cpp title="include/style/editor.hpp — Cho F5 nạp lại kiểu trình bày"
+inline bool reloadCss(Desk& d, Palette& p, const std::filesystem::path& path) {
+    try {
+        const auto css = readFile(path);
+        checkUtf8(css);
+        d.status = std::to_string(css.size()) + " CSS bytes; current theme unchanged";
+        p.filename = path.filename().string();
+        d.error = false;
+        return true;
+    } catch (const std::exception& e) {
+        d.error = true;
+        d.status = path.filename().string() + ":" + e.what();
+        return false;
+    }
+}
+```
+
+## Ghép các phần lại
+
+Chạy mốc 1 với `--assets assets`. Thêm một khoảng trắng vào style.css rồi F5: kích thước thay đổi nhưng nút Pause chưa đổi màu. Bỏ tham số nếu bạn muốn sửa bản assets nằm cạnh executable.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_69_checkpoint_1 --parallel 2
+.\build\Release\project_69_checkpoint_1.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Thay chữ trong nút Pause bằng cách sửa CSS. Nhãn vẫn phải do HTML và trạng thái của đàn quyết định: đó không phải việc của stylesheet.
+
+## Tự kiểm tra kết quả
+
+Cùng bản HTML vẫn nhận chuột và Tab; số byte đổi ngay sau F5, không cần build C++.
+
+## Bài tập mở rộng
+
+Bạn muốn nới khoảng cách *mọi* nút hay chỉ làm nổi Pause? Phác hai điều kiện chọn mà không nhắc tới tọa độ.
+
+[Bài 2: Đọc một quy tắc CSS đến dấu chấm phẩy](/projects/tiny-css/02-doc-selector-va-khai-bao).

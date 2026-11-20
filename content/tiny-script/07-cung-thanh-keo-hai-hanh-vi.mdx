@@ -1,0 +1,143 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Cùng một điểm giữa: 80 px hay 50 px?
+
+## Vấn đề cần giải quyết
+
+Chạy final rồi dùng đúng một điểm giữa trên thanh Radius hai lần. Bạn không thay C++, HTML hay CSS. Nếu vòng quanh chim vàng vẫn đổi khác theo file script, người học đã có một công cụ thực sự lập trình được.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hai script nhận cùng input. Bản thường chuyển thẳng 80; bản khảo sát tính 20+(80−20)/2=50. Cả hai chạy trên cùng solver, cùng cá thể được chọn và cùng bộ điều khiển đã xây từ Project 65.
+
+<InteractiveLab demo="tiny-script" mode="script72-7" />
+
+## Viết code từng bước
+
+### Cùng năm handler, một cách khảo sát khác
+
+{/* asset assets/close-study.tiny */}
+
+```javascript title="assets/close-study.tiny — Cùng năm handler, một cách khảo sát khác"
+// Chế độ khảo sát gần: cùng cử chỉ nhưng chỉ dùng nửa khoảng bán kính.
+let saved = 0;
+
+function nearRadius(value) {
+    return 20 + (value - 20) / 2;
+}
+
+function onPause() {
+    if (paused()) {
+        resume();
+    } else {
+        saved = getRadius();
+        pause();
+    }
+}
+
+function onReset() {
+    reset();
+    radius(50);
+    links(true);
+}
+
+function onObserve() {
+    links(!showLinks());
+}
+
+function onRadius(value) {
+    radius(nearRadius(value));
+}
+
+function onSeparation(value) {
+    separate(value);
+}
+```
+
+### Chỉ đổi sang một chương trình hợp lệ
+
+Đọc, parse, đối chiếu đủ năm handler, khởi tạo globals trong môi trường mới trước khi thay. Không cho phần khởi tạo tự ghi model. Nạp sai giữ chương trình hợp lệ trước đó.
+
+{/* snippet include/script/session.hpp#install-script */}
+
+```cpp title="include/script/session.hpp — Chỉ đổi sang một chương trình hợp lệ"
+inline bool reload(Session& s, tiny::Desk& d, const std::filesystem::path& file) {
+    try {
+        const auto text = tiny::readFile(file);
+        Program next = Parser(text).run();
+        for (const auto& [name, fn] : next.functions)
+            if (hostName(name))
+                tiny::fail(next.source, fn.at, "reserved host name: " + name);
+        for (const std::string event : {"pause", "reset", "observe", "radius", "separation"}) {
+            const auto name = handler(event);
+            const auto fn = next.functions.find(name);
+            unsigned n = 0;
+            if (event == "radius" || event == "separation")
+                n = 1;
+            if (fn == next.functions.end())
+                tiny::fail(next.source, 0, "missing handler " + name);
+            if (fn->second.params.size() != n)
+                tiny::fail(next.source, fn->second.at, "wrong handler arity: " + name);
+        }
+        Host buffer = Host::read(d);
+        buffer.writable = false;
+        Names vars;
+        Machine vm(next, vars, buffer);
+        vm.initialize();
+        s.program = std::move(next);
+        s.variables = std::move(vars);
+        ++s.edition;
+        s.filename = file.filename().string();
+        s.message = "Loaded " + s.filename + "   /   edition " + std::to_string(s.edition);
+        d.error = false;
+        d.status = s.message;
+        return true;
+    } catch (const std::exception& e) {
+        s.message = file.filename().string() + ":" + e.what();
+        d.error = true;
+        d.status = s.message;
+        return false;
+    }
+}
+```
+
+### Kiểm với đúng hai lần bấm qua UI
+
+Nạp file thường, bấm giữa, Pause, rồi nạp file khảo sát và bấm đúng chỗ cũ. Kiểm cả giá trị raw 80 và bán kính thật 50, cùng trạng thái đàn vẫn Pause.
+
+{/* snippet tests/tests.cpp#two-scripts */}
+
+```cpp title="tests/tests.cpp — Kiểm với đúng hai lần bấm qua UI"
+check(reload(s, d, assets / "flight.tiny"), "direct script loads");
+click(radius);
+check(d.model.colony.params.radius == 80, "midpoint drives 80 in direct mode");
+click(pause);
+check(d.model.paused && s.variables.at("presses") == Value{1.0}, "button runs script and stores its global");
+check(reload(s, d, assets / "close-study.tiny") && !s.variables.contains("presses"), "reload replaces environment without resetting flock");
+click(radius);
+check(d.model.colony.params.radius == 50 && d.page.values.at(radius) == 80 && d.model.paused, "same input drives 50 in study mode");
+```
+
+## Ghép các phần lại
+
+Nhấn 1 rồi 2, so ảnh và thử chuột trong C++. Nhấn 3 để nạp script sai cú pháp; bàn vẫn chạy handler hợp lệ trước. L cho biết edition, số globals và lượng công việc của handler gần nhất. Chạy CTest ở Debug và Release với timeout 20 giây.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_72_final --parallel 2
+.\build\Release\project_72_final.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Tự đặt giá trị 50 trong renderer mà không thay model. Nhãn hoặc ảnh có thể trông đúng, nhưng số hàng xóm và phép kiểm đọc từ mô hình sẽ vạch ra khác biệt.
+
+## Tự kiểm tra kết quả
+
+Hai file gây hai kết quả trên đàn thật; script lỗi không chặn F9, Reset hay reload. ZIP giải nén độc lập có toàn bộ app, HTML, CSS, scripts, tests và từng mốc để chạy lại.
+
+## Bài tập mở rộng
+
+Viết một preset riêng rồi trao cho người khác đúng file .tiny. Họ không cần trình biên dịch chỉ để thay hành vi trên executable đã build. Các project 73–78 là nhánh tùy chọn.
+
+[Tải toàn bộ mã nguồn C++ và các file thực hành](/downloads/project-72-tiny-script.zip) · [Trở lại lộ trình](/roadmap#project-72).

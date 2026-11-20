@@ -1,0 +1,113 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Tại sao có thể bỏ hai mặt mà vách đá vẫn nguyên?
+
+## Vấn đề cần giải quyết
+
+Đứng sát vách, bạn thấy những hạt đá trên mặt ngoài. Nếu hai viên đá ép sát nhau thì giữa chúng còn hai mặt mà chẳng có chỗ nào để đặt mắt nhìn. Ta bắt đầu từ bờ suối đang chạy ở Project 58, giữ lại cách vẽ cũ trên phím F2 để có thể so ngay.
+
+## Hiểu ý tưởng trước khi viết code
+
+Thử đếm bằng hai viên xúc xắc: 12 mặt ban đầu, úp hai mặt vào nhau thì chỉ còn 10 mặt ngoài. Điều này đúng dù người quan sát đứng phía nào. Còn việc một mặt ngoài hôm nay quay lưng về phía mắt là quyết định của bộ vẽ, không phải lý do xóa nó khỏi mesh.
+
+<InteractiveLab demo="voxel-hidden-faces" mode="voxel59-1" />
+
+## Viết code từng bước
+
+Giữ nguyên bờ suối đã làm ở Project 58. Chọn hai viên đá chạm nhau: giữa chúng có hai tấm vuông, nhưng đứng ở đâu ta cũng không nhìn thấy chúng. Bài này có hai công việc riêng: quyết định mặt nào cần giữ, rồi cho cả cảnh dùng quyết định ấy.
+
+### Quyết định từ hai ô, không từ camera
+
+Viết `exposedFace` trong `visibility.hpp`. Tự xét bốn cặp: đá–khí giữ mặt đá; đá–đá bỏ; nước–nước bỏ; đá–nước giữ mặt đá nhưng không vẽ thêm mặt nước chồng lên. Sau đó duyệt sáu hướng, hỏi vật liệu của ô kề trước khi thêm mặt. Đây là bỏ mặt khi dựng mesh; nó không phải phép loại mặt quay lưng lúc vẽ.
+
+{/* snippet include/trail/visibility.hpp#exposed-face */}
+
+```cpp title="include/trail/visibility.hpp — Hỏi hai vật liệu có che nhau không"
+inline bool exposedFace(Block here, Block next) {
+    if (here == Block::Air)
+        return false;
+    if (next == Block::Air)
+        return true;
+    return here != Block::Water && next == Block::Water;
+}
+```
+
+{/* snippet include/trail/visibility.hpp#neighbor-face */}
+
+```cpp title="include/trail/visibility.hpp — Nhìn đúng một ô qua mặt đang xét"
+for (int face = 0; face < 6; ++face) {
+    const Cell n = neighbors[face];
+    const Block other = read(wx + n.x, y + n.y, wz + n.z);
+    if (exposedFace(block, other)) {
+        mesh.push_back({cell + faceStarts[face], face, 1, 1, block});
+    }
+}
+```
+
+<VoxelWorkFile project="59" step={1} file="visibility" />
+
+### Cho mỗi cột một mesh có thể dựng lại
+
+Trong `region.hpp`, giữ cột và mesh của nó cùng một địa chỉ chunk. `sample` đổi tọa độ world sang địa chỉ cột và ô local. `put` đánh dấu chính cột vừa nạp và các hàng xóm đã có dữ liệu; `rebuild` chọn thuật toán rồi cất kết quả vào đúng cột. Khi chưa có hàng xóm, coi phía ngoài là thoáng để không nhìn xuyên rìa bản đồ.
+
+<VoxelWorkFile project="59" step={1} file="region" />
+
+### Đưa bờ suối cũ vào cảnh có nhiều cột
+
+Viết `field-render.hpp` trước: `terrainFace` lấy vật liệu và ánh sáng của mặt, còn `drawRegion` đi qua từng mesh đã cất. Trong `field-scene.hpp`, làm lần lượt ba việc: `generate` nạp cột (0,0) hoặc fixture đã chọn và dựng phần bẩn; các bộ đếm cộng từ các cột; `draw` vẽ trời rồi gọi `drawRegion`. Trong `scene.hpp`, thay phần định nghĩa `Scene` một cột bằng include mới. Nếu giữ cả hai định nghĩa, trình biên dịch sẽ báo trùng tên. Bộ raster, texture, camera của 58 vẫn dùng nguyên.
+
+Hãy chuyển từng phần để biết lỗi phát sinh ở đâu:
+
+1. Giữ chương trình cũ còn chạy trong lúc viết các header mới. Trong `Region::rebuild`, nhánh Naive gọi `naiveMesh`, nhánh Visible gọi `visibleMesh` với hàm đọc cả ô ở cột bên cạnh. Kết quả phải nằm trong `tile.mesh`, không chỉ trong một biến cục bộ.
+2. Ở `Scene::generate`, chọn preset trước rồi gọi `region.buildSome(16, mode)` sau khi nạp. Nếu có block mà không có mặt, kiểm bước này trước: đánh dấu bẩn chưa có nghĩa là mesh đã được dựng.
+3. Ở `Scene::draw`, vẽ trời trước và gọi `drawRegion` sau. Cuối cùng mới chuyển `scene.hpp` sang định nghĩa mới. Build ở đây: cảnh mặc định phải còn bờ suối, cho dù bạn chưa gắn phím F2.
+
+<VoxelWorkFile project="59" step={1} file="field-render" />
+
+{/* snippet include/trail/field-scene.hpp#draw-region */}
+
+```cpp title="include/trail/field-scene.hpp — Vẽ trời trước rồi đến mesh của các cột"
+fieldSky(drawing, weather);
+drawRegion(drawing, region, weather);
+```
+
+<VoxelWorkFile project="59" step={1} file="field-scene" />
+
+<VoxelWorkFile project="59" step={1} file="scene" />
+
+### Đổi thuật toán mà không đổi chỗ đứng
+
+Trong `field-controls.hpp`, gắn F2 với đổi kiểu dựng mặt rồi yêu cầu dựng lại; trong `window.hpp`, chuyển sự kiện phím đến `fieldKey` và cho HUD in số liệu của cảnh mới. Hai lần bấm F2 phải quay lại cảnh ban đầu. Đừng reset camera giữa hai lần đo.
+
+<VoxelWorkFile project="59" step={1} file="field-controls" />
+
+<VoxelWorkFile project="59" step={1} file="window" />
+
+## Ghép các phần lại
+
+Nhấn 3 để chọn khối đặc, bật F1 rồi dùng F2. Khi giữ mọi mặt: 49.152 tam giác. Khi chỉ giữ vỏ của khối: `6 × 16 × 16 × 2 = 3.072`. Hình khối từ cùng chỗ đứng không được thủng mặt. Nhấn 1 để trở lại bờ suối.
+
+Mở terminal cạnh `CMakeLists.txt` của ZIP đã giải nén. Lần cấu hình đầu tạo `work/` từ starter; chỉnh tệp trong đó, rồi build lại cùng target. Cấu hình lần nữa không ghi đè bài làm.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake -S . -B build-work -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_59_work --parallel 1
+.\build-work\Release\project_59_work.exe
+```
+
+Với Ninja hoặc Make trên Linux/macOS, chạy `./build-work/project_59_work` thay cho dòng mở `.exe`.
+
+## Thử làm sai để hiểu đúng
+
+Đổi phép thử thành hai vật liệu khác màu thì phải có mặt. Giữa đất và đá sẽ xuất hiện mặt thừa dù không thể thấy nó từ ngoài.
+
+## Tự kiểm tra kết quả
+
+Khối đặc 16³ cho 24.576 quad trước tối ưu, 1.536 quad sau tối ưu. Đổi góc nhìn không đổi hai số này; ở cạnh nước không có khe sáng.
+
+## Bài tập mở rộng
+
+Khoét một ô Air kín bên trong fixture bằng code kiểm thử. Dự đoán số mặt mới trước khi dựng lại.
+
+[Bài 2: Ai chịu trách nhiệm về đường nối giữa hai bờ?](/projects/voxel-hidden-faces/02-mep-hai-chunk).

@@ -1,8 +1,27 @@
 export function courseCmake(project, { hasSnapshotShaders = false } = {}) {
   const projectNumber = Number(project.id);
+  const voxel = project.sourceSeries === "voxel-expedition";
+  // Seed the learner's tree once; a second configure must never overwrite their edits.
+  const workbook = voxel
+    ? `
+option(VOXEL_WORKBOOK "Build the learner's editable copy and test its own headers" OFF)
+if(VOXEL_WORKBOOK)
+    if(NOT EXISTS "\${CMAKE_CURRENT_SOURCE_DIR}/work")
+        file(COPY "\${CMAKE_CURRENT_SOURCE_DIR}/starter/" DESTINATION "\${CMAKE_CURRENT_SOURCE_DIR}/work")
+    endif()
+    add_lab_app(project_${projectNumber}_work work)
+endif()
+`
+    : "";
+  const testAssets =
+    project.sourceSeries === "flock-workbench" && projectNumber >= 68
+      ? "    target_compile_definitions(project_" +
+        projectNumber +
+        '_tests PRIVATE COURSE_TEST_ASSETS="${CMAKE_CURRENT_SOURCE_DIR}/assets")\n'
+      : "";
   // Opt-in for rebuilt shader tools: concurrent targets must not overwrite
   // each other's fallback files in a shared runtime/shaders directory.
-  const shaderRuntime = project.shaderRuntimePerTarget ? "shaders/\${name}" : "shaders";
+  const shaderRuntime = project.shaderRuntimePerTarget ? "shaders/${name}" : "shaders";
   const shaderSetup = hasSnapshotShaders
     ? `
     # Shader thay đổi theo checkpoint được chạy trực tiếp từ source để hỗ trợ hot reload.
@@ -99,7 +118,7 @@ ${shaderSetup}    enable_course_warnings(\${name})
 endfunction()
 
 add_lab_app(project_${projectNumber}_final final)
-if(BUILD_CHECKPOINTS)
+${workbook}if(BUILD_CHECKPOINTS)
     add_lab_app(project_${projectNumber}_starter starter)
     foreach(step RANGE 1 \${PROJECT_CHECKPOINT_COUNT})
         if(step LESS 10)
@@ -111,13 +130,21 @@ if(BUILD_CHECKPOINTS)
     endforeach()
 endif()
 
-# Tests chỉ include code thuần trong final/include và không cần mở SDL window.
+${voxel ? "# Tests dùng header trong work/include khi bật VOXEL_WORKBOOK; ở bản mẫu dùng final/include." : "# Tests chỉ include code thuần trong final/include và không cần mở SDL window."}
 include(CTest)
 if(BUILD_TESTING)
     file(GLOB_RECURSE test_sources CONFIGURE_DEPENDS "\${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp")
     add_executable(project_${projectNumber}_tests \${test_sources})
-    target_include_directories(project_${projectNumber}_tests PRIVATE final/include)
-    enable_course_warnings(project_${projectNumber}_tests)
+${
+  voxel
+    ? `    if(VOXEL_WORKBOOK)
+        target_include_directories(project_${projectNumber}_tests PRIVATE work/include)
+    else()
+        target_include_directories(project_${projectNumber}_tests PRIVATE final/include)
+    endif()`
+    : `    target_include_directories(project_${projectNumber}_tests PRIVATE final/include)`
+}
+${testAssets}    enable_course_warnings(project_${projectNumber}_tests)
     add_test(NAME project_${projectNumber}_validation COMMAND project_${projectNumber}_tests)
 endif()
 `;

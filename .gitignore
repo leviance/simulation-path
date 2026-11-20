@@ -56,6 +56,7 @@ yarn-error.log*
 /lib/generated-checkpoint-sources/
 /lib/generated-checkpoint-sources.ts
 /examples/project-[0-9][0-9]-*/starter/
+/examples/project-[0-9][0-9]-*/work/
 /examples/project-[0-9][0-9]-*/checkpoints/
 /examples/project-[0-9][0-9]-*/final/
 /examples/project-[0-9][0-9]-*/CMakeLists.txt

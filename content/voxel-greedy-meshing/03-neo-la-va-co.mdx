@@ -1,0 +1,77 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Gắn chuyển động vào từng ngọn cỏ và tán lá
+
+## Vấn đề cần giải quyết
+
+Ở sát mặt đất ta thấy cỏ nghiêng nhiều hơn thân cây. Nếu dịch toàn bộ bụi sang phải, gốc sẽ trượt trên nền. Hãy tách hai đỉnh chạm đất khỏi hai đỉnh tự do trước khi tô màu chiếc lá.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một ngọn cỏ hẹp có thể vẽ bằng một quad. Hai đỉnh dưới lấy thẳng từ điểm mọc; hai đỉnh trên đi theo đầu lá đã uốn. Với tán cây, dùng cùng nguyên tắc nhưng lấy gốc và chiều cao của chính cây đó.
+
+<InteractiveLab demo="voxel-greedy-meshing" mode="voxel61-3" />
+
+## Viết code từng bước
+
+Cây đã đón gió. Để bụi cỏ nói cùng một thứ tiếng với tán lá, ta dùng lại đúng trường gió vừa viết, không tạo thêm đồng hồ hay bốc ngẫu nhiên hướng mới cho từng khung hình.
+
+### Tìm chỗ cỏ có thể mọc một lần khi nạp cột
+
+Trong `region.hpp`, giữ danh sách gốc cỏ trong `Tile`. Khi `Region::put` nhận cột, tìm các mặt cỏ có không khí phía trên rồi lưu vị trí neo. Không đi tìm lại toàn bộ những ô này mỗi khi một ngọn cỏ nghiêng.
+
+<VoxelWorkFile project="61" step={3} file="region" />
+
+### Cho đầu lá đi theo gió, giữ chân lá trên mặt đất
+
+Trong `field-render.hpp`, `drawTuft` vẽ ba lá nhỏ quanh mỗi gốc gần mắt, mỗi lá có chân và ngọn. Chỉ điểm ngọn nhận độ dời từ `sway`. Gọi hàm khi vẽ vùng và bỏ những cụm quá 30 block. Đối chiếu với cách tìm trọng số trên tán cây: gốc và ngọn nhận cùng cơn gió, không nhận cùng biên độ.
+
+{/* snippet include/trail/field-render.hpp#grass-tip */}
+
+```cpp title="include/trail/field-render.hpp — Giữ đáy của ngọn cỏ tại điểm mọc"
+const Vec3 base = root + Vec3{offset, 0, 0.03 * n};
+const Vec3 tip = base + Vec3{offset, 0.38 + 0.09 * n, 0.04};
+const Vec3 bent = sway(tip, base, 0.55, 0.35, w.time, {w.windAngle, w.windSpeed});
+draw.quad({base + Vec3{-0.055, 0, -0.03}, base + Vec3{0.055, 0, 0.03}, bent + Vec3{0.012, 0, 0}, bent - Vec3{0.012, 0, 0}}, 0.2, 0.5, Block::Leaves, 2, 0.56 + 0.55 * smooth(-0.12, 0.3, draw.sun.y));
+```
+
+{/* snippet include/trail/field-render.hpp#crown-tip */}
+
+```cpp title="include/trail/field-render.hpp — Dùng chung neo cho cả tán"
+const Vec3 root{best->x + 0.5, double(best->y), best->z + 0.5};
+for (Vec3& point : points)
+    point = sway(point, root, best->height + 1.0, 0.42, weather.time, {weather.windAngle, weather.windSpeed});
+```
+
+{/* snippet include/trail/field-render.hpp#draw-grass */}
+
+```cpp title="include/trail/field-render.hpp — Vẽ từng bụi từ danh sách gốc"
+for (Vec3 root : tile.grass)
+    drawTuft(draw, root, w);
+```
+
+<VoxelWorkFile project="61" step={3} file="field-render" />
+
+## Ghép các phần lại
+
+Nhìn ngang một bụi cỏ gần thân cây, tăng gió, rồi bấm P. Đi vòng quanh: chân lá phải còn bám đúng ô đất. Nhả P, nhấn G: cỏ và lá đáp lại hướng mới, nhưng hai bụi xa nhau không nghiêng đồng thời y hệt nhau.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_61_work --parallel 1
+.\build-work\Release\project_61_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Áp dụng độ lệch của ngọn cho cả hai đỉnh đáy. Từ xa khó nhận ra, nhưng sát đất sẽ thấy bụi cỏ bị nhấc khỏi chỗ mọc.
+
+## Tự kiểm tra kết quả
+
+Khi gió đổi hướng, cỏ và tán cùng nghiêng theo hướng mới; đất, thân gỗ và số lần dựng mesh không đổi. Sau Pause, xoay mắt không làm cây rung trở lại.
+
+## Bài tập mở rộng
+
+Giữ nguyên gió và giảm một nửa độ mềm của cỏ. Dự đoán vị trí gốc và biên độ ngọn.
+
+[Bài 4: Đo riêng công dựng đất và công vẽ ngọn cây](/projects/voxel-greedy-meshing/04-kiem-mesh-va-gio).

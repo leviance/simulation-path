@@ -1,0 +1,115 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Một dấu bằng khác hai dấu bằng
+
+## Vấn đề cần giải quyết
+
+Trong `presses = presses + 1;` dấu bằng ghi vào biến, còn trong `presses == 1` hai dấu liền nhau đặt một câu hỏi. Nếu tokenizer tách `==` thành hai token gán, parser phía sau không thể sửa một cách đáng tin.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đi một chiều trên source, thử các toán tử hai ký tự trước rồi mới thử một ký tự. Gặp // bỏ tới cuối dòng. Không phải mọi thứ có dấu chấm đều là một số hợp lệ: 2. cần thêm chữ số sau dấu chấm.
+
+<InteractiveLab demo="tiny-script" mode="script72-2" />
+
+## Viết code từng bước
+
+### Đọc trọn một token và nhớ offset đầu tiên
+
+Token tên, số, ký hiệu, End là đủ. Tách giới hạn byte của file khỏi giới hạn 4.096 token để một file ngắn nhưng dày ký hiệu vẫn hữu hạn.
+
+{/* snippet include/script/lex.hpp#lex */}
+
+```cpp title="include/script/lex.hpp — Đọc trọn một token và nhớ offset đầu tiên"
+inline std::vector<Word> lex(std::string_view source) {
+    tiny::checkUtf8(source);
+    tiny::Cursor c{source};
+    c.take("\xef\xbb\xbf");
+    std::vector<Word> result;
+    while (true) {
+        c.skip();
+        if (c.take("//")) {
+            while (c.peek() && c.peek() != '\n')
+                ++c.pos;
+            continue;
+        }
+        if (!c.peek())
+            break;
+        const auto at = c.pos;
+        Lex kind = Lex::Symbol;
+        if (tiny::letter(c.peek()) || c.peek() == '_') {
+            kind = Lex::Name;
+            do {
+                ++c.pos;
+            } while (tiny::letter(c.peek()) || tiny::digit(c.peek()) || c.peek() == '_');
+        } else if (tiny::digit(c.peek())) {
+            kind = Lex::Number;
+            do {
+                ++c.pos;
+            } while (tiny::digit(c.peek()));
+            if (c.take('.')) {
+                if (!tiny::digit(c.peek()))
+                    tiny::fail(source, c.pos, "digit after decimal point");
+                while (tiny::digit(c.peek()))
+                    ++c.pos;
+            }
+        } else if (!c.take("==") && !c.take("!=") && !c.take("<=") && !c.take(">=") && !c.take("&&") && !c.take("||")) {
+            if (std::string_view("(){};,+-*/=!<>").find(c.peek()) == std::string_view::npos)
+                tiny::fail(source, at, "unexpected script character");
+            ++c.pos;
+        }
+        if (result.size() >= 4096)
+            tiny::fail(source, at, "more than 4096 tokens");
+        result.push_back({kind, std::string(source.substr(at, c.pos - at)), at});
+    }
+    result.push_back({Lex::End, "", c.pos});
+    return result;
+}
+```
+
+### Đưa số token về chính bàn điều khiển
+
+Mốc 2 đếm token thay vì byte. Một comment dài làm file nặng hơn nhưng không làm tăng số token hữu ích.
+
+{/* snippet include/script/session.hpp#install-script */}
+
+```cpp title="include/script/session.hpp — Đưa số token về chính bàn điều khiển"
+inline bool reload(Session& s, tiny::Desk& d, const std::filesystem::path& file) {
+    try {
+        const auto text = tiny::readFile(file);
+        s.message = std::to_string(lex(text).size() - 1) + " script tokens; C++ bindings still active";
+        d.error = false;
+        d.status = s.message;
+        return true;
+    } catch (const std::exception& e) {
+        s.message = file.filename().string() + ":" + e.what();
+        d.error = true;
+        d.status = s.message;
+        return false;
+    }
+}
+```
+
+## Ghép các phần lại
+
+Thêm khoảng trắng và comment quanh phép gán rồi F5. Thử thay `==` bằng `=` và giải thích vì sao số ký tự đổi nhưng có thể vẫn chỉ có một token ở chỗ đó.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_72_checkpoint_2 --parallel 2
+.\build\Release\project_72_checkpoint_2.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Thử chèn ký tự @ giữa một biểu thức. Bộ đọc phải dừng ở đúng vị trí, không nuốt bỏ ký tự để phần sau trông có vẻ hợp lệ.
+
+## Tự kiểm tra kết quả
+
+Số token không phụ thuộc lúc nào bấm F5; lỗi chỉ đúng vị trí. Ở mốc này vẫn chưa có phép tính trên model.
+
+## Bài tập mở rộng
+
+Tách bằng tay biểu thức `!paused() && getRadius() >= 80`. Dấu nào là một token gồm hai ký tự?
+
+[Bài 3: Vì sao 2 + 3 × 4 phải ra 14?](/projects/tiny-script/03-tu-token-den-cay-bieu-thuc).

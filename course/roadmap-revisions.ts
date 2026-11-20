@@ -4,6 +4,28 @@ import type { ProjectRevision } from "./types";
 // The replacement keeps existing links working; only its optional note marks acceptance as pending.
 const previousMolecularPart = "MÔ PHỎNG PHÂN TỬ TỪ 2 HẠT TỚI HÀNG TRIỆU HẠT";
 
+function landscapeRevision(
+  previousTitle: string,
+  outcome: string,
+  question: string,
+  action: string,
+  concept: string,
+  workload: string,
+): ProjectRevision {
+  return {
+    previousTitle,
+    previousPart: "VOXEL WORLD KIỂU MINECRAFT",
+    summary: outcome,
+    outcome,
+    question,
+    interactions: [action],
+    concepts: [concept],
+    prerequisites:
+      "C++/SDL3, camera và mesh. Mỗi mốc giải thích phần mới trên cùng chuyến đi trong thế giới voxel.",
+    workload,
+  };
+}
+
 export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
   "40": {
     previousTitle: "“Thành phố hạt” trên GPU: xây grid và tìm hàng xóm song song",
@@ -328,10 +350,10 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
     summary:
       "Mở một khối scalar thật, cắt theo ba hướng và tìm hiểu mỗi pixel đang đọc từ những voxel nào.",
     outcome:
-      "Khối vật liệu 128³ có lõi xoắn, cắt mở một góc và xoay/zoom; ba ảnh XY/XZ/YZ liên kết, histogram và voxel inspector.",
+      "Khối mẫu 128³ có lớp vỏ, các lõi đặc và lỗ khoan; cắt mở trong 3D, ba ảnh XY/XZ/YZ liên kết và inspector tám voxel thật.",
     question: "Một ảnh 2D có thể cho ta biết điều gì về bên trong khối dữ liệu 3D?",
     interactions: [
-      "Chọn Sphere/Gaussian/Layers/Phantom/Ramp, đổi 64³/128³ và kéo ba mặt cắt.",
+      "Chọn Mẫu vật/Sphere/Gaussian/Layers/Ramp, đổi 64³/128³ và kéo ba mặt cắt.",
       "Dời điểm chung, so nearest/trilinear, chỉnh window/level, quét/dừng/đặt lại và kiểm dữ liệu.",
     ],
     concepts: [
@@ -341,7 +363,136 @@ export const roadmapRevisions: Readonly<Record<string, ProjectRevision>> = {
     prerequisites:
       "SDL texture/input, hệ tọa độ và nội suy; không cần DICOM, OpenGL hoặc kiến thức chụp CT.",
     workload:
-      "C++ cuối mặc định 128³ = 2.097.152 scalar double; 64³ để so sánh. Canvas 64³/128³ thật, không thay ứng dụng C++.",
+      "C++ cuối mặc định 128³ = 2.097.152 Float32 / 8 MiB; 64³ để so sánh. Canvas 64³/128³ thật, không thay ứng dụng C++.",
+  },
+  "54": {
+    previousTitle: "Nhìn xuyên khối sương 3D: Volume Ray Marching bằng fragment shader",
+    replacement: {
+      slug: "volume-ray-marching",
+      acceptanceNote: "Đang làm lại đồ họa; bản hiện tại chưa được nghiệm thu.",
+    },
+    summary:
+      "Đọc volume 128³ bằng shader thật, chuyển ba cách tích lũy và đo cái giá của bước lấy mẫu nhỏ hơn.",
+    outcome:
+      "Volume Lightbox có viewport lớn, MIP/average/alpha, camera orbit/inside, transfer controls, ray inspector và bảng sai số–thời gian GPU.",
+    question: "Cùng một khối dữ liệu, vì sao ba cách gộp mẫu dọc tia tạo ba ảnh khác nhau?",
+    interactions: [
+      "Orbit/zoom/inside, chọn dataset 64³/128³ và MIP/average/alpha.",
+      "Đổi step/sigma/cutoff/palette, chọn ray và tiến từng mẫu; đo/hủy job và mở Showcase.",
+    ],
+    concepts: [
+      "Perspective ray, ray-box interval, texture 3D và sampling tại tâm mẫu.",
+      "Length-weighted average, transmittance/front-to-back, transfer, GPU timing và convergence.",
+    ],
+    prerequisites:
+      "SDL/OpenGL từ 33–36, ray từ 52 và scalar volume từ 53; không cần DICOM, CT hoặc solver ánh sáng vật lý.",
+    workload:
+      "Final mặc định 128³ Float32 / 8 MiB, viewport theo drawable. Kernel benchmark cố định 320×240; Canvas CPU không thay bản C++.",
+  },
+  "58": {
+    ...landscapeRevision(
+      "Khối đất 16×16×16: dựng voxel chunk đầu tiên",
+      "Một mảnh đất có cỏ, đá, cát và thân cây với họa tiết pixel tự thiết kế; nhìn từ tầm mắt người đi bộ.",
+      "Nhìn sát một bờ cỏ, bạn đang thấy một tấm hình hay hàng trăm viên đất thật?",
+      "Đi quanh bờ suối, tiến sát vách rồi bật lớp cắt để đọc các ô bên trong.",
+      "Mảng 16³, mặt cube, UV và camera phối cảnh.",
+      "Một chunk thật; kiểm 4.096 ô, 12 tam giác mỗi block đặc.",
+    ),
+    replacement: {
+      slug: "voxel-chunk",
+      acceptanceNote:
+        "Bản C++ đã kiểm đủ 4.096 địa chỉ, sáu mặt một block và đường nước qua đủ 16 hàng. Ảnh bờ suối trong bài được chụp từ bản chạy thật.",
+    },
+  },
+  "59": {
+    ...landscapeRevision(
+      "Ẩn các mặt nằm trong đất: giảm mạnh số tam giác voxel",
+      "Đổi cách dựng cùng một vách đá, đếm các mặt biến mất mà không làm thủng bờ suối.",
+      "Tại sao bỏ hàng nghìn tam giác mà vách đá không mất một viên nào?",
+      "Giữ nguyên camera, đổi cách dựng mặt; đi vòng vào hốc đá và xem mép nước.",
+      "Sáu ô kề, biên chunk và đối chiếu tập mặt.",
+      "Khối đặc cô lập: 49.152 → 3.072 tam giác; kiểm thêm hốc và hai chunk kề.",
+    ),
+    replacement: {
+      slug: "voxel-hidden-faces",
+      acceptanceNote:
+        "Kiểm hai chunk đặc ghép nhau: còn 2.560 mặt đơn vị. Hốc đá có cả trần và vách để tự đi vào kiểm từ phía trong.",
+    },
+  },
+  "60": {
+    ...landscapeRevision(
+      "Chọn, phá và đặt block bằng tia từ camera",
+      "Nhìn vào cảnh để đọc vật liệu, tọa độ và khoảng cách; mẫu dò không làm thay đổi thế giới.",
+      "Bạn đang nhìn vào thân cây nào, cách mắt bao nhiêu block?",
+      "Ngắm vách và trời; bật đường đi của tia, đọc vật liệu và khoảng cách.",
+      "Tia phối cảnh, giao hộp, bước 3D DDA và normal mặt đầu tiên.",
+      "Đi vài chục block; đối chiếu với ray/AABB trên fixture, hash địa hình bất biến.",
+    ),
+    replacement: {
+      slug: "voxel-ray-editor",
+      acceptanceNote:
+        "Đã đối chiếu kết quả DDA với phép cắt tia–hộp độc lập, kể cả tia nằm đúng biên. Xoay và ngắm không sửa dữ liệu cũng không dựng lại mesh.",
+    },
+  },
+  "61": {
+    ...landscapeRevision(
+      "Gộp tường voxel thành mảng lớn: Greedy Meshing",
+      "Greedy meshing giảm hình học tĩnh; một cơn gió chung đi qua ngọn cỏ và từng tán cây.",
+      "Vì sao gộp được cả vách đá nhưng không nên gộp luôn hai bụi cỏ?",
+      "So lưới trước/sau, tăng gió rồi dừng giờ để nhìn gốc và ngọn.",
+      "Greedy meshing, UV lặp, neo rễ và trường gió trong tọa độ world.",
+      "Hàng nghìn block, 6 quad ở khối đặc; so bộ đếm mesh và độ lệch gốc/ngọn.",
+    ),
+    replacement: {
+      slug: "voxel-greedy-meshing",
+      acceptanceNote:
+        "Trên khối đặc, sáu quad sau khi gộp phủ đúng các mặt đơn vị ban đầu. Phép kiểm gió đo gốc đứng yên và ngọn lệch theo vị trí.",
+    },
+  },
+  "62": {
+    ...landscapeRevision(
+      "Thế giới “vô tận”: tải và gỡ chunk khi người chơi di chuyển",
+      "Đi hàng trăm block qua vùng được nạp và gỡ; mây vẫn trôi liên tục khi camera qua biên.",
+      "Vì sao đi mãi vẫn gặp đất mới mà đám mây kia không nhảy theo từng chunk?",
+      "Đi xa, đổi hướng, quay lại; dừng giờ và xoay đầu nhìn mây.",
+      "Tọa độ âm, hàng đợi hữu hạn, vòng giữ chunk và gió tầng cao.",
+      "Ít nhất 5×5 cột chunk hoạt động; đi hàng trăm block; ghi tài nguyên qua nhiều vòng.",
+    ),
+    replacement: {
+      slug: "voxel-chunk-streaming",
+      acceptanceNote:
+        "Đã kiểm đi xa, đảo hướng khi hàng đợi còn việc rồi quay về đúng dữ liệu cũ; cửa sổ cần 25 cột và vành giữ không vượt 49.",
+    },
+  },
+  "63": {
+    ...landscapeRevision(
+      "Đồi núi tự sinh: tạo terrain procedural không seam giữa chunks",
+      "Theo một con sông từ hẻm núi qua rừng, bãi cát đến vùng nước mở có sóng nhìn được từ bờ.",
+      "Theo con sông này, liệu ta có đến được biển?",
+      "Đi từ hẻm núi tới cửa sông; đứng bên một tảng đá để phân biệt dòng chảy và sóng.",
+      "Noise theo seed, vùng khí hậu, neo cây, tiếp tuyến dòng và pháp tuyến sóng.",
+      "Sinh hàng chục chunk; kiểm đường nối cả địa hình, tán cây lẫn nước ở cùng giờ.",
+    ),
+    replacement: {
+      slug: "voxel-procedural-terrain",
+      acceptanceNote:
+        "Đã kiểm lòng sông liền qua cửa biển trên seed mẫu, cây và địa hình sinh lại như cũ, normal khớp độ dốc thật của mặt sóng.",
+    },
+  },
+  "64": {
+    ...landscapeRevision(
+      "Minecraft-like sandbox tối giản của riêng bạn",
+      "Đi bộ trong một thế giới do C++/SDL3 dựng; nhìn tuyết rơi theo gió, mây trôi, sóng chạy và ánh sáng đổi theo Mặt Trời.",
+      "Nếu buông chuột và đứng yên, điều gì cho biết thế giới vẫn đang sống?",
+      "Đi bộ, nhìn tuyết qua tán thông, đổi hướng gió, dừng giờ và so ánh sáng sớm/chiều.",
+      "Va chạm voxel, pool hạt trong world-space, đồng hồ cảnh và hướng Mặt Trời.",
+      "Đi bộ 10–20 phút trên cùng seed; ghi chunk/hạt/thời gian vẽ và giới hạn máy.",
+    ),
+    replacement: {
+      slug: "voxel-sandbox",
+      acceptanceNote:
+        "Chuyến đi tự động 10 phút trong bản C++ qua cả năm mốc, sáu vòng và hơn 2.400 block. Số đo không thay cho việc tự thử cảm giác đi bộ.",
+    },
   },
 };
 

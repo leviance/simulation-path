@@ -1,0 +1,27 @@
+// Đếm các lần gọi Pause thành công trong phiên script hiện tại.
+let presses = 0;
+
+function onPause() {
+    presses = presses + 1;
+    if (paused()) {
+        resume();
+    } else {
+        pause();
+    }
+}
+
+function onReset() {
+    reset();
+}
+
+function onObserve() {
+    links(!showLinks());
+}
+
+function onRadius(value) {
+    radius(value);
+}
+
+function onSeparation(value) {
+    separate(value);
+}

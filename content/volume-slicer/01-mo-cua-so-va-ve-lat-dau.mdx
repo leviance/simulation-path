@@ -1,0 +1,143 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Mở cửa sổ rồi vẽ lát cắt đầu tiên
+
+## Vấn đề cần giải quyết
+
+Hãy tưởng tượng ta có một quả cầu nhưng chỉ được nhìn ảnh cắt ngang của nó. Lát đi qua tâm phải là một hình tròn lớn; càng dời ra xa tâm, hình tròn càng nhỏ rồi biến mất. Nếu làm được điều này trong một cửa sổ, ta đã có kết quả đầu tiên để kiểm tra — chưa cần mảng ba chiều hay nội suy.
+
+Starter của project mở cửa sổ, nhận sự kiện và dọn tài nguyên khi thoát. Bài này thêm đường đi còn thiếu: **điểm world → scalar → màu pixel → texture → cửa sổ**. UI và phần fit ảnh được cung cấp sẵn; chính ảnh lát cắt là phần ta sẽ viết.
+
+## Hiểu ý tưởng trước khi viết code
+
+Quả cầu tâm gốc, bán kính 60 mm. Một điểm ở trong cầu nhận scalar 1, ngoài cầu nhận 0. Với mặt XY, x và y chạy qua các pixel, còn z là một số giữ cố định. Đây là cách tạo một dữ liệu tổng hợp rất dễ dự đoán, không phải chụp hay tái tạo CT.
+
+Mỗi pixel đại diện cho một vùng nhỏ. Ta lấy mẫu tại tâm vùng ấy bằng `(column + 0.5) / width`; phía y cần đảo chiều vì hàng ảnh đi xuống nhưng world y đi lên. Khung world rộng 160 mm và cao 192 mm, nên phần trình bày phải giữ tỉ lệ 160:192, không kéo ảnh thành hình vuông.
+
+Thử dự đoán trước: ở z = 0, bán kính lát là 60 mm. Ở z = 40 mm, bán kính còn khoảng 44,72 mm. Đi xa hơn 60 mm thì ảnh phải trống.
+
+<InteractiveLab demo="volume-slicer" mode="slice53-1" />
+
+Thí nghiệm này chưa cấp phát volume. Nó gọi `sphereField` cho từng pixel; ta sẽ thay bước ấy bằng đọc mảng ở bài sau.
+
+## Viết code từng bước
+
+### 1. Chạy được cửa sổ trước
+
+Mở `starter/src/main.cpp` để xác định vị trí tạo `Platform` và vòng lặp. `Platform::open` kiểm window, renderer và texture riêng từng bước. Đối tượng được tạo trước khi gọi `open`, nên nếu một bước thất bại, destructor vẫn dọn các tài nguyên đã có.
+
+{/* snippet include/platform.hpp#open-window */}
+
+```cpp title="include/platform.hpp — Khởi tạo cửa sổ và texture"
+void open(bool hidden) {
+    if (!SDL_Init(SDL_INIT_VIDEO)) throw std::runtime_error(SDL_GetError());
+    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    if (hidden) flags |= SDL_WINDOW_HIDDEN;
+    window = SDL_CreateWindow("Project 53 | Scalar Slice Workbench", logicalWidth, logicalHeight, flags);
+    if (!window) throw std::runtime_error(SDL_GetError());
+    renderer = SDL_CreateRenderer(window, nullptr);
+    if (!renderer) throw std::runtime_error(SDL_GetError());
+    if (!SDL_SetRenderLogicalPresentation(renderer, logicalWidth, logicalHeight, SDL_LOGICAL_PRESENTATION_LETTERBOX))
+        throw std::runtime_error(SDL_GetError());
+    SDL_SetRenderVSync(renderer, 1);
+    scene = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, 820, 620);
+    if (!scene) throw std::runtime_error(SDL_GetError());
+    for (SDL_Texture*& texture : slices) {
+        texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, 256, 256);
+        if (!texture) throw std::runtime_error(SDL_GetError());
+        SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+    }
+}
+```
+
+`SDL_PIXELFORMAT_RGBA32` mô tả thứ tự byte RGBA, không yêu cầu ta tự đoán endianness của một số nguyên 32-bit. Ảnh làm việc là 256×256; kích thước window không phải kích thước của dữ liệu ấy. Logical presentation lo phần co giãn/letterbox.
+
+### 2. Quyết định một điểm có nằm trong cầu không
+
+Không cần căn bậc hai để so khoảng cách với bán kính: so bình phương hai vế là đủ.
+
+{/* snippet include/field.hpp#sphere-field */}
+
+```cpp title="include/field.hpp — Dữ liệu sphere dễ kiểm"
+inline double sphereField(Vec3 point) {
+    const double radius = 60.0;
+    if (dot(point, point) <= radius * radius) return 1.0;
+    return 0.0;
+}
+```
+
+Hàm nhận tọa độ theo mm và trả scalar, không trả màu. Nhờ vậy bài sau có thể lưu kết quả vào mảng mà không phải đổi ý nghĩa dữ liệu.
+
+### 3. Tính ảnh tại z đang chọn
+
+`renderFirstSlice` được `State::refresh` gọi khi trạng thái hiển thị đổi. `image.scalar` có một phần tử cho mỗi pixel; z đi vào từ slider, không bị gắn cứng trong phép kiểm cầu.
+
+{/* snippet include/slice.hpp#first-image */}
+
+```cpp title="include/slice.hpp — Lấy mẫu tại tâm pixel"
+for (int row = 0; row < image.height; ++row) {
+    for (int column = 0; column < image.width; ++column) {
+        const double u = (column + 0.5) / image.width;
+        const double v = 1.0 - (row + 0.5) / image.height;
+        const Vec3 point{-80 + 160 * u, -96 + 192 * v, z};
+        image.scalar[column + row * image.width] = static_cast<float>(sphereField(point));
+    }
+}
+```
+
+Cột ảnh đổi x, hàng ảnh đổi y; `column + row * width` chỉ là địa chỉ ảnh 2D. Đừng nhầm nó với địa chỉ voxel 3D sẽ xuất hiện ở Bài 2. Scalar lúc này chỉ có 0 hoặc 1, nhưng mảng float giữ đường đi dữ liệu sẵn cho các giá trị ở giữa.
+
+### 4. Gửi đúng từng hàng byte cho SDL
+
+`colorImage` chuyển scalar thành RGBA. Sau đó `Platform::upload` ghi ảnh vào texture streaming. Không được giả sử pitch của texture luôn bằng `width * 4`: SDL trả pitch thực tế sau khi lock.
+
+{/* snippet include/platform.hpp#upload-texture */}
+
+```cpp title="include/platform.hpp — Copy ảnh theo pitch của texture"
+void upload(SDL_Texture* texture, const std::uint32_t* rgba, int width, int height) {
+    void* pixels = nullptr;
+    int pitch = 0;
+    if (!SDL_LockTexture(texture, nullptr, &pixels, &pitch)) throw std::runtime_error(SDL_GetError());
+    const int rowBytes = width * 4;
+    if (pitch < rowBytes) {
+        SDL_UnlockTexture(texture);
+        throw std::runtime_error("Texture pitch smaller than a pixel row");
+    }
+    auto* destination = static_cast<std::uint8_t*>(pixels);
+    for (int row = 0; row < height; ++row)
+        std::memcpy(destination + row * pitch, rgba + row * width, static_cast<std::size_t>(rowBytes));
+    SDL_UnlockTexture(texture);
+}
+```
+
+Mỗi hàng nguồn có `width * 4` byte, nhưng mỗi hàng đích bắt đầu cách nhau `pitch` byte. Phải ghi đủ dữ liệu mới: vùng nhớ lock là write-only, không phải nơi lưu bản ảnh cũ để đọc lại. Quy tắc này được nêu trong [tài liệu SDL_LockTexture](https://wiki.libsdl.org/SDL3/SDL_LockTexture).
+
+## Ghép các phần lại
+
+Trong `main`, sau khi nhận event, `state.refresh()` tạo lại scalar/RGBA khi cần; `platform.upload()` chuyển ảnh mới; `drawUi()` vẽ texture và controls, rồi mới `SDL_RenderPresent`. Không gọi `sphereField` bên trong hàm vẽ chữ hay xử lý chuột.
+
+```bash
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_53_checkpoint_1 --parallel 1
+```
+
+Trên Visual Studio, chạy `build/Debug/project_53_checkpoint_1.exe`. Source đầy đủ của đúng mốc này ở cuối bài; không cần ghép lại các code block để đoán chương trình hoàn chỉnh.
+
+## Thử làm sai để hiểu đúng
+
+1. Trước khi kéo slider, ghi lại z nào làm ảnh biến mất. Thử z = 0, 40, 60 rồi đi ra ngoài. Ở đúng tiếp tuyến, pixel rời rạc có thể không nằm trúng điểm giao duy nhất; đó khác với một hình tròn còn bán kính lớn.
+2. Tạm bỏ phép đảo chiều v trong vòng lặp. Sphere đối xứng nên lỗi khó thấy; sau đó đánh dấu một điểm ở phía y dương hoặc đổi tâm sphere lên trên. Ta cần dữ liệu không đối xứng để bắt lỗi hướng trục.
+3. Tạm dùng chiều rộng ảnh làm bước nhảy cho con trỏ đích thay vì pitch. Không coi việc máy hiện tại chưa lỗi là bằng chứng cách copy ấy đúng; hãy đọc lại hợp đồng SDL và khôi phục code chuẩn.
+
+## Tự kiểm tra kết quả
+
+- [ ] Cửa sổ thoát được bằng Esc/nút đóng; lỗi tài nguyên có thông báo.
+- [ ] Dời z thay đổi bán kính lát; không chỉ thay dòng chữ cạnh ảnh.
+- [ ] Hình tròn không bị kéo méo dù vùng chứa ảnh không vuông.
+- [ ] Mảng scalar và RGBA là hai dữ liệu riêng; texture không được dùng làm bản lưu scalar.
+
+## Bài tập mở rộng
+
+Dời tâm sphere tới (15,20,0) mm rồi giải thích nó phải xuất hiện về phía nào của ảnh. Sau đó thay cầu bằng ellipsoid có ba bán kính khác nhau. Chỉ đổi hàm tạo scalar, giữ nguyên vòng lặp pixel và đường đưa texture lên SDL.
+
+Bài tiếp theo sẽ lưu cả khối vào bộ nhớ. Khi ấy một pixel không còn tự gọi công thức sphere nữa: nó phải tìm đúng mẫu trong dữ liệu 3D.

@@ -1,55 +1,61 @@
-# Project 53 — khối vật liệu cắt mở
+# Project 53 — Scalar / Slice Workbench
 
-Đối chiếu [Product Specification v4, Project 53](../specifications/cpp-sdl3-simulation-roadmap-agent-product-spec-v4-complete.md). Không thay đổi hoặc hạ yêu cầu của đặc tả. Ngày rà soát: 17/11/2026.
+Nguồn chuẩn: [Product Specification v4, Project 53](../specifications/cpp-sdl3-simulation-roadmap-agent-product-spec-v4-complete.md). Không thay đặc tả để hợp thức hóa hiện trạng.
 
-## Phương án đã chốt
+## Phạm vi và bản cũ
 
-Người dùng đã chấp thuận bản tương tác **Khối vật liệu cắt mở**. Hai hướng trước đó — ba ảnh phẳng kèm hộp định hướng nhỏ và ba mặt phẳng trong phối cảnh — đã bị loại, không phải bản bàn giao.
+Theo yêu cầu mới, toàn bộ 54 file nguồn/bài học/metadata/Canvas/tests của bản trước đã được gỡ trước khi viết lại. Bản dự phòng của 55 file authored (gồm hồ sơ nghiệm thu cũ) nằm tại `.validation/p53-retired-20261117-full-rebuild/`; cũng có thể khôi phục từ Git. Kết quả nghiệm thu trước không áp dụng cho lần xây dựng này.
 
-Bản C++ và Canvas hiện cùng có khối bo góc, lõi xoắn và ống rỗng; chuyển nguyên khối/cắt mở một góc, orbit/zoom và ba ảnh XY/XZ/YZ liên kết. Camera độc lập với điểm đo. Bản cuối mặc định 128³ = 2.097.152 scalar double/16 MiB; 64³ là lựa chọn so sánh, không phải giảm ngầm sản phẩm cuối.
+Bản mới là **Scalar / Slice Workbench**: một mẫu tổng hợp có vỏ, các lõi đặc và lỗ khoan; khối cắt mở 3D, ba ảnh XY/XZ/YZ và một probe chung. Mọi phép đo đọc scalar gốc, không đọc mesh hay màu ảnh.
 
-Ba ảnh 256² đọc mảng scalar đầy đủ. Vỏ xám là mesh tham chiếu isovalue 0.18/stride 3; zero padding chỉ thuộc bộ dựng mesh, không sửa volume. Các mặt cắt dùng lại raw scalar/RGBA của đúng ba ảnh. Không có ray marching, MIP, tích phân alpha hoặc tái tạo CT/HU.
+- Bản cuối: 128³ = 2.097.152 Float32 / 8 MiB; có lựa chọn 64³.
+- World box 160 × 192 × 224 mm, origin (-80,-96,-112), voxel centre sampling; không phải HU hoặc CT reconstruction.
+- Tự viết storage, nearest/trilinear và slice renderer. Vỏ định hướng là scaffold CPU, iso 0.12/stride 2, không phải ray marching của Project 54.
+- Chín bài theo thay đổi sử dụng được, không cố định sáu/bảy bài. Revision tăng lên 3 để không coi tiến độ cũ là đã học xong bài mới.
+- Không stage, commit, push hoặc publish. Output và bản dự phòng nằm ngoài Git.
 
-## Giáo trình và source
+## Giáo trình và phân phối source
 
-- Bảy bài đi từ shell SDL và ảnh đầu tiên đến storage, ba hướng cắt, display mapping, trilinear, input rồi kiểm chứng.
-- 26 đoạn C++ lấy theo marker của đúng checkpoint; mỗi bài có vấn đề, ý tưởng, các bước viết code, ghép chương trình, thử lỗi, tự kiểm và bài tập.
-- Phân biệt phần người học tự viết (storage, sampler, slice renderer) với scaffold cung cấp cho vỏ phối cảnh. Có hướng dẫn nối scene texture/cache vào main, không để một lời gọi vẽ không rõ nguồn gốc.
-- Trang tổng quan có thử thách trước lời giải. Cuối bài có source chạy được; bài cuối có toàn bộ file và ZIP độc lập CMake/SDL, không cần Node.js.
-- C++ thụt bốn space, có comment và giữ biểu thức theo dòng tự nhiên; code block dùng One Dark.
-- Bộ vẽ định hướng cũ không còn được dùng. Bản dự phòng orientation.hpp nằm trong .validation/p53-retired-layout; không đưa vào Git.
+Chín bài đi từ cửa sổ và ảnh sphere đầu tiên tới storage 3D, ba hướng cắt, trilinear, display mapping, ngữ cảnh 3D, input liên kết, quét/cache và kiểm chứng. Mỗi bài có checkpoint chạy độc lập; bài cuối có source hoàn chỉnh của toàn ứng dụng.
 
-## Các lỗi đã khắc phục
+- 38 đoạn C++ trong bài khớp chính xác snippet markers của đúng checkpoint. Không lấy thuật toán tương lai để giải thích một mốc trước đó.
+- Challenge nêu sản phẩm và yêu cầu trước khi học; code có chú thích, thụt bốn dấu cách, không dùng `?:` để viết tắt.
+- Bảy URL lesson cũ chuyển tới bài tương ứng; content revision 3 không coi tiến độ cũ là đã hoàn thành giáo trình mới.
+- ZIP có README, CMake, starter, chín checkpoint, final và tests: **201 file / 248.743 byte**. Không chứa source-template của repository, binary, build output hoặc thư viện.
+- Package digest: `8503374eeeb6b78d7aca2f7e92fdd3f5cb028de60162b35a6bf5e7284fda05e1`. Mọi member đã được so sánh từng byte với source hiện tại.
 
-1. Audit kiểm grid và số phần tử thực tế trước khi kết luận; empty/truncated/oversized storage không thể PASS chỉ nhờ fixture affine riêng.
-2. Color mapping kiểm kích thước scalar buffer và giá trị hữu hạn trước khi ghi RGBA/chuyển số nguyên.
-3. Đổi dataset C++ chuẩn bị volume/mesh/histogram mới rồi mới thay state; lỗi allocation/budget giữ dữ liệu trước và hiện thông báo.
-4. Cache tách fill/histogram/mesh, scalar slice, RGBA và ảnh phối cảnh. Không fill hàng triệu voxel mỗi frame; Canvas chỉ cấp phát volume sau hydration.
-5. Camera, probe và slider có loại drag riêng; blur/reset/reduced-motion hủy quét/capture. Quét hữu hạn theo thời gian, tới lát cuối thì dừng.
-6. Wheel cập nhật camera bằng state updater thay vì ghi ref trong render. Dependencies của từng ảnh chỉ giữ tọa độ cắt tương ứng, không resample cả ba ảnh khi chỉ dời crosshair.
+## Bằng chứng kiểm tra
 
-## Bằng chứng kiểm chứng
+Các bằng chứng dưới đây thuộc bản dựng lại, không kế thừa nghiệm thu của bản cũ.
 
-| Phạm vi | Kết quả | Bằng chứng local |
-| --- | --- | --- |
-| Toán, biên, storage, display, camera, clipping, mesh | 17 ca TypeScript qua; fixture biết trước, affine, đối xứng và allocation 64³/128³ | .validation/p53-source-evidence.json |
-| Bài học/source | 26 marker khớp, 22 ca toán/tooling/snippet qua; toàn khóa source contract, TypeScript, architecture và Git hygiene qua | .validation/p53-source-evidence.json |
-| Lint | ESLint nhóm Canvas/math/tests Project 53 không lỗi hoặc warning sau khi sửa ref/dependencies của React | Lệnh ESLint có deadline trong log chat |
-| ZIP thật | 174 file bằng byte với source, digest 769552ba20e951bd7cf5fe0695925a7a8c58dae1f654b1a470f5ee0e5e1d9987 | .validation/p53-native-final-evidence.json |
-| Windows/VS2022/SDL 3.4.8 | Starter + 7 checkpoint + final build Debug/Release không warning C++; CTest cả hai qua; chạy hữu hạn mọi target | .validation/p53-native-final-evidence.json |
-| Vòng lặp SDL | --self-test: 45 kiểm, 0 lỗi ở cả Debug/Release, tự kết thúc sau 17 frame | .validation/p53-native-final-evidence.json |
-| Cửa sổ C++ qua Computer Use | Quan sát ảnh thật; drag orbit không dời world point, slider XY đổi z, pick XY giữ z/đồng bộ ba view, phím Q/R và Esc hoạt động | Quan sát trực tiếp binary của ZIP; tiến trình thoát 0 |
-| Canvas cô lập | React StrictMode, DPR 1/2, preset, pointer capture/release, camera/probe độc lập, audit, reduced-motion/blur và dispose qua | .validation/p53-canvas-evidence.json |
-| Production | Build đủ năm môi trường; overview + 7 lesson render 200; 16 ca route/section/roadmap qua | .validation/p53-production-evidence.json, log lượt build trong chat |
-| Web localhost | Hai ca Playwright về trilinear/gating/scalar/slider/scan/reset qua | .validation/p53-browser-live-evidence.json |
-| Bàn giao web | Source final tải đúng file, clipboard giữ nội dung/thụt dòng (chuẩn hóa CRLF của Windows khi so), ZIP tải qua nút khớp byte, light/dark và 390px không tràn trang | .validation/p53-delivery-evidence.json |
+| Hạng mục                        | Kết quả và giới hạn                                                                                                                                                 |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Windows C++                     | VS2022, SDL3 3.4.8: build starter, chín checkpoint, final và tests ở Debug/Release; CMake `--parallel 1`                                                            |
+| CTest                           | Debug và Release qua; 340.581 checks/configuration, không phụ thuộc `assert` hoặc `NDEBUG`                                                                          |
+| Fixture có đáp số biết trước    | x+10y+100z: indexing độc lập, tâm mẫu, half-cell 50.5, nearest tie 101, tám góc vật lý, cạnh, mặt và outside policy                                                 |
+| Các invariant khác              | Đối xứng sphere/slice ở 64³ và 128³, histogram đủ N³, scalar không đổi khi đổi màu, camera round-trip, physical aspect và clipping                                  |
+| Runtime C++                     | Audit 13 checks/0 failures; actual allocation 2.097.152 mẫu/8.388.608 byte; 22 app Debug/Release đều chạy ba frame hữu hạn                                          |
+| Điều khiển SDL                  | 26 checks qua hàng đợi SDL và window/renderer thật: probe, camera, pick/letterbox, slider, sampler, display, cache, scan/blur, preset/reset và missed mouse release |
+| ZIP sau giải nén                | Configure/build final/tests, CTest Debug/Release và chạy final thành công ngoài source tree của repository                                                          |
+| Toán TypeScript và nội dung     | 15/15 ca: dữ liệu thật, oracle độc lập, orientation, display, mesh, hủy async job, snippet và checkpoint staging                                                    |
+| Production/routes/browser       | Production build qua; 7/7 ca route/content và 7/7 ca Chrome qua, gồm màu nhãn light/dark, camera/pick, hủy job, scan/blur, DPR/resize, theme/progress và ZIP HTTP   |
+| Tiến độ học                     | 5/5 ca migration qua; revision mới không xóa tiến độ của project khác                                                                                               |
+| Kiểm bàn phím/chuột qua Windows | Chưa xác nhận bằng thao tác OS trực tiếp; công cụ Computer Use lỗi khởi tạo kernel và vẫn lỗi sau một lần reset. Không gọi các kiểm SDL ở trên là kiểm OS input     |
 
-Lần thử kết nối web đầu chọn IPv4 trong khi dev server có sẵn ở localhost; đã đổi cách kiểm kết nối và dùng lại đúng server ấy. Bản kiểm cuối không tắt tiến trình của người dùng. Sau chỉnh sửa React, build production được chạy lại từ nguồn cuối; mã C++ và ZIP không đổi.
+### Lỗi hồi quy đã sửa
 
-CTest và sự kiện SDL tổng hợp không xác nhận driver/OS keyboard hay toàn bộ mouse capture trên mọi hệ thống. Các thao tác native được quan sát trực tiếp chỉ là nhóm ghi ở bảng; Ctrl+mũi tên được kiểm bằng SDL queue, chưa được xác nhận riêng qua công cụ phím Windows. Linux/macOS chưa nghiệm thu native. Không tuyên bố toàn bộ site đã qua mọi test chỉ từ các ca có phạm vi trên.
+Nếu một sự kiện thả chuột bị mất, drag có thể còn giữ. Ca kiểm đã tái hiện lỗi trước khi sửa; `SDL_EVENT_MOUSE_MOTION` nay hủy drag khi left-button mask không còn. Blur, reset, đổi dataset và kết thúc thao tác đều có đường nhả capture. Bài input giải thích guard này bằng source thật.
 
-## Giới hạn vận hành và Git
+Ảnh Canvas còn giúp phát hiện `.prose strong` của bài viết ghi đè màu nhãn trong lab tối. Màu scene/XY/XZ/YZ nay được đặt rõ trong CSS module; kiểm browser đối chiếu computed color ở cả giao diện sáng và tối. Ảnh web chỉ ẩn sticky navigation trong lúc chụp để không che một lab cao hơn viewport; không thay CSS của sản phẩm để lấy ảnh đẹp hơn.
 
-Mỗi lượt nặng chạy riêng, CMake --parallel 1, có deadline và process-tree guardian. Binary smoke/self-test có điểm dừng; cửa sổ kiểm tay đã đóng bằng Esc. Dev server có sẵn được giữ nguyên.
+## Ảnh và cách tự kiểm tra
 
-Theo chỉ dẫn mới, có thể tự bật dev server hoặc chạy binary để kiểm thử; không cần hỏi lại cho các thao tác ấy. **Không stage, commit, push hoặc xuất bản** trong đợt này. ZIP, snapshot, source JSON, binary, build và bằng chứng .validation tiếp tục nằm ngoài Git. HEAD vẫn là 5fff6b5aac769a013345b9beadddb18a39b09899.
+- Ảnh renderer C++ thật: `.validation/p53-final-specimen.png` (không phải ảnh AI hoặc Canvas thay thế).
+- Ảnh Canvas thật đã kiểm trực quan: `.validation/p53-workbench-web.png`; nhãn sáng rõ, không có lỗi script trong bảy ca browser.
+- Executable: `.validation/p53-rebuild-build/Release/project_53_final.exe`, SDL3.dll nằm cạnh file.
+- Checklist chuột/phím và lệnh build: [README của project](../../examples/project-53-volume-slicer/README.md).
+- Canvas chỉ là công cụ học bổ trợ, không thay ứng dụng C++. Vỏ tham chiếu là scaffold, không mở rộng phạm vi sang ray marching hoặc DICOM.
+
+Mỗi lượt nặng dùng supervisor/guardian và hard deadline; CMake `--parallel 1`. Không chạy suite dài không có khả năng hủy độc lập.
+
+TypeScript toàn repository và lint P53 đã qua trong đợt xây dựng này. Lượt lint scope lớn lặp lại sau kiểm browser chạm deadline 45 giây và bị watchdog dừng, không được tính là PASS; kiểm riêng hai tệp TypeScript mới sửa sau lượt lint trước đã qua. Kiểm kiến trúc và Git hygiene cuối cùng đều qua. Production build có cảnh báo thống kê thời gian plugin của Vinext, không phải lỗi build; không tuyên bố toàn site đã qua mọi suite ngoài phạm vi P53.

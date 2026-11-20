@@ -1,6 +1,7 @@
 #pragma once
 #include "audit.hpp"
 #include <SDL3/SDL.h>
+#include "workbench/viewport.hpp"
 #include <string>
 
 namespace lab {
@@ -27,7 +28,7 @@ inline void drawWidget(SDL_Renderer* renderer, const WidgetView& view, const Mod
     const SDL_Rect clip{int(std::ceil(view.clip.x)), int(std::ceil(view.clip.y)), int(std::floor(view.clip.x + view.clip.width) - std::ceil(view.clip.x)), int(std::floor(view.clip.y + view.clip.height) - std::ceil(view.clip.y))};
     require(SDL_SetRenderClipRect(renderer, &clip));
     if (node.kind == Kind::Panel) {
-        fill(renderer, r, 25, 35, 54);
+        fill(renderer, r, 32, 54, 60);
     }
     if (node.kind == Kind::Button) {
         fill(renderer, r, 48, 63, 87);
@@ -44,8 +45,12 @@ inline void drawWidget(SDL_Renderer* renderer, const WidgetView& view, const Mod
         if (model.paused)
             label = "Resume";
     }
-    if (node.binding == Binding::Gravity)
-        label = "g=" + std::to_string(int(model.gravity));
+    if (node.action == Action::Observe) {
+        label = "[ ] Neighbors";
+        if (model.colony.showNeighbors) label = "[x] Neighbors";
+    }
+    if (node.binding == Binding::Radius) label = "Radius  " + std::to_string(int(model.colony.params.radius)) + " px";
+    if (node.binding == Binding::Separation) label = "Separation  " + std::to_string(model.colony.params.separationWeight).substr(0, 4);
     if (node.binding == Binding::Time)
         label = "ticks=" + std::to_string(model.ticks);
     if (node.kind != Kind::Slider && node.kind != Kind::Panel)
@@ -53,7 +58,7 @@ inline void drawWidget(SDL_Renderer* renderer, const WidgetView& view, const Mod
     if (node.kind == Kind::Slider) {
         fill(renderer, r, 38, 50, 72);
         fill(renderer, {r.x, r.y + 18, r.width, 4}, 111, 132, 164);
-        fill(renderer, {r.x + model.gravity / 1200 * r.width - 4, r.y + 6, 8, 28}, 89, 225, 190);
+        fill(renderer, {r.x + fraction(model, node.binding) * r.width - 4, r.y + 6, 8, 28}, 89, 225, 190);
     }
     if (ui.focus == node.id) {
         require(SDL_SetRenderDrawColor(renderer, 255, 209, 102, 255));
@@ -66,12 +71,8 @@ inline void drawScene(SDL_Renderer* renderer, const Model& model) {
     require(SDL_SetRenderClipRect(renderer, nullptr));
     require(SDL_SetRenderDrawColor(renderer, 11, 16, 32, 255));
     require(SDL_RenderClear(renderer));
-    fill(renderer, {24, 24, 616, 492}, 20, 29, 46);
-    fill(renderer, {48, 460, 568, 2}, 100, 143, 137);
-    for (int row = -14; row <= 14; ++row) {
-        const double half = std::sqrt(196.0 - row * row);
-        fill(renderer, {320 - half, model.y + row, 2 * half + 1, 1}, 255, 190, 104);
-    }
-    text(renderer, 48, 48, "Space play/pause | N step | R reset scene");
+    bench::text(renderer, 24, 26, "FIELD NOTES    /    FLOCK OBSERVATORY", {143,229,191,255});
+    bench::text(renderer, 24, 54, "03   /   Flow layout", {230,239,237,255});
+    bench::drawColony(renderer, model.colony, model.colony.showNeighbors, model.ticks);
 }
 } // namespace lab

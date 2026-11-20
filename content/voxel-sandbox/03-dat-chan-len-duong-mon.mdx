@@ -1,0 +1,103 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Đặt chân lên đất thay vì cho camera bay xuyên đồi
+
+## Vấn đề cần giải quyết
+
+Từ bờ cát đi lên lối men sông. Nhân vật phải dừng trước vách cao nhưng bước được qua bậc một block. Không cần nhân vật 3D để làm điều ấy: chỉ cần biết chân, đầu và khoảng bề ngang người đi.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đặt mắt cao hơn chân 1,65 block. Tách chuyển động ngang thành hai trục để khi đụng vách chéo người vẫn trượt dọc theo vách. Tích lũy tốc độ rơi theo thời gian rồi tìm tầng rắn đầu tiên bên dưới chân.
+
+<InteractiveLab demo="voxel-sandbox" mode="voxel64-3" />
+
+## Viết code từng bước
+
+Camera tự do giúp khảo sát bản đồ, nhưng một người đi bộ không thể xuyên qua sườn đá hay lơ lửng trên hẻm. Giữ nguyên cách quay đầu. Thứ ta thay là điều kiện cho phép đôi chân sang vị trí mới.
+
+### Đo khoảng trống cho cả người
+
+Trong `field-scene.hpp`, coi `Air` và nước là chỗ đi qua được, còn cột chưa nạp thì **chưa được bước vào**. `moveAxis` thử những góc của thân người từ chân tới đầu, không chỉ tra ô chứa mắt. Tách bước ngang thành X rồi Z: khi một trục bị chặn, trục kia vẫn có thể trượt dọc vách.
+
+{/* snippet include/trail/field-scene.hpp#solid-step */}
+
+```cpp title="include/trail/field-scene.hpp — Kiểm bề ngang và khoảng trống cho đầu"
+for (double a : {-0.20, 0.20})
+    for (double b : {-0.20, 0.20}) {
+        if (!region.tiles.contains({splitCoordinate(int(std::floor(x + a))).chunk, splitCoordinate(int(std::floor(z + b))).chunk}))
+            return false;
+        if (isSolid(x + a, foot + 1.09, z + b) || isSolid(x + a, foot + 1.62, z + b))
+            return false;
+    }
+```
+
+<VoxelWorkFile project="64" step={3} file="field-scene" />
+
+### Đặt chân xuống đất rồi mới cho nhảy
+
+Cũng trong `Scene`, giữ vận tốc thẳng đứng, trạng thái chạm đất và độ cao mắt 1,65 block so với chân. Trừ trọng lực theo `dt`, kiểm nền ở vị trí sắp đáp; khi mặt đất chỉ cao hơn một bậc thì kiểm khoảng trống trên đầu trước khi bước lên. Chuyển động người chơi nằm ngoài nhánh dừng thời gian cảnh.
+
+{/* snippet include/trail/field-scene.hpp#feet */}
+
+```cpp title="include/trail/field-scene.hpp — Chốt độ cao chân khi chạm nền"
+const double foot = camera.eye.y - 1.65;
+const double next = foot + rise * dt;
+double support = -128;
+for (int y = int(std::floor(foot + 0.04)); y >= int(std::floor(next)) - 1; --y) {
+    if (isSolid(camera.eye.x, y, camera.eye.z)) {
+        support = y + 1.0;
+        break;
+    }
+}
+if (rise <= 0 && next <= support) {
+    camera.eye.y = support + 1.65;
+    rise = 0;
+    grounded = true;
+} else {
+    if (rise > 0 && isSolid(camera.eye.x, next + 1.6, camera.eye.z))
+        rise = 0;
+    else
+        camera.eye.y = next + 1.65;
+    grounded = false;
+}
+```
+
+### Giữ bay khảo sát là một chế độ riêng
+
+Trong `field-controls.hpp`, chỉ nhận Space lúc chạm đất và không bay. F đổi đi bộ/bay, đồng thời đặt vận tốc đứng về 0 để không mang cú rơi ở chế độ cũ sang chế độ mới. Không cho Q/E vô hiệu hóa va chạm khi đang đi bộ.
+
+{/* snippet include/trail/field-controls.hpp#jump-key */}
+
+```cpp title="include/trail/field-controls.hpp — Chỉ lấy đà nhảy khi chân chạm đất"
+if (key == SDLK_SPACE && scene.grounded && !scene.flying) {
+    scene.rise = 6.5;
+    scene.grounded = false;
+}
+```
+
+<VoxelWorkFile project="64" step={3} file="field-controls" />
+
+## Ghép các phần lại
+
+Đi vào một bậc thấp rồi thử lại trước một vách cao: bậc thấp đi được, vách chặn người. Nhảy dưới tán thấp và đi chéo sát vách để kiểm cả đầu lẫn cạnh thân. Cuối cùng nhấn P: tuyết và sóng đứng lại nhưng bạn vẫn đi và nhìn quanh được.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_64_work --parallel 1
+.\build-work\Release\project_64_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Chỉ kiểm ô ngay giữa mắt. Khi đi sát góc vách nửa thân có thể xuyên đá dù tâm camera còn nằm trong không khí.
+
+## Tự kiểm tra kết quả
+
+Đi bộ qua biên không rơi xuống khe không có thật; bậc thấp có khoảng thoáng đi được, vách cao chặn. Khi Pause cảnh vẫn có thể đi và quay để soi hạt tuyết từ nhiều phía.
+
+## Bài tập mở rộng
+
+Giữ nguyên bản đồ rồi thử cùng đoạn đường ở hai chuỗi dt. Chỗ dừng trước vách nên giống nhau tới mức nào?
+
+[Bài 4: Một bếp lửa nhỏ làm mốc giữa chiều xuống](/projects/voxel-sandbox/04-lua-o-cho-nghi).

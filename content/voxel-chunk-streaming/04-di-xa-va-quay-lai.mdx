@@ -1,0 +1,111 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Đi xa rồi quay về: bộ nhớ có chịu buông không?
+
+## Vấn đề cần giải quyết
+
+Một chuyến đi 20 block chưa cho ta biết bộ nạp có quên gỡ đồ cũ. Hãy đi nhiều lần dọc cùng một đoạn, qua vùng âm, quay đầu trước khi hàng đợi xong rồi về đúng đám cây ban đầu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Có hai phép kiểm khác nhau. Phép thứ nhất hỏi đúng cột đã được dựng tại đúng tọa độ chưa. Phép thứ hai hỏi sau nhiều vòng, số đối tượng còn sống có tăng theo tổng quãng đường không. Trả lời được một chưa đủ cho cả hai.
+
+<InteractiveLab demo="voxel-chunk-streaming" mode="voxel62-4" />
+
+## Viết code từng bước
+
+Đường phía trước trông liền không chứng minh được rằng những cột phía sau đã được gỡ. Ta cần một câu trả lời rõ ràng ở cuối hành trình: vùng quanh mắt đã đầy đủ và không còn việc dang dở chưa?
+
+### Kiểm đủ từng địa chỉ, không chỉ đếm số cột
+
+Trong `stream.hpp`, thêm `complete`: hàng chờ và tập bẩn phải rỗng, số cột không vượt 49 và đủ từng địa chỉ trong ô vuông 5×5 quanh tâm. `keep` và `tick` dưới đây là phần đã có. Nếu chỉ đếm 25 cột bất kỳ, một cột ở rất xa có thể che mất một lỗ ngay dưới chân.
+
+{/* snippet include/trail/stream.hpp#keep-ring */}
+
+```cpp title="include/trail/stream.hpp — Đếm những cột thực sự rời vùng giữ"
+for (auto it = world.tiles.begin(); it != world.tiles.end();) {
+    const Key key = it->first;
+    const int distance = std::max(std::abs(key.first - eye.first), std::abs(key.second - eye.second));
+    if (distance > radius + 1) {
+        it = world.tiles.erase(it);
+        world.dirty.erase(key);
+        world.markNeighborhood(key);
+        ++world.unloads;
+    } else {
+        ++it;
+    }
+}
+```
+
+{/* snippet include/trail/stream.hpp#stream-budget */}
+
+```cpp title="include/trail/stream.hpp — Đợi hàng đợi thật sự lắng xuống"
+bool tick(Region& world, Mesher mode) {
+    const bool changed = !wanted.empty() || !world.dirty.empty();
+    for (int n = 0; n < budget && !wanted.empty(); ++n) {
+        const Key next = wanted.front();
+        wanted.pop_front();
+        world.load(next);
+        world.rebuild(next, mode);
+    }
+    world.buildSome(1, mode);
+    return changed;
+}
+```
+
+<VoxelWorkFile project="62" step={4} file="stream" />
+
+### Cho phím L chụp trạng thái tại lúc nhấn
+
+Trong `field-controls.hpp`, nối L với `complete(scene.region)` và ghi kết luận vào HUD. Đây là phép kiểm tức thời, không phải đèn tự đổi khi hàng về 0. Khi thấy thông báo đang nạp, dừng một lát rồi nhấn L **lần nữa**.
+
+{/* snippet include/trail/field-controls.hpp#ready-key */}
+
+```cpp title="include/trail/field-controls.hpp — Kiểm vùng đang giữ tại thời điểm nhấn"
+if (key == SDLK_L) {
+    scene.auditResult = "Loading or repairing borders";
+    if (scene.stream.complete(scene.region))
+        scene.auditResult = "PASS: 5x5 resident, queue empty, all borders ready";
+    scene.debug = true;
+}
+```
+
+<VoxelWorkFile project="62" step={4} file="field-controls" />
+
+## Ghép các phần lại
+
+Đi qua x âm, đi xa vài vùng rồi quay đầu khi hàng vẫn còn việc. Đứng yên và nhấn L đến khi đủ vùng, queue và dirty bằng 0. Đi lại cùng đường: `out` được phép tăng vì đó là tổng lượt gỡ; số cột đang giữ mới là con số phải có giới hạn.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_62_work --parallel 1
+.\build-work\Release\project_62_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Bỏ vùng đệm hoặc giữ toàn bộ cột cũ. Cả hai đều có thể cho ảnh giống tại một vị trí nhưng lần lượt làm số lần dựng quá lớn hoặc số cột cư trú không ngừng tăng.
+
+## Tự kiểm tra kết quả
+
+Quay lại phải nhận cùng mẫu đất/cây. Tại một tâm ổn định, cửa sổ hoạt động đủ 5×5 và toàn bộ vùng giữ không vượt 7×7.
+
+
+Khi bản của bạn đã đủ các tính năng, chạy bộ kiểm của project trên chính `work/include`. Dùng lại thư mục `build-work` đã cấu hình với `VOXEL_WORKBOOK=ON`; chạy test của bản mẫu trong thư mục khác không kiểm được mã này.
+
+```bash title="Windows / Visual Studio — kiểm bài làm ở cả hai cấu hình"
+cmake --build build-work --config Debug --target project_62_tests --parallel 1
+ctest --test-dir build-work -C Debug --output-on-failure --timeout 30
+cmake --build build-work --config Release --target project_62_tests --parallel 1
+ctest --test-dir build-work -C Release --output-on-failure --timeout 30
+```
+
+Với Ninja/Make, kiểm Release trong `build-work`. Để kiểm Debug thật, cấu hình thêm `cmake -S . -B build-work-debug -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Debug` rồi dùng `build-work-debug` cho hai lệnh Debug. Cả hai đọc cùng một thư mục `work/`.
+
+## Bài tập mở rộng
+
+Nhấn L trong bản C++ để kiểm cả 25 địa chỉ quanh tâm. Nếu vẫn còn mép cần sửa, bảng kiểm chưa báo đạt.
+
+Ghi lại một lần đổi hướng làm hàng đợi ngắn đi. Giải thích vì sao bỏ bớt công việc có ích hơn hoàn thành hết các việc cũ.
+
+[Tải mã hoàn chỉnh của Project 62](/downloads/project-62-voxel-chunk-streaming.zip) · [Sang Project 63](/projects/voxel-procedural-terrain).

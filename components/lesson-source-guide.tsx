@@ -6,93 +6,8 @@ import { HighlightedCode } from "@/components/highlighted-code";
 import { SourceFile } from "@/components/source-file";
 import { SourceDiff } from "@/components/source-diff";
 
-type DiffLine = {
-  kind: "same" | "add" | "remove";
-  text: string;
-  oldLine: number;
-  newLine: number;
-};
-
-function diffLines(before: string, after: string): DiffLine[] {
-  const splitLines = (source: string) => {
-    const normalized = source.trimEnd();
-    return normalized ? normalized.split("\n") : [];
-  };
-  const left = splitLines(before);
-  const right = splitLines(after);
-  type Operation = Pick<DiffLine, "kind" | "text">;
-  const frontier = new Map<number, number>([[1, 0]]);
-  const trace: Array<Map<number, number>> = [];
-  let finalDistance = -1;
-  const maximumDistance = Math.min(left.length + right.length, 2048);
-
-  search: for (let distance = 0; distance <= maximumDistance; distance += 1) {
-    trace.push(new Map(frontier));
-    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
-      const moveDown =
-        diagonal === -distance ||
-        (diagonal !== distance &&
-          (frontier.get(diagonal - 1) ?? -1) < (frontier.get(diagonal + 1) ?? -1));
-      let x = moveDown ? (frontier.get(diagonal + 1) ?? 0) : (frontier.get(diagonal - 1) ?? 0) + 1;
-      let y = x - diagonal;
-      while (x < left.length && y < right.length && left[x] === right[y]) {
-        x += 1;
-        y += 1;
-      }
-      frontier.set(diagonal, x);
-      if (x >= left.length && y >= right.length) {
-        finalDistance = distance;
-        break search;
-      }
-    }
-  }
-
-  let operations: Operation[] = [];
-  if (finalDistance === -1) {
-    operations = [
-      ...left.map((text) => ({ kind: "remove" as const, text })),
-      ...right.map((text) => ({ kind: "add" as const, text })),
-    ];
-  } else {
-    let x = left.length;
-    let y = right.length;
-    for (let distance = finalDistance; distance >= 0; distance -= 1) {
-      const previousFrontier = trace[distance];
-      const diagonal = x - y;
-      const moveDown =
-        diagonal === -distance ||
-        (diagonal !== distance &&
-          (previousFrontier.get(diagonal - 1) ?? -1) < (previousFrontier.get(diagonal + 1) ?? -1));
-      const previousDiagonal = moveDown ? diagonal + 1 : diagonal - 1;
-      const previousX = previousFrontier.get(previousDiagonal) ?? 0;
-      const previousY = previousX - previousDiagonal;
-
-      while (x > previousX && y > previousY) {
-        operations.push({ kind: "same", text: left[x - 1] });
-        x -= 1;
-        y -= 1;
-      }
-      if (distance === 0) break;
-      if (x === previousX) {
-        y -= 1;
-        operations.push({ kind: "add", text: right[y] });
-      } else {
-        x -= 1;
-        operations.push({ kind: "remove", text: left[x] });
-      }
-    }
-    operations.reverse();
-  }
-
-  let oldLine = 1;
-  let newLine = 1;
-  return operations.map((operation) => {
-    const line = { ...operation, oldLine, newLine };
-    if (operation.kind !== "add") oldLine += 1;
-    if (operation.kind !== "remove") newLine += 1;
-    return line;
-  });
-}
+import { diffLines } from "@/lib/diff-lines";
+import { hasVoxelWorkbook } from "@/lib/voxel-workbook";
 
 function formatDiff(path: string, before: string, after: string) {
   const lines = diffLines(before, after);
@@ -140,6 +55,7 @@ export async function LessonSourceGuide({
   guide: LessonCodeGuide;
 }) {
   const isFinalLesson = lesson.order === project.lessons.length;
+  const workbook = hasVoxelWorkbook(project.id);
   const previousEdition = Boolean(getProjectRevision(project.id));
   const [bundle, previousBundle] = await Promise.all([
     getProjectSourceBundle(project.id, isFinalLesson ? "final" : lesson.order),
@@ -205,10 +121,22 @@ export async function LessonSourceGuide({
 
       <div className="run-recipe">
         <div>
-          <span>01 / CHẠY TRÊN MÁY CỦA BẠN</span>
-          <h3>Build phiên bản của bài này</h3>
+          <span>{workbook ? "01 / LỜI GIẢI ĐỂ ĐỐI CHIẾU" : "01 / CHẠY TRÊN MÁY CỦA BẠN"}</span>
+          <h3>
+            {workbook ? "Chạy bản mẫu sau khi đã thử bài làm" : "Build phiên bản của bài này"}
+          </h3>
           <p>
-            Mở terminal tại thư mục <code>{bundle.directory}</code> rồi chạy các lệnh theo thứ tự.
+            {workbook ? (
+              <>
+                Các lệnh dưới đây dùng mã có sẵn trong ZIP, không đọc <code>work/</code>. Chỉ dùng
+                để so sánh với kết quả của bạn.{" "}
+              </>
+            ) : (
+              <>
+                Mở terminal tại thư mục <code>{bundle.directory}</code> rồi chạy các lệnh theo thứ
+                tự.{" "}
+              </>
+            )}
             Lần configure đầu cần mạng để CMake tải SDL 3.4.8.
           </p>
         </div>

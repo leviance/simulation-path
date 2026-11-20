@@ -3,13 +3,13 @@ export const volumeGlossaryTerms = [
     id: "volume-context-surface",
     term: "Bề mặt tham chiếu của volume",
     definition:
-      "Mesh tại một isovalue giúp thấy vị trí mặt cắt trong khối. Project 53 dựng vỏ với isovalue 0.18/stride 3 và zero padding riêng cho mesh; không sửa mảng scalar. Các lát vẫn đọc toàn bộ volume, còn vỏ chỉ để định hướng, không dùng làm dữ liệu đo hay gọi là volume ray marching.",
+      "Mesh tại một isovalue giúp định hướng các lát trong khối. Project 53 dùng iso 0.12/stride 2 và zero padding chỉ trong bộ dựng vỏ; không sửa scalar gốc. Ba ảnh vẫn lấy mẫu toàn volume. Vỏ có shading để thấy chiều sâu, không dùng làm dữ liệu đo và không phải volume ray marching.",
   },
   {
     id: "volume-voxel-centre",
     term: "Voxel centre và physical spacing",
     definition:
-      "Volume có count mẫu trên ba trục; spacing là khoảng cách world giữa các centre. Project 53 đặt centre i tại lower+(i+0.5)*spacing và physical extent count*spacing. Voxel index, world point và pixel không phải cùng một hệ tọa độ.",
+      "Spacing là khoảng cách world giữa hai tâm mẫu liên tiếp. Tâm i ở origin+(i+0.5)*spacing, kích thước box là count*spacing. Project 53 giữ box 160×192×224 mm khi đổi 64³/128³; scalar Float32 không có đơn vị y khoa. Chỉ số voxel, tọa độ world và pixel là ba việc khác nhau.",
   },
   {
     id: "volume-window-level",

@@ -1,108 +1,89 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
 
-# Lưu 4096 block trong một chunk
+# Một viên đá nằm ở đâu trong 4.096 ô?
 
 ## Vấn đề cần giải quyết
 
-Cube của bài trước mới là hình học. Nếu chỉ giữ danh sách tam giác, làm sao biết ô nào là đất, ô nào là không khí, hoặc đọc vật liệu ở `(7,7,7)`? Ta cần một lớp dữ liệu độc lập với hình vẽ.
-
-Bài này thêm `Chunk`, đặt đúng một block Stone và vẽ bảng dữ liệu của lớp y=7. Phần 3D vẫn chỉ là cube đã làm được. Ta chưa dựng mesh cho cả chunk; trước hết phải chắc rằng tọa độ và bộ nhớ khớp nhau.
+Ở bài trước, vị trí viên đá nằm ngay trong lệnh dựng hình. Bây giờ hãy giữ nguyên hình trên màn hình nhưng thay nguồn dữ liệu: viên đá ở đó vì một ô trong mảng mang giá trị `Stone`. Đến lúc đó ta mới có thể hỏi “ở trên nó là cỏ hay không khí?” mà không cần đọc màu pixel.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Chunk có 16 ô theo mỗi trục, tổng cộng 4096 ô. Tọa độ local là số nguyên từ 0 đến 15. Block `(x,y,z)` chiếm một hộp world có góc nhỏ nhất `(x,y,z)` và góc lớn nhất `(x+1,y+1,z+1)`.
-
-Ta chọn **x chạy nhanh nhất, rồi z, sau cùng y**. Một hàng x dài 16; một lớp x/z dài 256:
-
-$$i=x+16(z+16y),\quad \Delta i_x=1,\quad \Delta i_z=16,\quad \Delta i_y=256.$$
-
-Đây là lựa chọn layout của project, không phải công thức duy nhất cho mọi voxel engine. Nếu đổi layout, mọi nơi đọc/ghi phải đổi theo. Với layout hiện tại, `(1,0,0)` ở index 1, `(0,0,1)` ở 16 và `(0,1,0)` ở 256. Tọa độ cuối `(15,15,15)` cho 4095, không phải 4096.
+Một section kích thước 16×16×16 dùng x chạy nhanh nhất, rồi z, rồi y. Nếu đang ở ô `(15,0,0)`, phần tử kế tiếp trong bộ nhớ là `(0,0,1)`, không phải `(16,0,0)`. Cạnh bên phải của ô thuộc về ô kế bên.
 
 <InteractiveLab demo="voxel-chunk" mode="voxel58-2" />
 
-Bảng dưới đọc lớp y=7: x tăng sang phải, z tăng xuống dưới. Chiều xuống của z chỉ là cách đặt bảng 2D, không thay quy ước y hướng lên trong world. Ô Stone ở `(7,7,7)` có index 1911.
-
 ## Viết code từng bước
 
-### Bước 1 — Định nghĩa loại block
+Viên đá đã hiện. Bây giờ ta muốn nó có địa chỉ để về sau hỏi được: “Ở ô này là đá hay không khí?”. Sau bài này hình gần như không đổi; cách kiểm phải nhìn vào dữ liệu.
 
-```cpp title="include/model.hpp"
-enum class Block : std::uint8_t {
-    Air,
-    Grass,
-    Dirt,
-    Stone,
-};
-using Chunk = std::array<Block, capacity>;
-```
+### Đổi ba tọa độ thành một địa chỉ
 
-`Air=0`, `Grass=1`, `Dirt=2`, `Stone=3` theo thứ tự enum. `capacity` là `16*16*16`. Mảng giữ **ID vật liệu**, không giữ RGBA, renderer hoặc các vertex. Vì Air bằng 0, `Chunk chunk{}` khởi tạo toàn không khí mà không cần vòng lặp set từng ô.
+Trong `blocks.hpp`, khai báo `Section` gồm 4.096 `Block`. Cho x chạy nhanh nhất: sang phải một ô tăng 1, sang hàng z kế tăng 16, sang tầng y kế tăng 256. Chặn tọa độ ngoài đoạn 0–15 trước khi nhân; nếu không, hai ô khác nhau có thể trỏ vào cùng vị trí.
 
-4096 ID một byte có payload 4096 byte. Mesh về sau lớn hơn nhiều vì một block sinh nhiều vertex. Không nên nhân bản mesh trong từng ô chỉ để tiện gọi hàm vẽ.
+{/* snippet include/trail/blocks.hpp#local-index */}
 
-### Bước 2 — Kiểm biên trước khi tính index
-
-```cpp title="include/model.hpp"
-inline int index(int x, int y, int z) {
-    if (!inside(x, y, z)) {
-        throw std::out_of_range("block coordinate outside chunk");
+```cpp title="include/trail/blocks.hpp — Xoá nhập nhằng giữa địa chỉ world và local"
+inline int localIndex(int x, int y, int z) {
+    if (x < 0 || x >= side || y < 0 || y >= side || z < 0 || z >= side) {
+        throw std::out_of_range("cell outside section");
     }
-    // x liền nhau trong bộ nhớ, hết hàng đến z, hết lớp đến y.
     return x + side * (z + side * y);
 }
 ```
 
-`inside` kiểm cả ba trục bằng miền nửa mở `[0,16)`. Phải kiểm **từng tọa độ**, không chỉ kiểm kết quả index: `(16,0,0)` cho index 16 vẫn nằm trong mảng nhưng lại đè lên `(0,0,1)`. Kiểm độ dài mảng một mình không phát hiện được lỗi này.
+<VoxelWorkFile project="58" step={2} file="blocks" />
 
-Giữ tham số `int` để −1 vẫn là −1 khi kiểm biên. Chỉ cast sang `size_t` sau khi `index` đã xác nhận hợp lệ; ép âm thành unsigned từ đầu sẽ làm lỗi khó đọc hơn.
+### Tách tọa độ world khi đi qua gốc
 
-### Bước 3 — Dùng chung đường đọc/ghi
+Cũng trong tệp này, lấy thương làm tròn xuống rồi tính local bằng phần còn lại. Thử nói bằng lời: ô ngay bên trái gốc là ô cuối của chunk bên trái. Nó phải ra chunk −1, local 15, không phải chunk 0, local −1.
 
-```cpp title="include/model.hpp"
-inline Block get(const Chunk& chunk, int x, int y, int z) {
-    return chunk.at(static_cast<std::size_t>(index(x, y, z)));
-}
+{/* snippet include/trail/blocks.hpp#split-coordinate */}
 
-inline void set(Chunk& chunk, int x, int y, int z, Block block) {
-    chunk.at(static_cast<std::size_t>(index(x, y, z))) = block;
-}
-```
-
-`get` nhận `const Chunk&`: đọc dữ liệu không được âm thầm sửa nó. `set` nhận reference không const vì nhiệm vụ của nó là ghi. Dùng hai hàm này thay vì chép công thức index vào từng vòng lặp; về sau kiểm lỗi chỉ cần bắt đầu ở một nơi.
-
-### Bước 4 — Đặt một block rồi đọc lại
-
-```cpp title="include/model.hpp"
-Chunk chunk{};
-if (preset == 0) {
-    set(chunk, 7, 7, 7, Block::Stone);
+```cpp title="include/trail/blocks.hpp — Đi sang phía âm của gốc"
+struct Address {
+    int chunk, local;
+};
+inline Address splitCoordinate(int world) {
+    const int chunk = static_cast<int>(std::floor(static_cast<double>(world) / side));
+    const int local = world - chunk * side;
+    return {chunk, local};
 }
 ```
 
-Đây là phần preset đầu của `makeChunk`. Main nhận chunk, đọc `get(chunk,7,7,7)` để chọn vật liệu cho cube. Vòng vẽ bảng dùng chính `get(chunk,x,slice,z)`, không tự đoán một ô nào đó phải có màu xanh.
+### Cất viên đá rồi đọc nó ra
 
-Bảng vẽ các cell 15×15 trong bước lưới 16 pixel để có đường ngăn. Air vẫn được vẽ nền tối trên bảng, dù về sau không sinh geometry trong mesh. **Ô có dữ liệu** và **ô có mặt được vẽ** là hai khái niệm khác nhau.
+Thêm `Column` vào `bank.hpp`: `get` chọn section bằng `y / side`, còn `y % side` chọn tầng trong section. `singleStone()` tạo cột rỗng và `put` đúng một lần. Trong `Scene`, giữ cột làm dữ liệu; ở `generate` dùng `singleStone()`, xóa mesh tạm rồi gọi `appendCube` với vật liệu lấy từ `column.get(7, 7, 7)`. Không vẽ chồng viên thứ hai.
+
+<VoxelWorkFile project="58" step={2} file="bank" />
+
+{/* snippet include/trail/scene.hpp#stone-from-cell */}
+
+```cpp title="include/trail/scene.hpp — Vật liệu đến từ ô đã lưu"
+appendCube(mesh, {7, 7, 7}, column.get(7, 7, 7));
+```
+
+<VoxelWorkFile project="58" step={2} file="scene" />
 
 ## Ghép các phần lại
 
-```bash title="Terminal — checkpoint 2"
-cmake --build build --config Debug --target project_58_checkpoint_2 --parallel 2
-.\build\Debug\project_58_checkpoint_2.exe
-```
+Bạn vẫn thấy một viên đá, không phải hai. Tạm đổi vật liệu trong `singleStone()` sang `Block::Sand`: cùng chỗ ấy phải đổi sang màu cát. Trả lại `Stone`. Đây mới là bằng chứng hình trên màn hình thực sự đọc từ cột.
 
-Kết quả phải có cube bên trái, một ô đặc ở bảng lớp y=7 bên phải và `solid=1`. Camera vẫn cố định, chưa có phím sửa block. `solidCount` đếm ID khác Air từ dữ liệu, không lấy số tam giác chia 12 để suy ngược.
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_58_work --parallel 1
+.\build-work\Release\project_58_work.exe
+```
 
 ## Thử làm sai để hiểu đúng
 
-1. Gọi `set(chunk,16,0,0,Block::Stone)`. Chương trình phải báo ngoài miền và đi qua cleanup, không ghi vào ô z=1. Không “sửa” bằng cách kẹp 16 về 15 vì như vậy che lỗi tọa độ.
-2. Đổi lớp đọc từ y=7 thành y=8. Bảng sẽ toàn Air trong khi cube vẫn còn: bạn đang nhìn một lát khác, chưa làm mất block trong dữ liệu. Đưa lại y=7.
+Bỏ kiểm biên rồi thử `localIndex(16,0,0)` và `localIndex(0,0,1)`. Hai ô khác tên nhưng cùng giá trị; thêm số phần tử vào mảng không sửa được lỗi này.
 
 ## Tự kiểm tra kết quả
 
-Tự tính ba bước nhảy 1/16/256 và index 1911. Kiểm bảng có đúng một ô đặc. Đọc `get` nhiều lần không đổi `solidCount`. Các biên −1 và 16 đều bị từ chối ở mỗi trục. Bài này chưa phải dựng hình toàn chunk, nên chưa có khối đất 16³ trên màn hình.
+4096 tọa độ khác nhau có 4096 index khác nhau. Kiểm thêm x = −17, −16, −1, 0, 15, 16. Kích thước hoặc góc nhìn cửa sổ không được đổi bất kỳ kết quả nào.
 
 ## Bài tập mở rộng
 
-Đặt thêm một Dirt ở `(8,7,7)` rồi chỉ kiểm bảng lớp và `solidCount=2`. Phần cube đang vẽ thủ công chưa tự tăng lên hai: ghi lại khoảng trống đó. Bài tiếp theo sẽ thay cách dựng hình để mọi block đặc đều có geometry.
+Viết chiều ngược: từ index 307 hãy tìm x, y, z bằng tay trước khi nhờ chương trình đối chiếu.
 
-[Bài tiếp theo](/projects/voxel-chunk/03-tu-block-den-mesh) — Dựng mesh từ toàn bộ block đặc.
+[Bài 3: Vì sao một khối đất cần tới 49.152 tam giác?](/projects/voxel-chunk/03-tu-block-den-mesh).

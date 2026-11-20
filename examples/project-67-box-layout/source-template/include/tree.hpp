@@ -20,11 +20,13 @@ enum class Kind {
 enum class Action {
     None,
     Pause,
-    Reset
+    Reset,
+    Observe
 };
 enum class Binding {
     None,
-    Gravity,
+    Radius,
+    Separation,
     Time
 };
 

@@ -23,75 +23,68 @@ test("Project 65 publishes seven controls lessons, challenge and complete One Da
     );
   }
 });
-test("Project 65 checkpoints introduce physics, hit-test, button, slider, keyboard, routing and audit only when taught", async () => {
-  for (const [n, file, symbol] of [
-    [1, "include/simulation.hpp", "inline void stepPhysics("],
-    [2, "include/controls.hpp", "inline Control hitTest("],
-    [3, "include/controls.hpp", "inline void pointerUp("],
-    [4, "include/controls.hpp", "inline void dragGravity("],
-    [5, "include/controls.hpp", "inline bool keyDown("],
-    [6, "include/controls.hpp", "inline void scenePointerDown("],
-    [7, "include/audit.hpp", "inline bool audit("],
+test("Project 65 uses the real P28 grid in every standalone snapshot and stages the new UI", async () => {
+  for (const [stage, file, symbol] of [
+    [1, "simulation.hpp", "inline void stepPhysics("],
+    [2, "controls.hpp", "inline Control hitTest("],
+    [3, "controls.hpp", "inline void pointerUp("],
+    [4, "controls.hpp", "inline void dragSlider("],
+    [5, "controls.hpp", "inline bool keyDown("],
+    [6, "controls.hpp", "inline void scenePointerDown("],
+    [7, "audit.hpp", "inline bool audit("],
   ]) {
-    const before = await readFile(
-      path.join(
-        directory,
-        n === 1 ? "starter" : "checkpoints/" + String(n - 1).padStart(2, "0"),
-        file,
+    const now = String(stage).padStart(2, "0");
+    const old = stage === 1 ? "starter" : "checkpoints/" + String(stage - 1).padStart(2, "0");
+    assert.ok(
+      !(await readFile(path.join(directory, old, "include", file), "utf8")).includes(symbol),
+    );
+    assert.ok(
+      (await readFile(path.join(directory, "checkpoints", now, "include", file), "utf8")).includes(
+        symbol,
       ),
-      "utf8",
     );
-    const now = await readFile(
-      path.join(directory, "checkpoints", String(n).padStart(2, "0"), file),
-      "utf8",
+  }
+  for (const header of [
+    "boids/lab",
+    "boids/flock",
+    "boids/neighbors",
+    "boids/steering",
+    "grid/coordinates",
+    "grid/storage",
+    "grid/query",
+  ]) {
+    const expected = await readFile(
+      path.join(workspace, "examples/project-28-boids-spatial-grid/final/include", header + ".hpp"),
     );
-    assert.ok(!before.includes(symbol), `early implementation: ${symbol}`);
-    assert.ok(now.includes(symbol), `missing at lesson ${n}: ${symbol}`);
+    for (const snapshot of ["starter", "checkpoints/04", "final"])
+      assert.deepEqual(
+        await readFile(path.join(directory, snapshot, "include", header + ".hpp")),
+        expected,
+      );
   }
 });
-test("Project 65 explains semantics, coordinate units, capture lifetime and bounded independent validation", async () => {
-  const lessons = (await authoredLessons()).filter((l) => l.project === "simulator-controls");
-  const text = (
-    await Promise.all(
-      lessons.map((l) => readFile(path.join(workspace, "content", l.project, l.file), "utf8")),
-    )
-  ).join("\n");
-  for (const pattern of [
-    /logical pixel\/s²/,
-    /clockRevision/,
-    /half-open/,
-    /active/,
-    /focus/,
-    /repeat/,
-    /consumed/,
-    /DPR/,
-    /pointercancel/,
-    /SDL_ConvertEventToRenderCoordinates/,
-    /12000/,
-    /tổng cấp số cộng/,
-    /-C Debug/,
-    /-C Release/,
-    /WaitForExit\(30000\)/,
-    /Project 66/,
-    /Sắp ra mắt/,
-  ])
-    assert.match(text, pattern);
-  const lab = await readFile(
-    path.join(workspace, "components/labs/simulator-controls-lab.tsx"),
-    "utf8",
-  );
-  for (const pattern of [
-    /cancelAnimationFrame/,
-    /usePauseOnReducedMotion\(stop\)/,
-    /visibilitychange/,
-    /setPointerCapture/,
-    /releasePointerCapture/,
-    /onPointerCancel/,
-    /onLostPointerCapture/,
-    /contains\(e.relatedTarget\)/,
-    /pointer.current !== e.pointerId/,
-    /disabled=\{reduced\}/,
-    /type="range"/,
-  ])
-    assert.match(lab, pattern);
+test("Project 65 teaches flock parameters, not the retired gravity scene; code and real screenshots match the lesson", async () => {
+  const { markedCodeExcerpt, markedSnippetBlockPattern } =
+    await import("../scripts/code-snippets.mjs");
+  for (const lesson of (await authoredLessons()).filter(
+    (item) => item.project === "simulator-controls",
+  )) {
+    const source = await readFile(
+      path.join(workspace, "content", lesson.project, lesson.file),
+      "utf8",
+    );
+    assert.doesNotMatch(source, /trọng lực|bóng nảy|dragGravity/i);
+    const matches = [...source.matchAll(markedSnippetBlockPattern())];
+    assert.ok(matches.length >= 2);
+    for (const [, , file, marker] of matches) {
+      const root = file.startsWith("tests/")
+        ? directory
+        : path.join(directory, "checkpoints", lesson.file.slice(0, 2));
+      const body = markedCodeExcerpt(await readFile(path.join(root, file), "utf8"), marker);
+      assert.ok(source.replaceAll("\r", "").includes(body.replaceAll("\r", "")));
+    }
+  }
+  const overview = await (await render("/projects/simulator-controls")).text();
+  assert.match(overview, /p65-final\.png/);
+  assert.doesNotMatch(overview, /CANVAS 2D · LIVE/);
 });

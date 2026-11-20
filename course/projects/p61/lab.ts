@@ -1,49 +1,60 @@
 import type { ProjectLabMeta } from "../../labs/types";
 const data = {
+  native: {
+    directory: "/field-notes/voxel-expedition",
+    overview: ["grass", "wind"],
+    lessons: {
+      "voxel61-2": ["wind"],
+      "voxel61-3": ["grass"],
+      "voxel61-4": ["grass", "wind"],
+    },
+    takes: {
+      wind: {
+        title: "Tán lá đón gió",
+        source: "Project 61 · Bài 02",
+        poster: "wind.png",
+        video: "wind.webm",
+        alt: "Hai hàng cây bên suối, tán lá dịch nhẹ trên thân cố định.",
+        caption:
+          "Chọn mép một tán lá sát nền trời, rồi bấm phát. Thân cây là mốc đứng yên để nhận ra độ lệch nhỏ ở ngọn.",
+      },
+      grass: {
+        title: "Gốc đứng yên, ngọn chuyển động",
+        source: "Project 61 · Bài 03",
+        poster: "grass.png",
+        video: "grass.webm",
+        alt: "Các ngọn cỏ trên bờ và mép tán lá chuyển động, còn bậc đất giữ nguyên vị trí.",
+        caption:
+          "Dừng rồi phát lại đoạn ngắn này. Nhìn cỏ sát bậc đất thay vì theo cả tán cây; bờ suối không dịch chuyển theo gió.",
+      },
+    },
+  },
   base: {
-    label: "GREEDY MESHING",
-    title: "Từ hàng nghìn mặt nhỏ đến những quad lớn",
+    label: "RỪNG ĐÓN GIÓ",
+    title: "Gió chạm cỏ trước, tới tán cây sau",
     description:
-      "So sánh hai mesh, đọc mask từng hướng và xem thuật toán chọn rectangle mà vẫn giữ đúng bề mặt.",
+      "Greedy meshing giảm hình học tĩnh; một cơn gió chung đi qua ngọn cỏ và từng tán cây.",
   },
   modes: {
-    "greedy61-1": {
-      title: "Đếm số mặt trước khi gộp",
-      description: "Chạy khối đất đã loại mặt tiếp giáp, phân biệt mặt đơn vị, quad và triangle.",
-    },
-    "greedy61-2": {
-      title: "Trải một hướng mặt thành bảng 2D",
-      description: "Chọn hướng, mặt phẳng và đọc source/neighbor để tạo mask 16×16.",
-    },
-    "greedy61-3": {
-      title: "Khi nào hai mặt được gộp?",
-      description: "Tách quy tắc che mặt opaque khỏi khóa gộp mặt có vật liệu.",
-    },
-    "greedy61-4": {
-      title: "Mở rộng hình chữ nhật rồi xóa phần đã dùng",
-      description: "Duyệt v/u, mở rộng width trước height và không bắc cầu qua lỗ.",
-    },
-    "greedy61-5": {
-      title: "Đưa rectangle trở lại không gian 3D",
-      description: "Dựng bốn đỉnh, hai triangle và thử gộp riêng hướng +Y trước.",
-    },
-    "greedy61-6": {
-      title: "Quét đủ sáu hướng, kiểm biên và lớp cắt",
-      description: "Áp dụng cùng một quy tắc cho sáu hướng và 17 mặt phẳng mỗi hướng.",
-    },
-    "greedy61-7": {
-      title: "Xem từng rectangle mà thuật toán đã chọn",
+    "voxel61-1": {
+      title: "Một vạt đất phẳng cần bao nhiêu quad?",
       description:
-        "Lưu danh sách kết quả, chạy/dừng từng bước và không chạy lại mesher theo timer.",
+        "Chọn khối đặc, bờ suối hoặc Air. So đường chéo trước/sau khi gộp trên một lớp; số quad bên dưới tính cho cả chunk.",
     },
-    "greedy61-8": {
-      title: "Chỉ dựng lại mesh khi dữ liệu thay đổi",
-      description: "Tách mesh/frame dirty; đọc số công việc mà không suy ra FPS từ số triangle.",
-    },
-    "greedy61-9": {
-      title: "Kiểm chứng bề mặt và hoàn thiện chương trình",
+    "voxel61-2": {
+      title: "Cho cơn gió đi qua rừng, thay vì lắc cả cảnh",
       description:
-        "Đối chiếu các mặt đơn vị có hướng/vật liệu, kiểm winding, raster và source cuối.",
+        "Tăng gió, tiến một nhịp rồi so độ lệch gốc và ngọn. Đổi hướng để nhìn lại cùng khu rừng.",
+    },
+    "voxel61-3": {
+      title: "Gắn chuyển động vào từng ngọn cỏ và tán lá",
+      description:
+        "Nhìn xuống gốc cỏ khi gió đổi hướng. Dừng ở cùng một giờ và so với cường độ bằng 0.",
+    },
+    "voxel61-4": {
+      title: "Đo riêng công dựng đất và công vẽ ngọn cây",
+      description:
+        "Số quad được tính trên mẫu bạn chọn; hình rừng minh họa riêng cơn gió. Cho giờ chạy và so xem đại lượng nào giữ nguyên.",
     },
   },
 } satisfies ProjectLabMeta;

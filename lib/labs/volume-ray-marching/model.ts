@@ -1,4 +1,6 @@
 export type Point = [number, number, number];
+export type Mode = "mip" | "average" | "alpha";
+export type Preset = "cloud" | "cores" | "slab" | "constant" | "ramp" | "empty";
 export interface Camera {
   yaw: number;
   pitch: number;
@@ -10,17 +12,42 @@ export interface Ray {
   direction: Point;
 }
 export interface Settings {
-  sigma: number;
+  mode: Mode;
   stepLength: number;
-  warm: boolean;
+  sigma: number;
+  cutoff: number;
+  palette: number;
   early: boolean;
+  lighting: boolean;
 }
-export const defaultCamera: Camera = { yaw: 0.55, pitch: 0.2, distance: 8.5, inside: false };
-export const defaultSettings: Settings = { sigma: 2, stepLength: 0.08, warm: true, early: false };
-export const boxMinimum: Point = [-1.6, -1.92, -2.4],
-  boxMaximum: Point = [1.6, 1.92, 2.4];
-export const maxSteps = 512,
-  stopThreshold = 0.001;
+export const defaultCamera: Camera = Object.freeze({
+  yaw: 0.35,
+  pitch: 0.16,
+  distance: 3.0,
+  inside: false,
+});
+export const defaultSettings: Settings = Object.freeze({
+  mode: "alpha",
+  stepLength: 0.02,
+  sigma: 6,
+  cutoff: 0,
+  palette: 0,
+  early: false,
+  lighting: true,
+});
+export const presets: Preset[] = ["cloud", "cores", "slab", "constant", "ramp", "empty"];
+export const presetNames = [
+  "Mây nhiều lớp (dữ liệu tĩnh)",
+  "Hai lõi mật độ",
+  "Lớp slab",
+  "Hằng 0,25",
+  "Ramp XYZ",
+  "Volume rỗng",
+];
+export const boxMinimum: Point = [-1, -1, -1];
+export const boxMaximum: Point = [1, 1, 1];
+export const maxSteps = 512;
+export const stopThreshold = 0.0005;
 export const add = (a: Point, b: Point): Point => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 export const subtract = (a: Point, b: Point): Point => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 export const multiply = (a: Point, s: number): Point => [a[0] * s, a[1] * s, a[2] * s];
@@ -30,69 +57,99 @@ export const cross = (a: Point, b: Point): Point => [
   a[2] * b[0] - a[0] * b[2],
   a[0] * b[1] - a[1] * b[0],
 ];
-export function normalize(p: Point): Point {
-  const length = Math.sqrt(dot(p, p));
-  if (!Number.isFinite(length) || length === 0) throw new RangeError("Invalid direction");
-  return multiply(p, 1 / length);
+export function normalize(point: Point): Point {
+  const length = Math.sqrt(dot(point, point));
+  if (!point.every(Number.isFinite) || !Number.isFinite(length) || length <= 0)
+    throw new RangeError("Finite nonzero direction required");
+  return multiply(point, 1 / length);
 }
-export function cameraBasis(camera: Camera) {
+export function limitCamera(camera: Camera): Camera {
+  if (![camera.yaw, camera.pitch, camera.distance].every(Number.isFinite))
+    throw new RangeError("Nonfinite camera");
+  return {
+    ...camera,
+    yaw: camera.yaw % (2 * Math.PI),
+    pitch: Math.max(-1.45, Math.min(1.45, camera.pitch)),
+    distance: Math.max(0.25, Math.min(8, camera.distance)),
+  };
+}
+export function cameraBasis(input: Camera) {
+  const camera = limitCamera(input);
   let origin: Point = [
-      camera.distance * Math.sin(camera.yaw) * Math.cos(camera.pitch),
-      camera.distance * Math.sin(camera.pitch),
-      -camera.distance * Math.cos(camera.yaw) * Math.cos(camera.pitch),
-    ],
-    forward = normalize(multiply(origin, -1));
-  if (camera.inside) {
-    origin = [0, 0, 0];
-    forward = [0, 0, 1];
-  }
-  const right = normalize(cross([0, 1, 0], forward));
-  return { origin, forward, right, up: cross(forward, right) };
+    camera.distance * Math.cos(camera.pitch) * Math.sin(camera.yaw),
+    camera.distance * Math.sin(camera.pitch),
+    camera.distance * Math.cos(camera.pitch) * Math.cos(camera.yaw),
+  ];
+  const forward = normalize(multiply(origin, -1));
+  const right = normalize(cross(forward, [0, 1, 0]));
+  if (camera.inside) origin = [0, 0, 0];
+  return { origin, forward, right, up: cross(right, forward) };
 }
 export function cameraRay(camera: Camera, u: number, v: number, aspect: number): Ray {
-  const b = cameraBasis(camera),
-    tangent = Math.tan((55 * Math.PI) / 360),
-    offset = add(
-      multiply(b.right, (2 * u - 1) * aspect * tangent),
-      multiply(b.up, (1 - 2 * v) * tangent),
-    );
-  return { origin: b.origin, direction: normalize(add(b.forward, offset)) };
+  if (![u, v, aspect].every(Number.isFinite) || aspect <= 0)
+    throw new RangeError("Finite pixel and positive aspect required");
+  const basis = cameraBasis(camera);
+  const tangent = Math.tan((50 * Math.PI) / 360);
+  return {
+    origin: basis.origin,
+    direction: normalize(
+      add(
+        add(basis.forward, multiply(basis.right, (2 * u - 1) * aspect * tangent)),
+        multiply(basis.up, (1 - 2 * v) * tangent),
+      ),
+    ),
+  };
 }
 export const at = (ray: Ray, t: number) => add(ray.origin, multiply(ray.direction, t));
-export function boxInterval(ray: Ray, minimum = boxMinimum, maximum = boxMaximum) {
-  if (Math.abs(dot(ray.direction, ray.direction) - 1) > 1e-6)
-    throw new RangeError("Unit ray required");
+export function boxInterval(ray: Ray) {
+  if (
+    ![...ray.origin, ...ray.direction].every(Number.isFinite) ||
+    Math.abs(dot(ray.direction, ray.direction) - 1) > 1e-8
+  )
+    throw new RangeError("Finite unit ray required");
   let entry = 0,
-    exit = 20;
+    exit = Infinity;
   for (let axis = 0; axis < 3; axis++) {
-    if (
-      ![ray.origin[axis], ray.direction[axis], minimum[axis], maximum[axis]].every(
-        Number.isFinite,
-      ) ||
-      minimum[axis] >= maximum[axis]
-    )
-      throw new RangeError("Invalid ray or box");
     if (ray.direction[axis] === 0) {
-      if (ray.origin[axis] < minimum[axis] || ray.origin[axis] > maximum[axis]) return null;
+      if (ray.origin[axis] < -1 || ray.origin[axis] > 1) return null;
       continue;
     }
-    let a = (minimum[axis] - ray.origin[axis]) / ray.direction[axis],
-      b = (maximum[axis] - ray.origin[axis]) / ray.direction[axis];
-    if (a > b) [a, b] = [b, a];
-    entry = Math.max(entry, a);
-    exit = Math.min(exit, b);
+    let first = (-1 - ray.origin[axis]) / ray.direction[axis],
+      last = (1 - ray.origin[axis]) / ray.direction[axis];
+    if (first > last) [first, last] = [last, first];
+    entry = Math.max(entry, first);
+    exit = Math.min(exit, last);
     if (entry >= exit) return null;
   }
   return { entry, exit };
 }
-export function validate(s: Settings) {
+export function validate(settings: Settings) {
   if (
-    !Number.isFinite(s.sigma) ||
-    s.sigma < 0 ||
-    s.sigma > 8 ||
-    !Number.isFinite(s.stepLength) ||
-    s.stepLength < 0.02 ||
-    s.stepLength > 0.25
+    !["mip", "average", "alpha"].includes(settings.mode) ||
+    !Number.isInteger(settings.palette) ||
+    settings.palette < 0 ||
+    settings.palette > 2
   )
-    throw new RangeError("sigma 0..8; step 0.02..0.25");
+    throw new RangeError("Unknown mode or palette");
+  if (
+    !Number.isFinite(settings.stepLength) ||
+    settings.stepLength < 0.008 ||
+    settings.stepLength > 0.16
+  )
+    throw new RangeError("Step must be 0.008..0.16");
+  if (!Number.isFinite(settings.sigma) || settings.sigma < 0 || settings.sigma > 12)
+    throw new RangeError("Sigma must be 0..12");
+  if (!Number.isFinite(settings.cutoff) || settings.cutoff < 0 || settings.cutoff > 0.8)
+    throw new RangeError("Cutoff must be 0..0.8");
+}
+export function stageSettings(stage: number): Settings {
+  if (!Number.isInteger(stage) || stage < 1 || stage > 10)
+    throw new RangeError("Stage 1..10 required");
+  const settings = { ...defaultSettings };
+  if (stage < 6) settings.mode = "mip";
+  if (stage < 7) {
+    settings.palette = 2;
+    settings.lighting = false;
+  }
+  return settings;
 }

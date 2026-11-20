@@ -1,0 +1,112 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tách thẻ, chữ và thuộc tính có dấu nháy
+
+## Vấn đề cần giải quyết
+
+Trong nhãn có chữ `Reset flock`; trong thẻ có `id="reset"`. Nếu tách theo khoảng trắng, chính tên hai từ trong một nhãn đã đủ làm hỏng cách đọc ấy. Ta cần phân biệt đang ở ngoài hay bên trong dấu ngoặc nhọn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Con trỏ chỉ tiến. Gặp chữ bên ngoài thẻ thì thu tới dấu `<`. Sau dấu `<`, phân biệt mở với đóng; mỗi thuộc tính nhận đúng một giá trị trong nháy đơn hoặc nháy kép. Token giữ offset đầu tiên để còn báo lỗi.
+
+<InteractiveLab demo="tiny-html" mode="html68-2" />
+
+## Viết code từng bước
+
+### Đọc một cặp tên và giá trị
+
+Đọc tên rồi yêu cầu dấu bằng. Chỉ dừng ở đúng loại nháy đã mở; gặp key trùng thì báo lỗi ngay. Không nuốt nốt phần còn lại của file để đoán ý người viết.
+
+{/* snippet include/markup/tokens.hpp#attribute */}
+
+```cpp title="include/markup/tokens.hpp — Đọc một cặp tên và giá trị"
+inline void readAttribute(Cursor& c, Token& tag) {
+    const auto at = c.pos;
+    const std::string key = c.word();
+    c.skip();
+    c.need('=');
+    c.skip();
+    const char quote = c.peek();
+    if (quote != '"' && quote != '\'')
+        fail(c.source, c.pos, "quote attribute value");
+    ++c.pos;
+    const auto start = c.pos;
+    while (c.peek() && c.peek() != quote) {
+        if (c.peek() == '<' || c.peek() == '&')
+            fail(c.source, c.pos, "markup inside attribute");
+        ++c.pos;
+    }
+    const std::string value(c.source.substr(start, c.pos - start));
+    c.need(quote);
+    if (!tag.attrs.emplace(key, value).second)
+        fail(c.source, at, "duplicate attribute: " + key);
+}
+```
+
+### Giao từng token cho bước sau
+
+Nhìn một input tự đóng kết thúc bằng `/>`, khác với một Button mở rồi chứa chữ rồi đóng. Hai cú pháp này cần token khác nhau, chưa cần tạo Widget.
+
+{/* snippet include/markup/tokens.hpp#next */}
+
+```cpp title="include/markup/tokens.hpp — Giao từng token cho bước sau"
+inline Token next(Cursor& c) {
+    Token tag;
+    tag.offset = c.pos;
+    if (!c.peek())
+        return tag;
+    if (!c.take('<')) {
+        tag.kind = TagToken::Text;
+        while (c.peek() && c.peek() != '<')
+            ++c.pos;
+        tag.name = std::string(c.source.substr(tag.offset, c.pos - tag.offset));
+        return tag;
+    }
+    tag.kind = TagToken::Open;
+    if (c.take('/'))
+        tag.kind = TagToken::Close;
+    tag.name = c.word();
+    while (true) {
+        if (c.take('>'))
+            break;
+        if (tag.kind == TagToken::Open && c.take("/>")) {
+            tag.empty = true;
+            break;
+        }
+        if (!space(c.peek()))
+            fail(c.source, c.pos, "expected space or >");
+        c.skip();
+        if (c.peek() == '>' || c.peek() == '/')
+            continue;
+        if (tag.kind == TagToken::Close)
+            fail(c.source, c.pos, "closing tag has attributes");
+        readAttribute(c, tag);
+    }
+    return tag;
+}
+```
+
+## Ghép các phần lại
+
+Mở checkpoint 2, thay đổi một nhãn trong HTML rồi F5. Số byte có thể thay đổi nhưng số token chưa chắc thay. Tách một nhãn thành hai element mới thực sự thay chuỗi token.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_68_checkpoint_2 --parallel 2
+.\build\Release\project_68_checkpoint_2.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Xóa dấu nháy cuối của một thuộc tính; dùng cả một file có `id` hai lần. Thay vì treo trong vòng while, tokenizer phải thoát bằng một chẩn đoán.
+
+## Tự kiểm tra kết quả
+
+Chỉ số đọc đi hết input hợp lệ; lỗi có dòng và cột tính từ 1. Chưa có cây, CSS hay handler ở mốc này.
+
+## Bài tập mở rộng
+
+Tự viết ra ba token ứng với một cặp thẻ button có chứa chữ. Offset của token chữ bắt đầu ngay sau ký tự nào?
+
+[Bài 3: Từ dòng chữ đến cây có cha, có con](/projects/tiny-html/03-giu-dung-cha-va-con).

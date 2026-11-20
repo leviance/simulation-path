@@ -1,20 +1,26 @@
 export const voxelGreedyGlossaryTerms = [
   {
     id: "voxel-greedy-mask",
-    term: "Greedy face mask",
+    term: "Mask để gộp mặt",
     definition:
-      "Bảng 2D của một hướng mặt tại một mặt phẳng trong chunk. Ô không có mặt nhận Air; ô có mặt giữ material. Duyệt hàng cố định, mở rộng width rồi height để tách các rectangle cùng khóa, sau đó xóa phần đã dùng. Đây không phải texture hoặc lát cắt các block.",
+      "Trên một mặt phẳng ứng với một hướng, ghi vật liệu ở ô có mặt cần vẽ. Từ một ô chưa dùng, mở rộng theo chiều ngang rồi thử thêm từng hàng đủ rộng. Gạch vùng đã dùng để không xuất hai quad trùng nhau.",
   },
   {
     id: "voxel-merge-key",
-    term: "Khóa gộp mặt voxel",
+    term: "Điều kiện gộp mặt",
     definition:
-      "Các thuộc tính phải giống nhau trước khi gộp: mặt phẳng, hướng và vật liệu trong Project 61. Plane/hướng cố định trong từng mask nên chỉ cần so material. Nếu thêm ánh sáng, AO hoặc UV, phải mở rộng khóa/quy tắc; không gộp chỉ vì màu hiện tại trông giống nhau.",
+      "Chỉ gộp các mặt cùng mặt phẳng, hướng và vật liệu, có cách lặp UV tương thích. Đất đứng yên có thể thành một mảng lớn, nhưng lá sẽ uốn và mặt biển cần các đỉnh riêng để tạo sóng.",
   },
   {
     id: "voxel-surface-oracle",
-    term: "Oracle bề mặt có hướng",
+    term: "Đối chiếu tập mặt đơn vị",
     definition:
-      "Từ mỗi block đặc, kiểm sáu neighbor để liệt kê face key gồm tọa độ block, hướng và material. Bung quad lớn thành mặt đơn vị rồi so multiset đã sort. Cách này bắt lỗ, duplicate, đảo hướng và đổi vật liệu mà tổng diện tích đơn thuần không phát hiện được.",
+      "Bung một quad rộng w và cao h thành w×h mặt theo ô, hướng và vật liệu. So chúng với bản chưa gộp sẽ phát hiện lỗ, mặt trùng và sai hướng mà tổng diện tích không chỉ ra.",
+  },
+  {
+    id: "voxel-rooted-wind",
+    term: "Gió lấy mẫu tại gốc",
+    definition:
+      "Gió phụ thuộc vị trí world, thời gian và hướng truyền. Dùng độ cao tương đối để gốc nhận trọng số 0, đầu lá nhận trọng số lớn hơn. Mỗi frame bắt đầu từ hình dạng nghỉ, không cộng dồn độ lệch của frame trước.",
   },
 ];

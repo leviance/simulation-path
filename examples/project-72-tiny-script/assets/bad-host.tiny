@@ -1,0 +1,12 @@
+let calls = 0;
+
+function onPause() {
+    calls = calls + 1;
+    pause();
+    radius(200);
+}
+
+function onReset() { reset(); }
+function onObserve() { links(!showLinks()); }
+function onRadius(value) { radius(value); }
+function onSeparation(value) { separate(value); }

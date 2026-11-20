@@ -1,298 +1,194 @@
-#include "cutaway-render.hpp"
-#include "diagnostics.hpp"
+#include "analysis.hpp"
+#include "camera.hpp"
+#include "context-mesh.hpp"
+#include "display.hpp"
 #include "layout.hpp"
-#include "state.hpp"
-#include "statistics.hpp"
 #include <cstdlib>
 #include <iostream>
-#include <string_view>
+#include <limits>
+#include <numeric>
 
+using namespace slice53;
 namespace {
+int checks = 0;
 int failures = 0;
 
-// The checks remain active with NDEBUG; Release must exercise the same invariants.
-void check(bool condition, std::string_view label) {
+// Checks remain active in Release: no assert/NDEBUG dependency.
+// [snippet check-release]
+void check(bool condition, const char* message) {
+    ++checks;
     if (!condition) {
-        std::cerr << "FAIL: " << label << '\n';
         ++failures;
+        std::cerr << "FAIL: " << message << '\n';
     }
 }
+// [/snippet check-release]
 
-bool closeEnough(double a, double b, double tolerance = 1e-12) {
-    return std::isfinite(a) && std::abs(a - b) <= tolerance;
+void near(double actual, double expected, double tolerance, const char* message) {
+    check(std::isfinite(actual) && std::abs(actual - expected) <= tolerance, message);
 }
 
-// [snippet fixture]
-void checkKnownFixture() {
-    using namespace slices;
-    Volume fixture({{3, 2, 4}, {1, 2, 3}});
+template<class Operation>
+void rejects(Operation operation, const char* message) {
+    bool rejected = false;
+    try { operation(); }
+    catch (const std::exception&) { rejected = true; }
+    check(rejected, message);
+}
+}
+
+int main() {
+    Grid grid;
+    grid.size = {3, 2, 4};
+    grid.origin = {-1, -2, -3};
+    grid.spacing = {2, 4, 6};
+    Volume fixture(grid);
     for (int z = 0; z < 4; ++z) {
         for (int y = 0; y < 2; ++y) {
             for (int x = 0; x < 3; ++x) {
-                fixture.values[fixture.index(x, y, z)] = 100 * z + 10 * y + x;
-                const Point point{worldCoordinate(fixture.grid, 0, x), worldCoordinate(fixture.grid, 1, y), worldCoordinate(fixture.grid, 2, z)};
-                check(sampleNearest(fixture, point).value() == 100 * z + 10 * y + x, "known centre nearest");
-                check(closeEnough(sampleLinear(fixture, point).value(), 100 * z + 10 * y + x), "known centre linear");
+                fixture.set(x, y, z, x + 10 * y + 100 * z);
+                check(fixture.index(x, y, z) == static_cast<std::size_t>(x + 3 * y + 6 * z), "x-fastest address");
+                near(sampleNearest(fixture, grid.centre(x, y, z)).value(), x + 10 * y + 100 * z, 0, "nearest at centre");
+                near(sampleLinear(fixture, grid.centre(x, y, z)).value(), x + 10 * y + 100 * z, 0, "linear at centre");
             }
         }
     }
-    check(fixture.index(2, 1, 3) == 23, "known final address");
-    check(fixture.voxel(2, 1, 3) == 312, "known final voxel");
-    const Point centre{worldCoordinate(fixture.grid, 0, 0.5), worldCoordinate(fixture.grid, 1, 0.5), worldCoordinate(fixture.grid, 2, 0.5)};
-    check(closeEnough(sampleLinear(fixture, centre).value(), 55.5), "eight known corners average to 55.5");
-    check(sampleNearest(fixture, centre).value() == 111, "nearest tie chooses upper centre");
-    const Point offCentre{worldCoordinate(fixture.grid, 0, 0.25), worldCoordinate(fixture.grid, 1, 0.5), worldCoordinate(fixture.grid, 2, 0.75)};
-    check(closeEnough(sampleLinear(fixture, offCentre).value(), 80.25), "unequal weights use each fraction independently");
-    const Point low{lower(fixture.grid, 0), lower(fixture.grid, 1), lower(fixture.grid, 2)};
-    const Point high{-low[0], -low[1], -low[2]};
-    check(sampleNearest(fixture, low).value() == 0, "low physical corner");
-    check(sampleLinear(fixture, high).value() == 312, "high physical corner replication");
-    for (int axis = 0; axis < 3; ++axis) {
-        Point outside = low;
-        outside[axis] -= 1e-6;
-        check(!sampleNearest(fixture, outside) && !sampleLinear(fixture, outside), "outside low face must miss");
-        outside = high;
-        outside[axis] += 1e-6;
-        check(!sampleNearest(fixture, outside) && !sampleLinear(fixture, outside), "outside high face must miss");
-    }
-}
+    rejects([&] { fixture.at(3, 0, 0); }, "reject invalid x");
+    rejects([&] { fixture.at(0, -1, 0); }, "reject invalid y");
+    rejects([&] { fixture.set(0, 0, 0, std::numeric_limits<double>::quiet_NaN()); }, "reject nonfinite scalar");
+    rejects([] { makeGrid(0); }, "reject zero grid");
+    rejects([] { makeGrid(129); }, "reject excessive allocation");
+    Grid invalid = grid;
+    invalid.spacing.z = 0;
+    rejects([&] { Volume bad(invalid); }, "reject zero spacing before allocation");
 
-// [/snippet fixture]
+    // [snippet known-eight]
+    const Vec3 middle{1, 0, 3};
+    const auto stencil = linearStencil(fixture, middle).value();
+    double weights = 0;
+    for (const Contribution& contribution : stencil) {
+        weights += contribution.weight;
+        check(contribution.weight >= 0, "convex weights");
+    }
+    near(weights, 1, 1e-15, "eight weights sum to one");
+    near(sampleLinear(fixture, middle).value(), 50.5, 1e-12, "known half-cell result");
+    // [/snippet known-eight]
 
-void checkPhantomsAndScale() {
-    using namespace slices;
-    for (int side : {64, 128}) {
-        Volume volume(makeGrid(side));
-        check(volume.values.size() == static_cast<std::size_t>(side) * side * side, "real cubic allocation");
-        check(closeEnough(-2 * lower(volume.grid, 0), 3.2), "resolution keeps physical extent");
-        fillVolume(volume, Preset::Sphere);
-        // Reflect every voxel across x, y, z: this also checks every centre slice.
-        bool symmetric = true;
-        for (int z = 0; z < side; ++z) {
-            for (int y = 0; y < side; ++y) {
-                for (int x = 0; x < side; ++x) {
-                    const double value = volume.voxel(x, y, z);
-                    symmetric = symmetric && value == volume.voxel(side - 1 - x, y, z) && value == volume.voxel(x, side - 1 - y, z) && value == volume.voxel(x, y, side - 1 - z);
-                }
-            }
-        }
-        check(symmetric, "sphere sample symmetry on all axes");
-        if (side == 64) {
-            bool sliceSymmetry = true;
-            for (int view = 0; view < 3; ++view) {
-                const auto image = sampleImage(volume.grid, view, {0, 0, 0}, true, volume);
-                for (int y = 0; y < Image::side; ++y) {
-                    for (int x = 0; x < Image::side; ++x) {
-                        const auto at = static_cast<std::size_t>(x + y * Image::side);
-                        const auto mirroredX = static_cast<std::size_t>(Image::side - 1 - x + y * Image::side);
-                        const auto mirroredY = static_cast<std::size_t>(x + (Image::side - 1 - y) * Image::side);
-                        sliceSymmetry = sliceSymmetry && closeEnough(image[at], image[mirroredX]) && closeEnough(image[at], image[mirroredY]);
-                    }
-                }
-            }
-            check(sliceSymmetry, "rendered scalar slices preserve sphere reflection");
-        }
-        const auto stats = histogram(volume);
-        check(stats.samples == volume.values.size() && stats.minimum == 0 && stats.maximum == 1, "sphere range and histogram");
-        std::size_t total = 0;
-        for (auto count : stats.bins) {
-            total += count;
-        }
-        check(total == volume.values.size(), "histogram counts every voxel once");
-    }
-    check(fieldValue({0, 0, 0}, Preset::Sphere) == 1 && fieldValue({1.1, 0, 0}, Preset::Sphere) == 0, "sphere known radii");
-    check(closeEnough(fieldValue({0.85, 0, 0}, Preset::Gaussian), std::exp(-1.0)), "Gaussian radius is exp(-1), not sigma");
-    check(fieldValue({0, 0, -1}, Preset::Layers) == 0.15 && fieldValue({0, 0, 0}, Preset::Layers) == 0.5 && fieldValue({0, 0, 1}, Preset::Layers) == 0.85, "layers known values");
-}
-} // namespace
+    near(sampleNearest(fixture, middle).value(), 101, 0, "nearest ties choose higher indices");
 
-int main() {
-    using namespace slices;
-    checkKnownFixture();
-    checkPhantomsAndScale();
-    State finalState;
-    check(finalState.ready && finalState.grid.count[0] == 128 && finalState.volume.values.size() == 2097152, "final really opens 128 cubed");
-    check(finalState.linear && finalState.color && finalState.cutaway && finalState.paused, "final defaults match lesson and controls");
-    const double firstScalar = finalState.volume.values.front();
-    check(!finalState.loadDataset(Preset::Sphere, 32), "unsupported resolution rejected");
-    check(finalState.grid.count[0] == 128 && finalState.volume.values.front() == firstScalar && finalState.preset == Preset::Phantom && !finalState.error.empty(), "failed rebuild preserves previous dataset and exposes error");
-    // The context surface is presentation only; extraction must preserve stored scalars.
-    for (Preset preset : {Preset::Phantom, Preset::Sphere, Preset::Gaussian, Preset::Layers, Preset::Ramp}) {
-        Volume sample(makeGrid(64));
-        fillVolume(sample, preset);
-        const auto original = sample.values;
-        const auto mesh = extractSurface(sample);
-        check(!mesh.empty() && mesh.size() < maxSurfaceTriangles, "bounded context surface for every preset");
-        bool verticesValid = true;
-        for (const auto& triangle : mesh) {
-            for (const auto& vertex : triangle) {
-                for (int axis = 0; axis < 3; ++axis) {
-                    verticesValid = verticesValid && std::isfinite(vertex.point[axis]) && vertex.point[axis] >= lower(sample.grid, axis) - 1e-10 && vertex.point[axis] <= -lower(sample.grid, axis) + 1e-10;
-                }
-                verticesValid = verticesValid && closeEnough(std::hypot(vertex.normal[0], vertex.normal[1], vertex.normal[2]), 1, 1e-10);
+    // The eight physical corners clamp to the nearest stored voxel centre.
+    // Derive expected values from the fixture formula, not from the sampler.
+    const Vec3 upperCorner = grid.origin + grid.extent();
+    for (int z = 0; z < 2; ++z) {
+        for (int y = 0; y < 2; ++y) {
+            for (int x = 0; x < 2; ++x) {
+                Vec3 corner = grid.origin;
+                if (x == 1) corner.x = upperCorner.x;
+                if (y == 1) corner.y = upperCorner.y;
+                if (z == 1) corner.z = upperCorner.z;
+                const double expected = 2 * x + 10 * y + 300 * z;
+                near(sampleNearest(fixture, corner).value(), expected, 0, "nearest at physical corner");
+                near(sampleLinear(fixture, corner).value(), expected, 0, "linear at physical corner");
             }
         }
-        check(verticesValid, "finite bounded vertices and unit normals");
-        check(sample.values == original, "mesh extraction does not modify volume");
     }
-    const auto camera = cameraBasis({});
-    check(closeEnough(dot(camera.forward, camera.up), 0) && closeEnough(dot(camera.right, camera.up), 0), "orthogonal camera basis");
-    check(closeEnough(dot(camera.forward, camera.forward), 1), "normalized camera forward");
-    const SurfaceTriangle triangle{{{{-1, -1, 1}, {0, 0, 1}}, {{1, -1, 1}, {0, 0, 1}}, {{-1, 1, 1}, {0, 0, 1}}}};
-    double remainingArea = 0;
-    for (const auto& piece : keepOutsideCorner(triangle, {})) {
-        const auto edge1 = subtract(piece[1].point, piece[0].point);
-        const auto edge2 = subtract(piece[2].point, piece[0].point);
-        remainingArea += std::abs(cross(edge1, edge2)[2]) / 2;
-    }
-    check(closeEnough(remainingArea, 1.5), "corner removal preserves independently known area");
-    Volume volume({{4, 3, 5}, {0.2, 0.3, 0.4}});
-    check(volume.values.size() == 60, "noncubic allocation");
-    check(volume.index(3, 2, 4) == 59, "x-fast row-major final index");
-    check(volume.index(0, 1, 0) == 4 && volume.index(0, 0, 1) == 12, "row and layer stride");
-    bool boundsRejected = false;
-    try {
-        (void)volume.voxel(-1, 0, 0);
-    } catch (const std::out_of_range&) {
-        boundsRejected = true;
-    }
-    check(boundsRejected, "bounds rejected");
-    bool dimensionsRejected = false;
-    try {
-        Volume invalid({{129, 2, 2}, {1, 1, 1}});
-    } catch (const std::invalid_argument&) {
-        dimensionsRejected = true;
-    }
-    check(dimensionsRejected, "allocation budget enforced");
-    for (int axis = 0; axis < 3; ++axis) {
-        for (double bad : {0.0, -1.0, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()}) {
-            Grid shape{{2, 2, 2}, {1, 1, 1}};
-            shape.spacing[axis] = bad;
-            bool rejected = false;
-            try {
-                Volume invalid(shape);
-            } catch (const std::invalid_argument&) {
-                rejected = true;
-            }
-            check(rejected, "nonpositive or nonfinite spacing rejected before allocation");
-        }
-    }
-    const Point nonfinite{std::numeric_limits<double>::quiet_NaN(), 0, 0};
-    check(!sampleNearest(volume, nonfinite) && !sampleLinear(volume, nonfinite), "nonfinite point must miss");
+    near(sampleLinear(fixture, {1, -2, -3}).value(), 0.5, 1e-12, "linear along lower physical edge");
+    near(sampleLinear(fixture, {1, 2, -3}).value(), 5.5, 1e-12, "linear across lower physical face");
 
     for (int axis = 0; axis < 3; ++axis) {
-        for (double index : {0.0, 0.5, 1.0, 2.0}) {
-            check(closeEnough(gridCoordinate(volume.grid, axis, worldCoordinate(volume.grid, axis, index)), index), "world/grid round trip");
-        }
+        Vec3 point = grid.centre(0, 0, 0);
+        point[axis] = grid.origin[axis];
+        check(sampleLinear(fixture, point).has_value(), "lower physical face accepted");
+        point[axis] = std::nextafter(grid.origin[axis], -std::numeric_limits<double>::infinity());
+        check(!sampleLinear(fixture, point), "outside lower face is miss");
+        const double upper = (grid.origin + grid.extent())[axis];
+        point[axis] = upper;
+        check(sampleNearest(fixture, point).has_value(), "upper physical face accepted");
+        point[axis] = std::nextafter(upper, std::numeric_limits<double>::infinity());
+        check(!sampleNearest(fixture, point), "outside upper face is miss");
     }
-    // An affine field has a closed-form interpolation oracle independent of the sampler.
-    for (int z = 0; z < 5; ++z) {
-        for (int y = 0; y < 3; ++y) {
-            for (int x = 0; x < 4; ++x) {
-                const Point p{worldCoordinate(volume.grid, 0, x), worldCoordinate(volume.grid, 1, y), worldCoordinate(volume.grid, 2, z)};
-                volume.values[volume.index(x, y, z)] = affine(p);
-                check(closeEnough(sampleNearest(volume, p).value(), affine(p)), "nearest at centre");
-                check(closeEnough(sampleLinear(volume, p).value(), affine(p)), "trilinear at centre");
-            }
-        }
-    }
-    const Point p{worldCoordinate(volume.grid, 0, 1.3), worldCoordinate(volume.grid, 1, 0.7), worldCoordinate(volume.grid, 2, 2.4)};
-    check(closeEnough(sampleLinear(volume, p).value(), affine(p)), "trilinear exact affine interior");
-    const Point edge{lower(volume.grid, 0), lower(volume.grid, 1), lower(volume.grid, 2)};
-    check(closeEnough(sampleLinear(volume, edge).value(), volume.voxel(0, 0, 0)), "edge replication");
-    check(!sampleLinear(volume, {edge[0] - 0.001, 0, 0}), "outside not clamped into valid sample");
-    check(!sampleNearest(volume, {edge[0] - 0.001, 0, 0}), "nearest outside miss");
-    Volume singleton({{1, 1, 1}, {0.1, 0.2, 0.3}});
-    singleton.values[0] = 0.7;
-    check(closeEnough(sampleLinear(singleton, {0, 0, 0}).value(), 0.7), "one voxel interpolation");
-    fillOrientation(singleton);
-    check(singleton.values[0] == 0, "one voxel orientation ramp");
+    check(!sampleLinear(fixture, {std::numeric_limits<double>::infinity(), 0, 0}), "nonfinite query is miss");
+    Grid single;
+    single.size = {1, 1, 1};
+    Volume constant(single);
+    constant.set(0, 0, 0, 0.375);
+    near(sampleLinear(constant, single.origin).value(), 0.375, 0, "singleton lower edge");
+    near(sampleLinear(constant, single.origin + single.extent()).value(), 0.375, 0, "singleton upper corner");
+    const Audit report = audit(fixture);
+    check(report.failures == 0 && report.checks == 13 && report.residual < 1e-10, "independent affine oracle");
 
-    const Point cursor = initialPoint(volume.grid);
-    for (int bits = 0; bits < 8; ++bits) {
-        Point corner{};
-        for (int axis = 0; axis < 3; ++axis) {
-            corner[axis] = lower(volume.grid, axis);
-            if ((bits & (1 << axis)) != 0) {
-                corner[axis] = -corner[axis];
-            }
-        }
-        const Rect area{20, 40, 300, 120};
-        const auto projected = locatorPoint(volume.grid, corner, area);
-        check(contains(area, projected[0], projected[1]), "all locator corners fit viewport");
-    }
     for (int view = 0; view < 3; ++view) {
-        const auto axes = axesFor(view);
-        const auto point = slicePoint(volume.grid, view, cursor, 0.25, 0.75);
-        check(closeEnough(point[axes.cut], cursor[axes.cut]), "plane preserves cut coordinate");
-        check(closeEnough(point[axes.horizontal], lower(volume.grid, axes.horizontal) / 2), "horizontal direction");
-        check(closeEnough(point[axes.vertical], lower(volume.grid, axes.vertical) / 2), "vertical inversion");
-        const auto rect = fitSlice(volume.grid, view, {20, 30, 300, 220});
-        const double aspect = volume.grid.count[axes.horizontal] * volume.grid.spacing[axes.horizontal] / (volume.grid.count[axes.vertical] * volume.grid.spacing[axes.vertical]);
-        check(closeEnough(rect.width / rect.height, aspect), "physical aspect not voxel count aspect");
-        const auto selected = pickSlice(volume.grid, view, cursor, rect, rect.x + 0.25 * rect.width, rect.y + 0.75 * rect.height);
-        check(selected.has_value(), "pick within fitted image");
-        if (selected) {
-            for (int axis = 0; axis < 3; ++axis)
-                check(closeEnough((*selected)[axis], point[axis]), "pixel/world pick agrees with slice");
-        }
-        check(!pickSlice(volume.grid, view, cursor, rect, rect.x - 1, rect.y), "letterbox not selectable");
+        const Axes axes = axesFor(view);
+        const Vec3 point = slicePoint(grid, view, 0.25, 0.75, {1, 2, 3});
+        near(point[axes.fixed], Vec3{1, 2, 3}[axes.fixed], 0, "slice fixed coordinate");
+        near(point[axes.horizontal], grid.origin[axes.horizontal] + 0.25 * grid.extent()[axes.horizontal], 0, "slice horizontal orientation");
+        near(point[axes.vertical], grid.origin[axes.vertical] + 0.75 * grid.extent()[axes.vertical], 0, "slice vertical orientation");
     }
+    near(windowValue(0.5, {0.5, 0.5}), 0.5, 1e-15, "window centre");
+    near(windowValue(0, {0.5, 0.5}), 0, 0, "window clips below");
+    near(windowValue(1, {0.5, 0.5}), 1, 0, "window clips above");
+    rejects([] { windowValue(0.5, {0.5, 0}); }, "reject invalid window");
+    for (int side : {64, 128}) {
+        Volume volume = buildVolume(Preset::Sphere, side);
+        const Statistics statistics = measure(volume);
+        check(volume.values().size() == static_cast<std::size_t>(side) * side * side, "real volume allocation");
+        near(volume.grid().extent().x, 160, 0, "world extent does not depend on side");
+        check(std::accumulate(statistics.bins.begin(), statistics.bins.end(), std::size_t{0}) == volume.values().size(), "histogram counts full data");
+        for (int z = 0; z < side; z += 3)
+            for (int y = 0; y < side; y += 3)
+                for (int x = 0; x < side; x += 3) {
+                    near(volume.at(x, y, z), volume.at(side - 1 - x, y, z), 0, "sphere x symmetry");
+                    near(volume.at(x, y, z), volume.at(x, side - 1 - y, z), 0, "sphere y symmetry");
+                    near(volume.at(x, y, z), volume.at(x, y, side - 1 - z), 0, "sphere z symmetry");
+                }
+        SliceImage image;
+        renderSlice(volume, image, 0, {}, true);
+        const auto saved = volume.values();
+        std::vector<std::uint32_t> rgba;
+        colorImage(image, rgba, {0.4, 0.2}, true);
+        check(saved == volume.values(), "display never mutates scalar storage");
+        for (int y = 0; y < 256; ++y)
+            for (int x = 0; x < 128; ++x)
+                near(image.scalar[x + y * 256], image.scalar[255 - x + y * 256], 1e-6, "slice symmetry");
+    }
+    // A camera ray reconstructed from a projected point must pass through that same point.
+    const Vec3 measuredPoint{5, 12, -7};
+    for (double yaw : {-0.8, 0.4, 1.7}) {
+        Camera camera;
+        camera.yaw = yaw;
+        const CameraFrame frame = cameraFrame(camera, 640, 480);
+        const Projection pixel = project(frame, measuredPoint).value();
+        const Vec3 recovered = frame.eye + cameraRay(frame, pixel.x, pixel.y) * pixel.depth;
+        near(length(recovered - measuredPoint), 0, 1e-10, "camera projection/ray round trip in mm");
+    }
+    const Rect fitted = sliceRect(makeGrid(128), 0, {0, 0, 400, 300});
+    near(fitted.width / fitted.height, 160.0 / 192.0, 1e-14, "physical aspect, not square pixels");
+    const auto picked = pickSlice(makeGrid(128), 0, fitted, fitted.x + fitted.width * 0.25, fitted.y + fitted.height * 0.75, {0, 0, 11});
+    check(picked.has_value(), "pick within image");
+    near(picked->x, -40, 1e-12, "picked world x");
+    near(picked->y, -48, 1e-12, "picked world y with inverted rows");
+    near(picked->z, 11, 0, "pick preserves fixed coordinate");
+    check(!pickSlice(makeGrid(128), 0, fitted, fitted.x - 1, fitted.y, {}), "letterbox is not pickable");
 
-    check(windowValue(0.1, {0.5, 0.4}) == 0, "window black clamp");
-    check(closeEnough(windowValue(0.5, {0.5, 0.4}), 0.5), "window midpoint");
-    check(windowValue(0.9, {0.5, 0.4}) == 1, "window white clamp");
-    bool widthRejected = false;
-    try {
-        (void)windowValue(0.5, {0.5, 0});
-    } catch (const std::invalid_argument&) {
-        widthRejected = true;
+    const std::vector<Vertex> triangle{{{-1, 0, 0}, {0, 0, 1}}, {{1, 0, 0}, {0, 0, 1}}, {{0, 2, 0}, {0, 0, 1}}};
+    const auto clipped = clipPolygon(triangle, 0, 0, true);
+    check(clipped.size() >= 3, "clipping retains a valid half triangle");
+    for (const Vertex& vertex : clipped) {
+        check(vertex.point.x <= 1e-12 && finite(vertex.point), "clipping respects selected half-space");
+        near(length(vertex.normal), 1, 1e-12, "interpolated normal remains unit");
     }
-    check(widthRejected, "zero window rejected");
-    const auto oldValues = volume.values;
-    const auto scalars = sampleImage(volume.grid, 0, cursor, true, volume);
-    const auto image = colorImage(scalars, {0.4, 0.3}, false);
-    check(volume.values == oldValues, "display preserves source scalars");
-    for (std::size_t i = 0; i < image.rgba.size(); i += 4)
-        check(image.rgba[i] == image.rgba[i + 1] && image.rgba[i] == image.rgba[i + 2] && image.rgba[i + 3] == 255, "RGBA byte layout");
-
-    fillPhantom(volume);
-    const auto report = auditVolume(volume);
-    check(report.failures == 0 && report.residual <= 1e-12, "bounded independent audit");
-    volume.values[0] = -0.1;
-    check(auditVolume(volume).failures > 0, "audit detects invalid scalar");
-    volume.values.clear();
-    check(auditVolume(volume).failures > 0, "empty storage cannot pass an affine-only oracle");
-    volume.values.resize(59, 0);
-    check(auditVolume(volume).failures > 0, "truncated storage rejected");
-    volume.values.resize(61, 0);
-    check(auditVolume(volume).failures > 0, "oversized storage rejected");
-    volume.values.resize(60, 0);
-    volume.grid.spacing[1] = std::numeric_limits<double>::quiet_NaN();
-    check(auditVolume(volume).failures > 0, "invalid mutated grid rejected");
-
-    // Reject malformed input before writing any byte outside the RGBA destination.
-    for (int count : {0, Image::side * Image::side - 1, Image::side * Image::side + 1}) {
-        bool rejected = false;
-        try {
-            (void)colorImage(ScalarImage(static_cast<std::size_t>(count)), {0.5, 1}, false);
-        } catch (const std::invalid_argument&) {
-            rejected = true;
+    Volume context = buildVolume(Preset::Gaussian, 16);
+    const auto beforeMesh = context.values();
+    const Mesh mesh = buildContextMesh(context);
+    check(!mesh.empty() && mesh.size() < maxContextTriangles, "context mesh comes from a real volume");
+    for (const Triangle& face : mesh) {
+        for (const Vertex& vertex : face) {
+            check(finite(vertex.point) && context.grid().contains(vertex.point), "context vertex in physical box");
+            near(length(vertex.normal), 1, 1e-9, "context normal finite/unit");
         }
-        check(rejected, "scalar image dimensions checked before write");
     }
-    for (double value : {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()}) {
-        bool rejected = false;
-        try {
-            (void)colorValue(value, true);
-        } catch (const std::invalid_argument&) {
-            rejected = true;
-        }
-        check(rejected, "nonfinite brightness rejected before integer conversion");
-    }
-    if (failures != 0) {
-        return EXIT_FAILURE;
-    }
-    std::cout << "Volume slicer tests passed\n";
+    check(beforeMesh == context.values(), "mesh zero padding does not alter scalar storage");
+    std::cout << "P53: " << checks << " checks, " << failures << " failures\n";
+    if (failures != 0) return EXIT_FAILURE;
     return EXIT_SUCCESS;
 }

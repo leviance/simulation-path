@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <string>
 
-namespace fog {
+namespace volume54 {
 // OpenGL entry points are loaded only after the SDL context exists.
 struct GlApi {
     PFNGLGETSTRINGPROC GetString{};
@@ -15,6 +15,8 @@ struct GlApi {
     PFNGLCLEARPROC Clear{};
     PFNGLVIEWPORTPROC Viewport{};
     PFNGLDISABLEPROC Disable{};
+    PFNGLENABLEPROC Enable{};
+    PFNGLBLENDFUNCPROC BlendFunc{};
     PFNGLCREATESHADERPROC CreateShader{};
     PFNGLSHADERSOURCEPROC ShaderSource{};
     PFNGLCOMPILESHADERPROC CompileShader{};
@@ -51,6 +53,18 @@ struct GlApi {
     PFNGLCHECKFRAMEBUFFERSTATUSPROC CheckFramebufferStatus{};
     PFNGLDELETEFRAMEBUFFERSPROC DeleteFramebuffers{};
     PFNGLREADPIXELSPROC ReadPixels{};
+    PFNGLGENBUFFERSPROC GenBuffers{};
+    PFNGLBINDBUFFERPROC BindBuffer{};
+    PFNGLBUFFERDATAPROC BufferData{};
+    PFNGLDELETEBUFFERSPROC DeleteBuffers{};
+    PFNGLENABLEVERTEXATTRIBARRAYPROC EnableVertexAttribArray{};
+    PFNGLVERTEXATTRIBPOINTERPROC VertexAttribPointer{};
+    PFNGLGENQUERIESPROC GenQueries{};
+    PFNGLBEGINQUERYPROC BeginQuery{};
+    PFNGLENDQUERYPROC EndQuery{};
+    PFNGLGETQUERYOBJECTIVPROC GetQueryObjectiv{};
+    PFNGLGETQUERYOBJECTUI64VPROC GetQueryObjectui64v{};
+    PFNGLDELETEQUERIESPROC DeleteQueries{};
 
     template <typename Function>
     void loadOne(Function& function, const char* name) {
@@ -68,6 +82,8 @@ struct GlApi {
         loadOne(Clear, "glClear");
         loadOne(Viewport, "glViewport");
         loadOne(Disable, "glDisable");
+        loadOne(Enable, "glEnable");
+        loadOne(BlendFunc, "glBlendFunc");
         loadOne(CreateShader, "glCreateShader");
         loadOne(ShaderSource, "glShaderSource");
         loadOne(CompileShader, "glCompileShader");
@@ -104,6 +120,18 @@ struct GlApi {
         loadOne(CheckFramebufferStatus, "glCheckFramebufferStatus");
         loadOne(DeleteFramebuffers, "glDeleteFramebuffers");
         loadOne(ReadPixels, "glReadPixels");
+        loadOne(GenBuffers, "glGenBuffers");
+        loadOne(BindBuffer, "glBindBuffer");
+        loadOne(BufferData, "glBufferData");
+        loadOne(DeleteBuffers, "glDeleteBuffers");
+        loadOne(EnableVertexAttribArray, "glEnableVertexAttribArray");
+        loadOne(VertexAttribPointer, "glVertexAttribPointer");
+        loadOne(GenQueries, "glGenQueries");
+        loadOne(BeginQuery, "glBeginQuery");
+        loadOne(EndQuery, "glEndQuery");
+        loadOne(GetQueryObjectiv, "glGetQueryObjectiv");
+        loadOne(GetQueryObjectui64v, "glGetQueryObjectui64v");
+        loadOne(DeleteQueries, "glDeleteQueries");
     }
 };
-} // namespace fog
+} // namespace volume54

@@ -1,0 +1,141 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ dòng chữ đến cây có cha, có con
+
+## Vấn đề cần giải quyết
+
+Hai tài liệu có thể dùng đúng chừng ấy tag mà tạo hai bảng khác nhau: đưa Reset vào nhóm thông số hay nhóm hành động? Tokenizer chỉ biết thứ tự ký tự; parser mới giữ được quan hệ đó.
+
+## Hiểu ý tưởng trước khi viết code
+
+Nhìn một nhóm như chiếc hộp đang mở. Mở div thì ghi nhớ nó; gặp thẻ đóng phải khớp với chiếc hộp ở trên cùng. Tên thẻ không khớp phải bị từ chối, không cố tự sửa như trình duyệt.
+
+<InteractiveLab demo="tiny-html" mode="html68-3" />
+
+## Viết code từng bước
+
+### Đưa cú pháp đã tách tới parser
+
+Token mang kind, tag, attributes và vị trí. Parser không đọc lại từng dấu nháy: việc đó đã ở lớp dưới.
+
+{/* snippet include/markup/tokens.hpp#next */}
+
+```cpp title="include/markup/tokens.hpp — Đưa cú pháp đã tách tới parser"
+inline Token next(Cursor& c) {
+    Token tag;
+    tag.offset = c.pos;
+    if (!c.peek())
+        return tag;
+    if (!c.take('<')) {
+        tag.kind = TagToken::Text;
+        while (c.peek() && c.peek() != '<')
+            ++c.pos;
+        tag.name = std::string(c.source.substr(tag.offset, c.pos - tag.offset));
+        return tag;
+    }
+    tag.kind = TagToken::Open;
+    if (c.take('/'))
+        tag.kind = TagToken::Close;
+    tag.name = c.word();
+    while (true) {
+        if (c.take('>'))
+            break;
+        if (tag.kind == TagToken::Open && c.take("/>")) {
+            tag.empty = true;
+            break;
+        }
+        if (!space(c.peek()))
+            fail(c.source, c.pos, "expected space or >");
+        c.skip();
+        if (c.peek() == '>' || c.peek() == '/')
+            continue;
+        if (tag.kind == TagToken::Close)
+            fail(c.source, c.pos, "closing tag has attributes");
+        readAttribute(c, tag);
+    }
+    return tag;
+}
+```
+
+### Gắn chỉ số parent rồi kiểm cặp thẻ
+
+Lưu element theo thứ tự nguồn. Một phần tử có parent là chỉ số của div đang mở; ID đã dùng không được khai báo lần hai. Chặn giới hạn trước khi thêm node.
+
+{/* snippet include/markup/document.hpp#parse-tree */}
+
+```cpp title="include/markup/document.hpp — Gắn chỉ số parent rồi kiểm cặp thẻ"
+inline Document parse(std::string_view source) {
+    checkUtf8(source);
+    Cursor c{source};
+    c.take("\xef\xbb\xbf");
+    Document d;
+    std::vector<int> open;
+    while (true) {
+        const Token token = next(c);
+        if (token.kind == TagToken::End)
+            break;
+        if (token.kind == TagToken::Text) {
+            if (open.empty() || d.elements[open.back()].tag == "div") {
+                if (!std::all_of(token.name.begin(), token.name.end(), space))
+                    fail(source, token.offset, "text needs a label");
+            } else
+                appendText(d.elements[open.back()].text, token, source);
+            continue;
+        }
+        if (token.kind == TagToken::Close) {
+            if (open.empty() || d.elements[open.back()].tag != token.name)
+                fail(source, token.offset, "mismatched closing tag: " + token.name);
+            auto& text = d.elements[open.back()].text;
+            if (!text.empty() && text.back() == ' ')
+                text.pop_back();
+            open.pop_back();
+            continue;
+        }
+        int parent = -1;
+        if (open.empty()) {
+            if (!d.elements.empty() || token.name != "div")
+                fail(source, token.offset, "expected a single root div");
+        } else {
+            parent = open.back();
+            if (d.elements[parent].tag != "div")
+                fail(source, token.offset, "only div can contain elements");
+        }
+        if (d.elements.size() >= 32 || open.size() > 6)
+            fail(source, token.offset, "node/depth limit");
+        Element e = describe(token, parent, source);
+        const int index = static_cast<int>(d.elements.size());
+        if (!e.id.empty() && !d.byId.emplace(e.id, index).second)
+            fail(source, token.offset, "duplicate id: " + e.id);
+        d.elements.push_back(e);
+        if (!token.empty)
+            open.push_back(index);
+    }
+    if (d.elements.empty() || !open.empty())
+        fail(source, c.pos, "empty or unclosed document");
+    return d;
+}
+```
+
+## Ghép các phần lại
+
+Chạy checkpoint 3, so số element hiện lên với số thẻ mở trong panel.html. Tra trong tests: Radius là element số 8 (đếm từ 0), parent là settings số 6. Chưa thay layout ở mốc này.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_68_checkpoint_3 --parallel 2
+.\build\Release\project_68_checkpoint_3.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Đóng button bằng label. Đếm token vẫn đủ nhưng parser phải chỉ thẳng thẻ đóng sai. Thử thêm một div gốc thứ hai: cây không còn có một root duy nhất.
+
+## Tự kiểm tra kết quả
+
+Tag lạ, input có min không nhỏ hơn max, ID trùng, cây quá sâu đều bị từ chối. Một Label chứa `R &amp; D` lưu nội dung là R & D, không lưu nguyên chuỗi entity.
+
+## Bài tập mở rộng
+
+Nếu đổi vị trí hai nhóm, điều gì xảy ra với chỉ số element? Vì sao không nên nối Pause với chỉ số 3 viết cứng?
+
+[Bài 4: Cho cây từ file thực sự điều khiển đàn](/projects/tiny-html/04-dung-widget-tu-tai-lieu).

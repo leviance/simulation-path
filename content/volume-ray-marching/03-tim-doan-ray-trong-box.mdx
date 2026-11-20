@@ -1,0 +1,129 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Tìm đúng đoạn tia nằm trong khối
+
+## Vấn đề cần giải quyết
+
+Mỗi pixel đã có một ray. Nếu cứ đi từ camera về phía trước, ta sẽ lấy rất nhiều mẫu trước khi tới volume, thậm chí có những ray không chạm volume bao giờ. Ta cần biết chính xác đoạn nào đáng đọc dữ liệu.
+
+Chương trình hiện chỉ tô màu direction. Bài này thêm ray–box interval và đổi ảnh thành độ dài giao box. Vẫn chưa đọc density: nếu hình khối sai, ta có thể tập trung vào hình học mà không bị màu sương đánh lạc hướng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Box [-1,1]³ là giao của ba slab: phần nằm giữa hai mặt x, hai mặt y và hai mặt z. Trên mỗi trục, ray vào ở một giá trị t và ra ở một giá trị t khác. Giao ba khoảng ấy cho ta interval cuối.
+
+Ta chỉ nhìn về phía trước nên entry bắt đầu từ 0. Nếu camera ở trong box, interval đúng là từ mắt tới mặt thoát, không phải từ mặt nằm sau mắt. Nếu entry không còn nhỏ hơn exit, ray không có đoạn giao dương.
+
+Ray song song với một slab cần xử lý riêng. Origin ở ngoài slab thì miss; origin ở trong hoặc đúng mặt thì trục ấy không thu hẹp interval. Đừng chia cho zero rồi trông chờ Inf/NaN tự mang đúng ý nghĩa.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-3" />
+
+## Viết code từng bước
+
+### 1. Viết bản CPU dễ kiểm trước
+
+Hàm dưới nhận unit ray từ bài trước. Nó trả `optional<Interval>`: có đoạn hợp lệ hoặc miss, không dùng một độ dài âm làm tín hiệu ngầm.
+
+{/* snippet include/model.hpp#ray-box */}
+
+```cpp title="include/model.hpp — Giao ba khoảng slab"
+inline std::optional<Interval> boxInterval(const Ray& ray) {
+    if (!finite(ray.origin) || !finite(ray.direction) || std::abs(dot(ray.direction, ray.direction) - 1) > 1e-8)
+        throw std::invalid_argument("A finite unit ray is required");
+    Interval interval;
+    for (int axis = 0; axis < 3; ++axis) {
+        if (ray.direction[axis] == 0) {
+            if (ray.origin[axis] < -1 || ray.origin[axis] > 1)
+                return std::nullopt;
+            continue;
+        }
+        double first = (-1 - ray.origin[axis]) / ray.direction[axis];
+        double last = (1 - ray.origin[axis]) / ray.direction[axis];
+        if (first > last)
+            std::swap(first, last);
+        interval.entry = std::max(interval.entry, first);
+        interval.exit = std::min(interval.exit, last);
+        if (interval.entry >= interval.exit)
+            return std::nullopt;
+    }
+    return interval;
+}
+```
+
+`first/last` có thể đảo thứ tự khi direction âm nên phải sắp lại trước khi lấy max entry/min exit. Việc giữ entry ban đầu bằng 0 xử lý camera inside một cách tự nhiên, không cần viết một công thức tích lũy riêng cho bên trong.
+
+### 2. Dùng cùng policy trong GLSL
+
+Shader thực hiện cùng bước, nhưng dùng một số hữu hạn lớn làm exit ban đầu. Với box này và camera bị chặn distance, giá trị ấy không giới hạn đoạn ray hợp lệ.
+
+{/* snippet shaders/volume.frag#shader-interval */}
+
+```glsl title="shaders/volume.frag — Không gửi miss vào vòng march"
+bool intervalFor(vec3 origin, vec3 direction, out float entry, out float exit) {
+    entry = 0.0;
+    exit = 1e30;
+    for (int axis = 0; axis < 3; ++axis) {
+        if (direction[axis] == 0.0) {
+            if (origin[axis] < -1.0 || origin[axis] > 1.0) return false;
+            continue;
+        }
+        float first = (-1.0 - origin[axis]) / direction[axis];
+        float last = (1.0 - origin[axis]) / direction[axis];
+        entry = max(entry, min(first, last));
+        exit = min(exit, max(first, last));
+        if (entry >= exit) return false;
+    }
+    return true;
+}
+```
+
+Trong `main` của shader, miss trả nền ngay. Hit được tô theo `(exit-entry)/sqrt(12)`: đường chéo box là độ dài lớn nhất để chuẩn hóa. Ảnh này biểu diễn đường đi hình học, không phải mật độ hay opacity.
+
+### 3. Kiểm bằng một tia có đáp số biết trước
+
+Tia từ (0,0,3) đi theo -Z chạm mặt z=1 sau quãng đường 2 và rời mặt z=-1 sau quãng đường 4. Khi mắt ở gốc và nhìn theo +X, đoạn hợp lệ bắt đầu ngay tại mắt rồi kết thúc ở x=1. Hai tình huống này giúp bắt lỗi dấu và lỗi lấy cả phần nằm sau mắt.
+
+Đoạn dưới nằm trong bộ tests dùng chung của ZIP. Nó kiểm hình học bằng đáp số tính tay, không dùng ảnh shader làm đáp án. Các fixture volume ở phần còn lại của file sẽ được giải thích trong những bài sau.
+
+Hàm `close(actual, expected, tolerance, reason)` của bộ khung test ghi nhận lỗi khi hai số lệch quá ngưỡng cho phép. Ngưỡng ở đây bằng 0 vì các khoảng cách nguyên này biểu diễn chính xác bằng `double`.
+
+{/* snippet tests/tests.cpp#box-oracle */}
+
+```cpp title="tests/tests.cpp — Hai đoạn giao có thể tính bằng tay"
+const Ray front{{0, 0, 3}, {0, 0, -1}};
+const auto hit = boxInterval(front).value();
+close(hit.entry, 2, 0, "front entry");
+close(hit.exit, 4, 0, "front exit");
+close(boxInterval({{0, 0, 0}, {1, 0, 0}})->entry, 0, 0, "camera inside starts at zero");
+close(boxInterval({{0, 0, 0}, {1, 0, 0}})->exit, 1, 0, "inside exit");
+```
+
+## Ghép các phần lại
+
+Giữ nguyên ray của Bài 2, gọi `intervalFor` trước mọi phép lấy mẫu. Ở checkpoint 3, output chỉ dùng entry/exit. Vì vậy, chưa cần tạo texture density hoặc thay dataset để sửa hình hộp bị ngược.
+
+```powershell
+cmake --build build --config Debug --target project_54_checkpoint_3 --parallel 1
+.\build\Debug\project_54_checkpoint_3.exe
+```
+
+Chọn camera trong khối bằng I. Ở tâm, quay theo một trục phải có entry=0 và exit=1. Ray từ (0,0,3) theo (0,0,-1) phải có entry=2, exit=4. Đây là đáp số từ hình học của box, không phải số đọc lại từ cùng hàm.
+
+## Thử làm sai để hiểu đúng
+
+1. Khởi tạo entry bằng một số âm rồi vào trong box. Những mẫu ở sau mắt sẽ đi vào kết quả như thế nào?
+2. Bỏ swap khi direction âm. So hai camera ở hai phía đối nhau của box; một phía có thể biến mất dù hình học đối xứng.
+3. Kiểm một ray song song ở x=2 và một ray ở đúng x=1. Cả hai đều có direction.x=0 nhưng không có cùng kết quả.
+
+## Tự kiểm tra kết quả
+
+- [ ] Ray miss không được đưa vào loop và không đọc texture.
+- [ ] Camera inside bắt đầu ở t=0; ray chỉ chạm mặt rồi đi ra không có đoạn dương.
+- [ ] Parallel/outside, on-face, direction âm và box ở sau mắt đều có fixture.
+- [ ] Không gọi ảnh độ dài interval là một ảnh volume hoàn chỉnh.
+
+## Bài tập mở rộng
+
+Đổi box thành một AABB không đặt tại gốc trong bản CPU thử nghiệm. Viết lại ba đáp số bằng tay rồi mới sửa shader. Nếu mở rộng source chính, nhớ cập nhật mapping world → uvw cùng box, không chỉ thay hình học giao ray.
+
+[Bài 4](./04-luu-va-upload-volume) sẽ tạo mảng scalar thật và kiểm một điểm đọc từ texture 3D trước khi đọc cả đoạn.

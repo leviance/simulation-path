@@ -1,0 +1,162 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đặt ba lát cắt trở lại trong khối 3D
+
+## Vấn đề cần giải quyết
+
+Ba ảnh đã cho biết bên trong mẫu có gì, nhưng người mới vẫn phải tưởng tượng chúng gặp nhau ở đâu. Bài này thêm một khối cắt mở để đặt các ảnh về đúng vị trí trong không gian. Khi xoay góc nhìn, ta thấy rõ ba mặt có chung một điểm, chứ không phải ba ảnh treo độc lập.
+
+Phần mới **không thay sampler**. Camera/CPU rasterizer/vỏ tham chiếu được cung cấp đầy đủ dưới dạng scaffold. Ta sẽ đọc luồng dữ liệu và nối chúng vào ứng dụng; không phải tự xây lại bài trích mesh hoặc chuyển sang ray marching.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta bỏ phần khối nằm đồng thời ở phía x, y và z lớn hơn probe. Ba mặt vừa mở ra lần lượt là YZ, XZ và XY. Scalar trên các mặt ấy chính là các ảnh đã dựng, không phải một công thức màu viết riêng cho mô hình 3D.
+
+Vỏ ngoài là mesh tham chiếu lấy từ volume với iso 0,12 và stride 2 voxel. Nó giúp nhìn hướng và độ sâu, không dùng để đo giá trị. Việc lấy mẫu ảnh vẫn đọc volume đầy đủ; zero padding của bộ dựng vỏ cũng không được chèn vào mảng dữ liệu thật.
+
+Camera chỉ thay projection. Probe là điểm đo trong world; quay camera không được làm thay đổi probe, địa chỉ voxel hoặc scalar.
+
+<InteractiveLab demo="volume-slicer" mode="slice53-6" />
+
+## Viết code từng bước
+
+### 1. Nhận diện phần camera được cung cấp
+
+`cameraFrame` dựng eye, forward/right/up và focal từ các tham số orbit. Nó chỉ nhận camera cùng kích thước vùng vẽ, không nhận volume để xoay lại dữ liệu.
+
+{/* snippet include/camera.hpp#camera-frame */}
+
+```cpp title="include/camera.hpp — Camera của bộ quan sát"
+inline CameraFrame cameraFrame(Camera camera, int width, int height) {
+    if (width < 1 || height < 1) throw std::invalid_argument("Positive viewport dimensions required");
+    camera.limit();
+    const Vec3 eye{camera.distance * std::cos(camera.pitch) * std::sin(camera.yaw), camera.distance * std::sin(camera.pitch), camera.distance * std::cos(camera.pitch) * std::cos(camera.yaw)};
+    const Vec3 forward = unit(eye * -1);
+    const Vec3 right = unit(cross(forward, {0, 1, 0}));
+    return {eye, right, cross(right, forward), forward, height / (2 * std::tan(0.48)), width, height};
+}
+```
+
+Basis này được dùng trong `project`, `cameraRay` và rasterizer. Zoom bị giới hạn để camera không đi xuyên qua near plane của scaffold. Nhu cầu đi trong một world 3D không thuộc Project 53.
+
+### 2. Tạo vỏ tham chiếu khi dataset đổi
+
+Source của bộ dựng vỏ được cung cấp để project tự chạy độc lập. Nó duyệt một grid thưa, chia cell thành tetrahedra rồi nội suy cạnh cắt isovalue. Không cần chép toàn bộ thuật toán ấy từ đầu để học volume slicing; phần phải tự viết của học phần là storage, sampler và slice renderer ở các bài trước.
+
+{/* snippet include/context-mesh.hpp#context-build */}
+
+```cpp title="include/context-mesh.hpp — Scaffold dựng vỏ từ dữ liệu thực"
+inline Mesh buildContextMesh(const Volume& volume) {
+    // Two-voxel stride is explicitly a presentation approximation, never a measurement.
+    std::array<std::vector<int>, 3> coordinates;
+    for (int axis = 0; axis < 3; ++axis) {
+        coordinates[axis].push_back(-1);
+        for (int i = 0; i < volume.grid().size[axis]; i += 2) coordinates[axis].push_back(i);
+        if (coordinates[axis].back() != volume.grid().size[axis] - 1)
+            coordinates[axis].push_back(volume.grid().size[axis] - 1);
+        coordinates[axis].push_back(volume.grid().size[axis]);
+    }
+    constexpr std::array<std::array<int, 3>, 8> corners{{{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}}};
+    constexpr std::array<std::array<int, 4>, 6> tetrahedra{{{0, 1, 2, 6}, {0, 2, 3, 6}, {0, 3, 7, 6}, {0, 7, 4, 6}, {0, 4, 5, 6}, {0, 5, 1, 6}}};
+    Mesh mesh;
+    for (std::size_t z = 0; z + 1 < coordinates[2].size(); ++z) {
+        for (std::size_t y = 0; y + 1 < coordinates[1].size(); ++y) {
+            for (std::size_t x = 0; x + 1 < coordinates[0].size(); ++x) {
+                std::array<Vec3, 8> points;
+                std::array<double, 8> scalar{};
+                for (std::size_t corner = 0; corner < corners.size(); ++corner) {
+                    const int ix = coordinates[0][x + corners[corner][0]];
+                    const int iy = coordinates[1][y + corners[corner][1]];
+                    const int iz = coordinates[2][z + corners[corner][2]];
+                    points[corner] = volume.grid().centre(ix, iy, iz);
+                    if (ix >= 0 && iy >= 0 && iz >= 0 && ix < volume.grid().size[0] && iy < volume.grid().size[1] && iz < volume.grid().size[2])
+                        scalar[corner] = volume.at(ix, iy, iz);
+                }
+                for (const auto& tetrahedron : tetrahedra) {
+                    std::array<Vec3, 4> positions;
+                    std::array<double, 4> values;
+                    for (int vertex = 0; vertex < 4; ++vertex) {
+                        positions[vertex] = points[tetrahedron[vertex]];
+                        values[vertex] = scalar[tetrahedron[vertex]];
+                    }
+                    meshTetrahedron(volume, positions, values, mesh);
+                }
+            }
+        }
+    }
+    return mesh;
+}
+```
+
+Các chỉ số ngoài volume chỉ cung cấp nền 0 cho bộ dựng vỏ. Mảng scalar gốc không được sửa. `maxContextTriangles` chặn nguồn dữ liệu khiến vỏ quá phức tạp; nạp thất bại giữ dataset trước đó chứ không lặng lẽ dùng một ảnh chụp thay ứng dụng.
+
+### 3. Gắn đúng ảnh lên đúng mặt cắt
+
+Sau khi clip vỏ, mỗi cap dùng trục fixed và hai trục nằm trên mặt từ cùng `axesFor`. Rasterizer nội suy thuộc tính theo perspective, kiểm depth rồi đọc scalar image của mặt tương ứng. Nó bỏ vùng scalar dưới isovalue trong phần cap để thấy khoảng rỗng của mẫu vật.
+
+{/* snippet include/raster.hpp#context-caps */}
+
+```cpp title="include/raster.hpp — Ba cap dùng đúng ba ảnh đang xem"
+const Vec3 upper = grid.origin + grid.extent();
+for (int view = 0; view < 3; ++view) {
+    const Axes axes = axesFor(view);
+    Vec3 normal;
+    normal[axes.fixed] = 1;
+    Vec3 a = probe;
+    Vec3 b = probe;
+    Vec3 c = probe;
+    Vec3 d = probe;
+    b[axes.horizontal] = upper[axes.horizontal];
+    c[axes.horizontal] = upper[axes.horizontal];
+    c[axes.vertical] = upper[axes.vertical];
+    d[axes.vertical] = upper[axes.vertical];
+    raster.triangle(frame, {{{a, normal}, {b, normal}, {c, normal}}}, grid, &slices[view], view, window, colored);
+    raster.triangle(frame, {{{a, normal}, {c, normal}, {d, normal}}}, grid, &slices[view], view, window, colored);
+}
+```
+
+Nhìn nhánh view XY: z giữ bằng probe.z, x/y đi từ probe tới các mặt trên của box. Hai nhánh còn lại dùng cùng quy tắc qua bảng trục. Không hoán vị thủ công thêm lần nữa trong texture coordinate.
+
+### 4. Nối ảnh và vỏ vào refresh
+
+Ảnh phải được cập nhật trước khi gọi `drawContext`. `State` giữ vỏ giữa các lần vẽ; chỉ tạo lại nó khi dataset đổi, không mỗi khi xoay camera.
+
+{/* snippet include/state.hpp#refresh-context */}
+
+```cpp title="include/state.hpp — Dựng ảnh phối cảnh sau khi có các lát"
+if (!scene) scene = std::make_unique<Raster>(820, 620);
+const auto started = std::chrono::steady_clock::now();
+drawContext(*scene, cameraFrame(camera, 820, 620), mesh, grid(), probe, slices, window, colored, cut);
+sceneMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+```
+
+`sceneMs` là thời gian CPU dựng ảnh context ở lần refresh, không phải một benchmark FPS chuẩn. GPU chỉ trình bày texture qua SDL; không có compute shader hay phép tích lũy thể tích dọc tia ở đây.
+
+## Ghép các phần lại
+
+`State::load` chuẩn bị thêm mesh trước khi commit dataset; `refresh` dựng ba scalar image rồi vẽ context; `main` upload ảnh 820×620 vào scene texture. `drawUi` chỉ trình bày texture và bảng điều khiển. Các vai trò này không được nối ngược để renderer trở thành nơi giữ dữ liệu.
+
+```bash
+cmake --build build --config Debug --target project_53_checkpoint_6 --parallel 1
+```
+
+Thử nguyên khối/cắt mở, kéo ba slider và xoay góc nhìn. Màu trong 3D chịu shading để thấy độ sâu, nên khi cần đọc giá trị hãy nhìn ảnh phẳng/inspector, không ước lượng scalar từ độ sáng của vỏ.
+
+## Thử làm sai để hiểu đúng
+
+1. Giữ probe, ghi scalar và địa chỉ tám mẫu rồi orbit một vòng. Mọi giá trị đo phải giữ nguyên dù hình ảnh 3D đổi mạnh.
+2. Tạm gắn ảnh XY cho cả ba cap. Với Sphere đối xứng có thể khó nhận ra; chọn Layers hoặc Ramp để thấy vì sao phải dùng dataset kiểm hướng.
+3. Dự đoán đổi stride của vỏ có được làm thay ảnh phẳng không. Nếu có, bạn đã dùng nhầm mesh hoặc grid thưa làm nguồn đo. Không tăng stride để giả vờ đã xử lý đủ volume lớn.
+
+## Tự kiểm tra kết quả
+
+- [ ] Khối có perspective/depth, xoay/zoom được và ba cap đi đúng vị trí theo mm.
+- [ ] Camera không làm dời probe; cap và ảnh phẳng dùng đúng cùng mặt cắt.
+- [ ] Số mẫu volume đầy đủ không thay theo số triangle của vỏ.
+- [ ] Đây là bề mặt cộng ba lát, không phải volume ray marching, X-ray hay CT reconstruction.
+
+## Bài tập mở rộng
+
+Tắt shading trên cap rồi so với ảnh phẳng của cùng mặt. Sau đó thay màu viền XY/XZ/YZ để đánh dấu hướng mà không sửa palette scalar. Mục tiêu là làm hình học dễ đọc hơn, không thêm một ý nghĩa khoa học không có trong dữ liệu.
+
+Bài tiếp theo cho phép chọn điểm trực tiếp trên ảnh. Khi đó việc dùng đúng rectangle và cùng quy ước trục sẽ quan trọng hơn việc mô hình trông đẹp.

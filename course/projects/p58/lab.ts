@@ -1,39 +1,53 @@
 import type { ProjectLabMeta } from "../../labs/types";
 const data = {
+  native: {
+    directory: "/field-notes/voxel-expedition",
+    overview: ["bank"],
+    lessons: {},
+    takes: {
+      bank: {
+        title: "Bờ suối đầu tiên",
+        source: "Project 58 · Bản hoàn chỉnh",
+        poster: "streambank.png",
+        alt: "Nước xanh nằm giữa hai bờ cát thành bậc, phía trên là những thân cây voxel.",
+        caption:
+          "Lấy hai thân cây làm mốc. Các bậc cát mà bạn nhìn thấy chính là bề mặt của những cột block.",
+      },
+    },
+  },
   base: {
-    label: "VOXEL CHUNK LAB",
-    title: "Từ một cube đến 4096 block",
-    description: "Đối chiếu dữ liệu x/z/y, mesh sáu mặt và Z-buffer bằng một chunk hữu hạn.",
+    label: "BỜ SUỐI VOXEL",
+    title: "Đứng trong mảnh đất đầu tiên",
+    description: "Đi tới, quay nhìn và đối chiếu sơ đồ lớp với vật liệu ngay trước mắt.",
   },
   modes: {
     "voxel58-1": {
-      title: "Một cube chạy được",
-      description: "Sáu quad, hai triangles mỗi quad, camera cố định và CPU framebuffer.",
+      title: "Viên đá đầu tiên bên bờ suối",
+      description: "Từ cửa sổ có bầu trời đến sáu mặt của một viên đá.",
     },
     "voxel58-2": {
-      title: "Bộ nhớ của chunk",
-      description: "Một block tại (7,7,7); đọc lớp y=7 theo x/z, chưa dựng toàn chunk.",
+      title: "Một viên đá nằm ở đâu trong 4.096 ô?",
+      description: "Từ vị trí trong thế giới đến một địa chỉ không trùng trong mảng.",
     },
     "voxel58-3": {
-      title: "Mesh chưa tối ưu",
-      description: "4096 block đặc, 49152 triangles; không bỏ mặt bên trong.",
+      title: "Vì sao một khối đất cần tới 49.152 tam giác?",
+      description: "Dựng bản chưa tối ưu để có mốc đối chiếu trước khi bỏ mặt khuất.",
     },
     "voxel58-4": {
-      title: "Đất bậc thang",
-      description: "Grass/Dirt/Stone, preset single/full/steps/empty và camera cố định.",
+      title: "Khoét lòng suối bằng độ cao từng cột",
+      description: "Lấp từng cột đất, thêm nước và đọc họa tiết riêng trên từng mặt.",
     },
     "voxel58-5": {
-      title: "Camera và Z-buffer",
-      description: "Xoay/zoom có giới hạn, tắt depth để thấy draw order không đủ.",
+      title: "Tự bước tới một thân cây",
+      description: "WASD đi trong thế giới thật; camera di chuyển nhưng dữ liệu đứng yên.",
     },
     "voxel58-6": {
-      title: "Đọc từng lớp",
-      description: "Cắt hiển thị ở y=slice; chọn ô bảng x/z, không ray picking hoặc sửa block.",
+      title: "Mở một lát ngang của bờ suối",
+      description: "So lát x/z với cỏ, đất và nước dưới tầm mắt.",
     },
     "voxel58-7": {
-      title: "Kiểm chứng bản hoàn chỉnh",
-      description:
-        "Kiểm số block/tam giác và lớp đáy; dùng CTest để kiểm depth, winding và bounds.",
+      title: "Đi một vòng và kiểm tra bản hoàn chỉnh",
+      description: "Đo hình học, kiểm depth rồi tự đi một vòng trong bản C++ hoàn chỉnh.",
     },
   },
 } satisfies ProjectLabMeta;

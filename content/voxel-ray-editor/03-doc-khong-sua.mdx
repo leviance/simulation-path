@@ -1,0 +1,123 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Đóng băng phép đo và đi quanh vật vừa ngắm
+
+## Vấn đề cần giải quyết
+
+Đứng ở bờ cát, chọn một viên rồi lùi lại. Ta muốn giữ lại kết quả vừa đọc để nhìn mặt đó từ phía bên. Không cần cắm một vật mới vào thế giới; một bản ghi tọa độ, normal và khoảng cách là đủ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Phân biệt ba kết quả: gặp vật liệu, đi hết tầm trong không khí, hoặc chạm biên chưa có dữ liệu. Trường hợp cuối không có nghĩa là trời trống. Cho phép nhìn xuyên vào phần chưa nạp sẽ khiến ống ngắm chỉ nhầm vật ở xa.
+
+<InteractiveLab demo="voxel-ray-editor" mode="voxel60-3" />
+
+## Viết code từng bước
+
+Khi đi vòng quanh một ô để xem đường tia, phép đo mới thường đã thay thế phép đo cũ. Hãy giữ lại một lần đo nhưng vẫn cho mắt di chuyển.
+
+### Giữ cả tia, không chỉ ô trúng
+
+Trong `field-scene.hpp`, thêm `holdHit`, ban đầu tắt. Chỉ ghi `shotOrigin`, `shotDirection` và `hit` khi không giữ kết quả. Không dừng toàn bộ `update`. Hai đoạn đọc ô và tạo kết quả dưới đây đã có từ bài trước: việc mới là quyết định khi nào được chạy chúng.
+
+{/* snippet include/trail/field-scene.hpp#read-cell */}
+
+```cpp title="include/trail/field-scene.hpp — Phân biệt một ô Air với cột chưa nạp"
+const auto sample = [&](Cell c) {
+    const Key k{splitCoordinate(c.x).chunk, splitCoordinate(c.z).chunk};
+    return Sample{region.tiles.contains(k), region.read(c.x, c.y, c.z)};
+};
+const Vec3 dir = eyeRay(camera, 1, 1, 2, 2);
+const Key start = positionKey();
+if (!region.tiles.contains(start)) {
+    Hit unknown{};
+    unknown.unknown = true;
+    return unknown;
+}
+Vec3 low{double(start.first * side), 0, double(start.second * side)};
+Vec3 high{low.x + side, 0, low.z + side};
+for (const auto& [k, tile] : region.tiles) {
+    low.x = std::min(low.x, double(k.first * side));
+    low.z = std::min(low.z, double(k.second * side));
+    high.x = std::max(high.x, double((k.first + 1) * side));
+    high.z = std::max(high.z, double((k.second + 1) * side));
+    high.y = std::max(high.y, double(tile.data.height()));
+}
+const auto cut = clipVolume(camera.eye, dir, low, high, 56);
+if (!cut.crosses)
+    return {};
+Hit result = probe(camera.eye + dir * cut.enter, dir, cut.leave - cut.enter, sample);
+result.distance += cut.enter;
+if (!result.found && !result.unknown && cut.leave < 56) {
+    const Vec3 beyond = camera.eye + dir * (cut.leave + 1e-7);
+    if (beyond.y >= 0 && beyond.y < high.y)
+        result.unknown = true;
+}
+return result;
+```
+
+{/* snippet include/trail/probe.hpp#read-only-hit */}
+
+```cpp title="include/trail/probe.hpp — Trả kết quả ngay tại lần gặp đầu"
+const Sample sample = read(hit.cell);
+if (!sample.known) {
+    hit.unknown = true;
+    return hit;
+}
+if (sample.block != Block::Air) {
+    hit.material = sample.block;
+    hit.found = true;
+    return hit;
+}
+```
+
+<VoxelWorkFile project="60" step={3} file="field-scene" />
+
+### Gắn phím I để ghim phép đo
+
+Trong `field-controls.hpp`, đảo `scene.holdHit` khi nhận I. F3 vẫn chỉ bật/tắt hiển thị. Nếu bấm I mà số khoảng cách vẫn đổi khi bước chân, bạn đã giữ tên ô nhưng chưa giữ toàn bộ phép đo.
+
+{/* snippet include/trail/field-controls.hpp#freeze-key */}
+
+```cpp title="include/trail/field-controls.hpp — Giữ lần đo bằng phím I"
+if (key == SDLK_I)
+    scene.holdHit = !scene.holdHit;
+```
+
+<VoxelWorkFile project="60" step={3} file="field-controls" />
+
+## Ghép các phần lại
+
+Bật F3, ghi lại ô, normal và khoảng cách tới một viên đá rồi nhấn I. Đi ngang: viền ô và con số vẫn thuộc lần đo cũ. Nhấn I lần nữa rồi ngẩng lên trời: kết quả cũ phải được thay. Số lần dựng mesh không được tăng.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_60_work --parallel 1
+.\build-work\Release\project_60_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Tạm coi mọi chunk thiếu là Air và thử tia đi ngang biên. Kết quả “không có gì” trông hợp lý nhưng không còn phân biệt được chưa biết với đã kiểm tra.
+
+## Tự kiểm tra kết quả
+
+Qua lần lượt đá, cát, nước và trời; đồng thời kiểm hash ô, số quad và số lần dựng mesh trước/sau một loạt phép dò. Tất cả số đo về hình học phải bất biến.
+
+
+Khi bản của bạn đã đủ các tính năng, chạy bộ kiểm của project trên chính `work/include`. Dùng lại thư mục `build-work` đã cấu hình với `VOXEL_WORKBOOK=ON`; chạy test của bản mẫu trong thư mục khác không kiểm được mã này.
+
+```bash title="Windows / Visual Studio — kiểm bài làm ở cả hai cấu hình"
+cmake --build build-work --config Debug --target project_60_tests --parallel 1
+ctest --test-dir build-work -C Debug --output-on-failure --timeout 30
+cmake --build build-work --config Release --target project_60_tests --parallel 1
+ctest --test-dir build-work -C Release --output-on-failure --timeout 30
+```
+
+Với Ninja/Make, kiểm Release trong `build-work`. Để kiểm Debug thật, cấu hình thêm `cmake -S . -B build-work-debug -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Debug` rồi dùng `build-work-debug` cho hai lệnh Debug. Cả hai đọc cùng một thư mục `work/`.
+
+## Bài tập mở rộng
+
+Tạo fixture có một bức tường phía sau vùng chưa nạp. Viết dự đoán cho lần dò trước và sau khi nạp vùng giữa.
+
+[Tải mã hoàn chỉnh của Project 60](/downloads/project-60-voxel-ray-editor.zip) · [Sang Project 61](/projects/voxel-greedy-meshing).

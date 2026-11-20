@@ -31,10 +31,12 @@ inline bool validRect(Rect r) {
 }
 
 #if LAB_CHECKPOINT >= 3
+// [snippet clip]
 inline Rect intersect(Rect a, Rect b) {
     const double x = std::max(a.x, b.x);
     const double y = std::max(a.y, b.y);
     return {x, y, std::max(0.0, std::min(a.x + a.width, b.x + b.width) - x), std::max(0.0, std::min(a.y + a.height, b.y + b.height) - y)};
 }
+// [/snippet clip]
 #endif
 } // namespace lab

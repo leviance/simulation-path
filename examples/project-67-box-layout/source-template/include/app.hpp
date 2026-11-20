@@ -7,7 +7,7 @@ struct App {
     LayoutState layout;
     Model model;
     Ui ui;
-    bool boxes = true;
+    bool boxes = false;
 #if LAB_CHECKPOINT >= 7
     std::string message = "Layout cached until inputs change";
 #elif LAB_CHECKPOINT >= 4
@@ -26,12 +26,14 @@ inline void suspend(App& app) {
 
 #if LAB_CHECKPOINT >= 1
 // Theo dõi builder -> world bounds trước khi thay cách tính tọa độ.
+// [snippet world-observer]
 inline std::string describePause(const LayoutState& state) {
     const auto view = locate(state.scene.tree, state.scene.pause);
     if (!view)
         return "Pause is clipped or hidden";
     return "Pause world=(" + std::to_string(int(view->bounds.x)) + "," + std::to_string(int(view->bounds.y)) + ") size=" + std::to_string(int(view->bounds.width)) + "x" + std::to_string(int(view->bounds.height));
 }
+// [/snippet world-observer]
 #endif
 
 inline void draw(SDL_Renderer* renderer, App& app) {
@@ -54,28 +56,25 @@ inline void draw(SDL_Renderer* renderer, App& app) {
             require(SDL_SetRenderDrawColor(renderer, 255, 190, 104, 255));
             const SDL_FRect outer{float(r.x - style.margin.left), float(r.y - style.margin.top), float(r.width + style.margin.left + style.margin.right), float(r.height + style.margin.top + style.margin.bottom)};
             require(SDL_RenderRect(renderer, &outer));
+            SDL_FRect border{float(r.x), float(r.y), float(r.width), float(r.height)};
+            bench::ink(renderer, {88,169,236,255}); SDL_RenderRect(renderer, &border);
+            SDL_FRect padding{float(r.x+style.border), float(r.y+style.border), float(r.width-2*style.border), float(r.height-2*style.border)};
+            bench::ink(renderer, {190,157,230,255}); SDL_RenderRect(renderer, &padding);
         }
     }
 #endif
-    text(renderer, 48, 478, "Tab focus | Enter/Space click | Arrows slider | T rebuild");
-#if LAB_CHECKPOINT >= 9
-    text(renderer, 48, 496, "[ ] gap | H Reset | A/D labels | Shift+arrows width | O | F1");
-#elif LAB_CHECKPOINT >= 8
-    text(renderer, 48, 496, "[ ] gap | H Reset | A/D labels | Shift+arrows width | O overflow");
-#elif LAB_CHECKPOINT >= 7
-    text(renderer, 48, 496, "[ ] gap | H Reset | A/D labels | Shift+arrows width");
-#elif LAB_CHECKPOINT >= 6
-    text(renderer, 48, 496, "[ ] gap | H hide Reset | A/D labels | B boxes");
-#elif LAB_CHECKPOINT >= 4
-    text(renderer, 48, 496, "[ ] gap | B boxes");
-#elif LAB_CHECKPOINT >= 2
-    text(renderer, 48, 496, "B boxes; positions remain manual");
+    text(renderer, 24, 510, "B boxes  |  [ ] gap  |  - = padding  |  H hide Reset  |  A D labels  |  Shift+arrows width");
+#if LAB_CHECKPOINT >= 2
+    if (app.boxes) {
+        bench::box(renderer, {30,96,392,88}, {25,49,55,255});
+        text(renderer, 40, 105, "Amber margin  /  blue border");
+        text(renderer, 40, 123, "Violet padding edge  /  mint content");
+        text(renderer, 40, 144, app.message);
+#if LAB_CHECKPOINT >= 3
+        const auto& size = app.layout.sizes.at(tree.root->id);
+        text(renderer, 40, 163, "Root: natural " + std::to_string(int(size.naturalHeight)) + " / fixed " + std::to_string(int(size.height)) + "    passes " + std::to_string(app.layout.passes));
 #endif
-    text(renderer, 48, 72, "layout passes=" + std::to_string(app.layout.passes));
-    text(renderer, 48, 92, app.message);
-#if LAB_CHECKPOINT >= 1
-    text(renderer, 48, 112, describePause(app.layout));
+    }
 #endif
-    require(SDL_RenderPresent(renderer));
 }
 } // namespace lab

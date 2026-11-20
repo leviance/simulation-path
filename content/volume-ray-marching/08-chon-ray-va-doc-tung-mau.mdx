@@ -1,0 +1,113 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chọn một tia rồi đọc từng mẫu của nó
+
+## Vấn đề cần giải quyết
+
+Ta đã có một ảnh volume tương tác, nhưng khi một vùng quá tối hoặc một lõi biến mất, ảnh không tự nói lỗi nằm ở đâu. Bài này nối một pixel được chọn với dãy sample của ray ấy: vị trí, ds, raw density, density sau cutoff và trạng thái tích lũy.
+
+Đây là **trace tham chiếu CPU**, không phải readback từng sample từ fragment shader. Nó giúp dự đoán shader phải làm gì; nếu shader có bug, trace CPU vẫn có thể đúng. Bài 10 sẽ kiểm raw output GPU riêng để không dùng cùng một bằng chứng cho hai việc.
+
+## Hiểu ý tưởng trước khi viết code
+
+Vị trí chuột nằm trong cửa sổ, còn cameraRay cần u/v trong scene. Sidebar không thuộc ảnh 3D. Sau khi chuẩn hóa, ray được dựng bằng đúng camera/aspect dùng để render; không chọn một voxel chỉ vì con trỏ ở gần hình chiếu của nó.
+
+Ta tách hai thao tác: drag bình thường orbit camera; Shift+click chọn ray. Lựa chọn u/v được giữ khi camera đổi, nên đó là “pixel ở cùng vị trí tương đối”, không phải một world point được khóa vào vật thể. Mỗi lần camera đổi, ray qua pixel ấy đương nhiên đổi.
+
+Profile ghi sample từ chính vòng tích lũy CPU đã học. Trục ngang là quãng đường trong interval, đường cam là density sau cutoff; trong alpha có thêm đường T. Đường T không thể dùng để diễn giải MIP/average.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-8" />
+
+## Viết code từng bước
+
+### 1. Đổi điểm chọn sang u/v của scene
+
+`sceneWidth` trừ sidebar khi tools đang mở. Y chuột của SDL đi xuống, đúng với quy ước `cameraRay` CPU; không đảo nó thêm lần nữa ở đây.
+
+{/* snippet include/input.hpp#pick-ray */}
+
+```cpp title="include/input.hpp — Chọn ray, không pick vào sidebar"
+if (SDL_GetModState() & SDL_KMOD_SHIFT) {
+    state.inspect = true;
+    state.selectedU = std::clamp(static_cast<double>(event.button.x) / sceneWidth(width, state.showcase), 0.0, 1.0);
+    state.selectedV = std::clamp(static_cast<double>(event.button.y) / height, 0.0, 1.0);
+    state.invalidate();
+    return true;
+}
+```
+
+Trong Canvas, giữ Shift rồi click hoặc dùng hai thanh u/v bên dưới. Native dùng phím dấu chấm/dấu phẩy để tiến/lùi con trỏ sample. Không bắt người dùng chỉ có một cách thao tác bằng chuột.
+
+### 2. Dựng lại reference khi tham số đổi
+
+Từ Bài 5, dòng số CPU đã cho biết kết quả của ray giữa ảnh. Mốc này thêm điểm chọn và bật ghi profile. Nếu camera/settings/dataset/aspect không đổi, không cần tính lại CPU trace trong mỗi frame.
+
+{/* snippet include/state.hpp#inspect-ray */}
+
+```cpp title="include/state.hpp — Cache trace theo đúng ray đang chọn"
+void refreshTrace(double aspect) {
+    if (!dirty && aspect == traceAspect)
+        return;
+    const Ray ray = cameraRay(camera, selectedU, selectedV, aspect);
+    const bool record = true;
+    trace = march(ray, *volume, settings, record);
+    traceAspect = aspect;
+    dirty = false;
+    shown = std::min(shown, trace.samples);
+}
+```
+
+`march` nhận `record=true` nên lưu các trạng thái sau mỗi sample. Mảng này có tối đa 512 phần tử, không phải một bản sao của volume N³. Khi parameter đổi, `invalidate` đặt lại con trỏ bước và đánh dấu cache không còn phù hợp.
+
+### 3. Đừng để một lần kéo giữ chuột mãi
+
+Mouse-up có thể bị mất khi đổi focus hoặc rời cửa sổ. Ngoài nhả ở mouse-up/blur/reset, motion phải kiểm left-button mask còn tồn tại không.
+
+{/* snippet include/input.hpp#drag-guard */}
+
+```cpp title="include/input.hpp — Guard cho sự kiện thả chuột bị mất"
+if (event.type == SDL_EVENT_MOUSE_MOTION && drag.active) {
+    if (!(event.motion.state & SDL_BUTTON_LMASK))
+        release(drag, state);
+    else {
+        state.camera.yaw += event.motion.xrel * 0.006;
+        state.camera.pitch += event.motion.yrel * 0.006;
+        state.camera.limit();
+        state.invalidate();
+    }
+}
+```
+
+Khi drag hợp lệ, chỉ camera thay đổi. Khi chọn ray, chỉ u/v thay đổi. Cả hai có thể làm trace khác nhưng không ghi vào density hoặc tạo lại texture.
+
+## Ghép các phần lại
+
+```powershell
+cmake --build build --config Debug --target project_54_checkpoint_8 --parallel 1
+.\build\Debug\project_54_checkpoint_8.exe
+```
+
+Chọn một ray xuyên lõi rồi tiến từng mẫu. So tổng ds với độ dài interval; tìm đoạn density tăng và lúc T giảm nhanh. Tiếp đó chọn vùng miss: phải có zero sample và không được giữ profile của ray trước như thể vẫn là kết quả mới.
+
+Pause ở Canvas dừng việc lần lượt hiện sample, không khóa camera hay controls. Trong C++, Space dừng/quay camera tự động; density vẫn là dữ liệu tĩnh. Cả hai mở ở trạng thái dừng và không tự chạy lại sau blur hoặc reduced motion.
+
+## Thử làm sai để hiểu đúng
+
+1. Chuẩn hóa x bằng toàn window khi sidebar mở. So ray giữa scene với ray giữa window; vì sao inspector không còn khớp pixel được chọn?
+2. Tạm giữ cache trace sau khi đổi cutoff. Ảnh thay nhưng bảng số cũ không đổi — đây là lỗi vòng đời dữ liệu, không phải “CPU/GPU khác nhau”.
+3. Khi đang kéo, alt-tab hoặc nhả chuột ngoài cửa sổ rồi quay lại. Kiểm không còn camera tự xoay theo một drag đã kết thúc.
+
+## Tự kiểm tra kết quả
+
+- [ ] Inspector ghi rõ CPU reference, không tự nhận đang đọc sample GPU.
+- [ ] u/v dùng scene rectangle hiện tại, cả khi bật/tắt Showcase và đổi DPI.
+- [ ] Raw/classified density, ds và T có tên/ý nghĩa riêng; không suy từ màu đã gamma.
+- [ ] Miss xóa trace cũ; parameter đổi vô hiệu hóa cache/con trỏ bước.
+- [ ] Pointer capture được nhả trên mouse-up, cancel, blur và reset.
+- [ ] Canvas reduced motion vẫn cho tiến mẫu bằng nút, không tự resume khi tắt tùy chọn.
+
+## Bài tập mở rộng
+
+Chọn hai ray có MIP gần nhau nhưng đi qua độ dài vùng đặc khác nhau. So average và T của chúng. Ghi lại một trường hợp mà nhìn chỉ ảnh MIP không đủ giải thích ảnh alpha.
+
+[Bài 9](./09-do-chat-luong-va-thoi-gian) dùng cách kiểm bằng số ấy để đo xem step nhỏ hơn đáng giá đến mức nào.

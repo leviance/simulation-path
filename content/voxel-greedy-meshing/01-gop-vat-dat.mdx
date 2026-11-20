@@ -1,0 +1,101 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Một vạt đất phẳng cần bao nhiêu quad?
+
+## Vấn đề cần giải quyết
+
+Bật khung dây trên vách ở Project 59. Hầu hết các ô cùng vật liệu và nằm trên một mặt phẳng; đường biên giữa chúng chẳng kể thêm điều gì về hình dáng vách. Ta vẫn giữ từng block để đọc, chỉ thay cách mô tả bề mặt.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trải mặt bên của vách thành một tờ giấy kẻ ô. Ở một ô chưa dùng, mở rộng theo ngang chừng nào còn cùng vật liệu. Chỉ thêm hàng kế nếu toàn bộ đoạn ngang khớp. Lật sang mặt hướng khác thì bắt đầu tờ giấy mới.
+
+<InteractiveLab demo="voxel-greedy-meshing" mode="voxel61-1" />
+
+## Viết code từng bước
+
+Ở cùng một bức tường đá, Project 59 đã bỏ mặt bên trong nhưng vẫn để mỗi ô ngoài là một tấm vuông. Ta sẽ thử phủ nguyên bức tường bằng một tấm lớn, mà không làm hạt đá to lên theo tấm.
+
+### Trải tường ra lưới rồi tìm một mảng có thể gộp
+
+Trong `greedy.hpp`, quét từng hướng và từng lát. Dùng `exposedFace` để chỉ ghi vật liệu của mặt thật sự lộ vào mask. Từ ô chưa dùng, đi ngang lấy chiều rộng; chỉ nâng chiều cao nếu **cả hàng** còn hợp lệ. Không gộp khác vật liệu. Lá, lá kim và nước vẫn giữ mặt đơn để các đỉnh có thể chuyển động riêng về sau.
+
+{/* snippet include/trail/greedy.hpp#greedy-run */}
+
+```cpp title="include/trail/greedy.hpp — Chọn hình chữ nhật vừa với mask"
+const bool rigid = key != Block::Leaves && key != Block::Needles && key != Block::Water;
+if (rigid) {
+    while (u + width < side && mask[v * side + u + width] == key)
+        ++width;
+    while (v + height < rows) {
+        bool fits = true;
+        for (int dx = 0; dx < width; ++dx) {
+            if (mask[(v + height) * side + u + dx] != key)
+                fits = false;
+        }
+        if (!fits)
+            break;
+        ++height;
+    }
+}
+```
+
+<VoxelWorkFile project="61" step={1} file="greedy" />
+
+### Dựng tấm lớn mà không mất các viên đá nhỏ
+
+Xuất một `Face` với chiều rộng và chiều cao vừa tìm rồi xóa đúng hình chữ nhật khỏi mask. Trình vẽ đã lấy mẫu họa tiết theo từng block: nếu mặt tường rộng 16 ô, phải thấy vân đá lặp 16 lần, không phải một viên đá khổng lồ bị kéo dãn.
+
+{/* snippet include/trail/greedy.hpp#greedy-emit */}
+
+```cpp title="include/trail/greedy.hpp — Cất một mặt và gạch các ô đã dùng"
+for (int dy = 0; dy < height; ++dy)
+    std::fill_n(mask.begin() + (v + dy) * side + u, width, Block::Air);
+const Cell c = maskCell(face, plane, u, v);
+const Vec3 world{double(column.cx * side + c.x), double(c.y), double(column.cz * side + c.z)};
+mesh.push_back({world + faceStarts[face], face, width, height, key});
+```
+
+### Cho F2 so hai cách dựng trên cùng dữ liệu
+
+Trong `region.hpp`, thêm nhánh gọi `greedyMesh` khi dựng cột. Trong `field-scene.hpp`, chọn Greedy lúc mở, ẩn ống ngắm và đổi F2 thành so **Visible với Greedy**. Mắt, dữ liệu block và ánh sáng phải giữ nguyên để so có ý nghĩa.
+
+{/* snippet include/trail/region.hpp#use-greedy */}
+
+```cpp title="include/trail/region.hpp — Chọn bộ gộp mặt cho cột đang dựng"
+else if (mode == Mesher::Greedy)
+    tile.mesh = greedyMesh(column, sample);
+```
+
+<VoxelWorkFile project="61" step={1} file="region" />
+
+<VoxelWorkFile project="61" step={1} file="field-scene" />
+
+## Ghép các phần lại
+
+Dùng phím 3 chọn khối đặc, F1 đọc số, M soi lưới. F2 chuyển từ 1.536 quad của lớp vỏ sang 6 quad của khối gộp. Tắt M và nhìn gần: kích thước hoa văn phải giữ nguyên trong cả hai bản.
+
+Mở terminal cạnh `CMakeLists.txt` của ZIP đã giải nén. Lần cấu hình đầu tạo `work/` từ starter; chỉnh tệp trong đó, rồi build lại cùng target. Cấu hình lần nữa không ghi đè bài làm.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake -S . -B build-work -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_61_work --parallel 1
+.\build-work\Release\project_61_work.exe
+```
+
+Với Ninja hoặc Make trên Linux/macOS, chạy `./build-work/project_61_work` thay cho dòng mở `.exe`.
+
+## Thử làm sai để hiểu đúng
+
+Cho phép thêm cả hàng chỉ vì ô đầu tiên đúng màu. Trên bức tường có một viên khác màu ở giữa, quad sẽ lấn mất viên đó.
+
+## Tự kiểm tra kết quả
+
+Khối đồng nhất 16³ còn đúng sáu quad. Bung chúng thành các mặt đơn vị phải thu lại đúng tập mặt trước khi gộp, kể cả hướng và vật liệu.
+
+## Bài tập mở rộng
+
+Đo hai cảnh cùng số block: tường một màu và bàn cờ hai màu. Vì sao chỉ cảnh đầu giảm mạnh số quad?
+
+[Bài 2: Cho cơn gió đi qua rừng, thay vì lắc cả cảnh](/projects/voxel-greedy-meshing/02-gio-di-qua-rung).

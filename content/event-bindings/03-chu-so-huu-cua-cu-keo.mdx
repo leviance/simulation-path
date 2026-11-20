@@ -1,0 +1,85 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kéo Radius ra ngoài bảng mà không chọn nhầm chim
+
+## Vấn đề cần giải quyết
+
+Giữ chuột trên Radius rồi kéo ra tận khung bay. Bạn vẫn đang điều chỉnh bán kính, không phải đang chọn một con chim. 'Chuột nằm ở đâu' và 'ai đang giữ lần kéo này' bắt đầu cho hai câu trả lời khác nhau.
+
+## Hiểu ý tưởng trước khi viết code
+
+Owner được chọn lúc nhấn. Các mẫu move/up gửi về owner dù hover thay đổi. Input chỉ phát khi giá trị sau snap thật sự đổi; Change là lần chốt nếu điểm cuối khác điểm bắt đầu.
+
+<InteractiveLab demo="event-bindings" mode="event71-3" />
+
+## Viết code từng bước
+
+### Gom những mẫu tương đương thành một input
+
+Dùng bounds đầy đủ để quy đổi x, clamp và snap theo range trong file. Hai pixel khác nhau có thể cùng ứng với 80 px nên không cần gọi model hai lần.
+
+{/* snippet include/events/gesture.hpp#sample */}
+
+```cpp title="include/events/gesture.hpp — Gom những mẫu tương đương thành một input"
+inline void sample(Desk& d, Bus& bus, Gesture& g, double x) {
+    const auto id = d.ui.active;
+    const auto v = lab::locate(d.page.layout.scene.tree, id);
+    if (!v || !control(*v) || !d.page.values.contains(id))
+        return;
+    const auto& r = *d.page.document.elements.at(d.page.elements.at(id)).range;
+    const double f = std::clamp((x - v->bounds.x) / v->bounds.width, 0.0, 1.0);
+    const double proposed = snap(r, r.low + f * (r.high - r.low));
+    if (proposed == g.last)
+        return;
+    g.last = proposed;
+    g.edited = true;
+    dispatch(d, bus, {Topic::Input, id, 0, proposed});
+}
+```
+
+### Chốt slider khác với kích hoạt button
+
+Slider giữ quyền nhận mẫu cuối khi thả bên ngoài. Button thì chỉ click nếu thả đúng owner. Hủy trước đó khiến owner bằng 0 và không có lệnh muộn.
+
+{/* snippet include/events/gesture.hpp#end-gesture */}
+
+```cpp title="include/events/gesture.hpp — Chốt slider khác với kích hoạt button"
+inline void end(Desk& d, Bus& bus, Gesture& g, lab::Point p) {
+    lab::reconcile(d.page.layout.scene.tree, d.ui);
+    const auto owner = d.ui.active;
+    if (!owner)
+        return;
+    slide(d, bus, g, p);
+    d.ui.active = 0;
+    if (d.page.values.contains(owner)) {
+        if (g.edited && g.last != g.start)
+            dispatch(d, bus, {Topic::Change, owner, 0, g.last});
+    } else if (d.ui.hot == owner)
+        dispatch(d, bus, {Topic::Click, owner});
+    g = {};
+}
+```
+
+## Ghép các phần lại
+
+Dừng đàn, kéo Radius hết sang phải rồi thả ngoài Panel; giá trị phải là 140 và chim được chọn không đổi. Kéo lặp tại một điểm rồi nhìn số callback thay vì chỉ đếm số SDL event.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_71_checkpoint_3 --parallel 2
+.\build\Release\project_71_checkpoint_3.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Tìm một target mới ở mỗi mousemove và gửi luôn cú kéo cho nó. Khi vượt biên bảng bạn sẽ đổi cả chim đang quan sát hoặc làm thanh kéo bị kẹt.
+
+## Tự kiểm tra kết quả
+
+Cùng một thao tác không làm cả hai việc. Hủy capture rồi gửi up cũ không thể thay bán kính hoặc phát click.
+
+## Bài tập mở rộng
+
+Nếu kéo ra xa rồi trở về đúng giá trị ban đầu, theo hợp đồng này có input không? Có change khi thả không?
+
+[Bài 4: Đưa bàn phím vào cùng đường gọi với chuột](/projects/event-bindings/04-dung-ban-phim).

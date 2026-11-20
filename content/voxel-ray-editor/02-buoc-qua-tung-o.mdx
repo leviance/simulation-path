@@ -1,0 +1,176 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Theo tia đến mặt đầu tiên, không bỏ sót block
+
+## Vấn đề cần giải quyết
+
+Dọc theo tia có rất nhiều điểm nhưng khá ít lần ta thật sự bước sang một block khác. Thay vì nhích từng 0,1 đơn vị rồi hi vọng không bỏ qua viên đá mỏng, ta đi thẳng tới vách ô kế tiếp.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đặt một thước trên mỗi trục. Mỗi thước cho biết còn bao xa thì tia cắt vạch lưới tiếp theo. Lấy khoảng ngắn nhất để bước. Nếu hai vạch trùng nhau ở một cạnh, phải bước đồng thời cả hai, không thăm một ô mà tia chỉ sượt qua góc.
+
+<InteractiveLab demo="voxel-ray-editor" mode="voxel60-2" />
+
+## Viết code từng bước
+
+Từ tâm ngắm, ta cần biết tia gặp mặt nào trước. Không cần nhích đều 0,1 block: hãy tính quãng đường tới vách ô tiếp theo trên mỗi trục.
+
+### Tìm đoạn tia có thể gặp đất
+
+Trong `probe.hpp`, viết `clipVolume` để cắt tia với hộp chứa các cột. Với một trục có hướng bằng 0, tia không bao giờ cắt thêm vách trên trục đó. Nếu mắt ở đúng biên và đi chiều âm, ô đầu thuộc phía âm. `startAxis` chuẩn bị thời điểm cắt đầu tiên và khoảng cách giữa hai lần cắt.
+
+{/* snippet include/trail/probe.hpp#ray-axis */}
+
+```cpp title="include/trail/probe.hpp — Chuẩn bị vạch lưới trên mỗi trục"
+inline RayAxis startAxis(double position, double direction) {
+    int cell = static_cast<int>(std::floor(position));
+    const double infinity = std::numeric_limits<double>::infinity();
+    if (direction == 0)
+        return {cell, 0, infinity, infinity};
+    int step = 1;
+    if (direction < 0) {
+        step = -1;
+        if (position == cell)
+            --cell;
+    }
+    double boundary = cell;
+    if (step > 0)
+        boundary += 1;
+    return {cell, step, (boundary - position) / direction, 1 / std::abs(direction)};
+}
+```
+
+<VoxelWorkFile project="60" step={2} file="probe" />
+
+### Thăm ô theo đúng thứ tự
+
+Trong `probe`, đọc vật liệu ở ô hiện tại trước khi tiến. Nếu hai trục hòa khi chạm cạnh, cho cả hai bước cùng lúc để không thăm một ô tia chỉ sượt qua. Lưu normal của mặt vừa vào. Nước là một lần gặp; cột chưa nạp là dữ liệu chưa biết, không phải `Air`. Đặt vòng bước vào toàn hàm như dưới đây.
+
+{/* snippet include/trail/probe.hpp#dda-cross */}
+
+```cpp title="include/trail/probe.hpp — Bước đến biên sớm nhất"
+const double at = std::min({x.next, y.next, z.next});
+if (at >= reach)
+    break;
+const double eps = 1e-10 * std::max(1.0, at);
+hit.normal = {};
+if (x.next <= at + eps) {
+    x.cell += x.step;
+    x.next += x.spacing;
+    hit.normal.x = -x.step;
+}
+if (y.next <= at + eps) {
+    y.cell += y.step;
+    y.next += y.spacing;
+    if (!hit.normal.x)
+        hit.normal.y = -y.step;
+}
+if (z.next <= at + eps) {
+    z.cell += z.step;
+    z.next += z.spacing;
+    if (!hit.normal.x && !hit.normal.y)
+        hit.normal.z = -z.step;
+}
+hit.distance = at;
+```
+
+{/* snippet include/trail/probe.hpp#full-probe */}
+
+```cpp title="include/trail/probe.hpp — Từ mắt tới lần gặp vật liệu đầu tiên"
+template <class ReadWorld>
+Hit probe(Vec3 eye, Vec3 direction, double reach, ReadWorld read) {
+    Hit hit{};
+    const auto inDomain = [](Vec3 v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) && std::max({std::abs(v.x), std::abs(v.y), std::abs(v.z)}) < 1000000000.0; };
+    if (!inDomain(eye) || !inDomain(direction))
+        return hit;
+    const Vec3 d = normalized(direction);
+    if (!std::isfinite(reach) || reach <= 0 || reach > 128 || dot(d, d) < 0.9)
+        return hit;
+    auto x = startAxis(eye.x, d.x), y = startAxis(eye.y, d.y), z = startAxis(eye.z, d.z);
+    if (eye.x == std::floor(eye.x) && x.step)
+        hit.normal.x = -x.step;
+    else if (eye.y == std::floor(eye.y) && y.step)
+        hit.normal.y = -y.step;
+    else if (eye.z == std::floor(eye.z) && z.step)
+        hit.normal.z = -z.step;
+    while (hit.distance < reach && hit.visited < 390) {
+        hit.cell = {x.cell, y.cell, z.cell};
+        ++hit.visited;
+        const Sample sample = read(hit.cell);
+        if (!sample.known) {
+            hit.unknown = true;
+            return hit;
+        }
+        if (sample.block != Block::Air) {
+            hit.material = sample.block;
+            hit.found = true;
+            return hit;
+        }
+        const double at = std::min({x.next, y.next, z.next});
+        if (at >= reach)
+            break;
+        const double eps = 1e-10 * std::max(1.0, at);
+        hit.normal = {};
+        if (x.next <= at + eps) {
+            x.cell += x.step;
+            x.next += x.spacing;
+            hit.normal.x = -x.step;
+        }
+        if (y.next <= at + eps) {
+            y.cell += y.step;
+            y.next += y.spacing;
+            if (!hit.normal.x)
+                hit.normal.y = -y.step;
+        }
+        if (z.next <= at + eps) {
+            z.cell += z.step;
+            z.next += z.spacing;
+            if (!hit.normal.x && !hit.normal.y)
+                hit.normal.z = -z.step;
+        }
+        hit.distance = at;
+    }
+    return hit;
+}
+```
+
+### Đưa phép đo lên ảnh
+
+Trong `field-scene.hpp`, `Scene::reading()` đổi ô world sang địa chỉ cột. Khi dụng cụ bật, `update` lưu gốc, hướng và kết quả; `draw` viền ô trúng, thêm đường tia khi bật chẩn đoán. Trong `window.hpp`, hiện kết quả cả khi F1 tắt. Không gọi `put` hay dựng lại mesh lúc dò.
+
+{/* snippet include/trail/field-scene.hpp#record-ray */}
+
+```cpp title="include/trail/field-scene.hpp — Ghi nguyên một lần đo"
+shotOrigin = camera.eye;
+shotDirection = basis(camera).forward;
+hit = reading();
+```
+
+<VoxelWorkFile project="60" step={2} file="field-scene" />
+
+<VoxelWorkFile project="60" step={2} file="window" />
+
+## Ghép các phần lại
+
+Bật F3, ngắm một mặt đá gần rồi đi ngang để ngắm mặt khác. Kiểm tọa độ, khoảng cách và chiều normal. Ngẩng lên trời phải mất viền. Ống ngắm chỉ đọc trong tầm 56 block; ngoài tầm không có nghĩa là vật đã biến mất khỏi ảnh.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_60_work --parallel 1
+.\build-work\Release\project_60_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Chỉ cập nhật trục X khi X và Z bằng nhau. Bắn chéo từ tâm ô trên mặt phẳng XZ: chương trình có thể báo va vào viên đá nằm lệch đường chéo.
+
+## Tự kiểm tra kết quả
+
+So DDA với giao ray/hộp của từng block trên một cảnh nhỏ. Kiểm hướng song song trục, biên âm, điểm bắt đầu trong vật liệu và vật nằm đúng giới hạn tầm dò.
+
+## Bài tập mở rộng
+
+Đổi tầm từ 56 xuống 4. Vì sao một vách vẫn thấy trên ảnh nhưng ống ngắm lại không bắt được?
+
+[Bài 3: Đóng băng phép đo và đi quanh vật vừa ngắm](/projects/voxel-ray-editor/03-doc-khong-sua).

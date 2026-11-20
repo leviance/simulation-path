@@ -1,0 +1,86 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Một cú click đi qua ba node nhưng chỉ dừng đàn một lần
+
+## Vấn đề cần giải quyết
+
+Bạn muốn ghi lại số lần người dùng bấm vào nhóm Tools. Nút Pause phải dừng đàn, còn nhóm cha chỉ ghi nhận. Nếu cả hai cùng chạy lệnh Pause thì trên màn hình trông như nút không làm gì cả.
+
+## Hiểu ý tưởng trước khi viết code
+
+Bắt đầu ở target, đi ngược những parent đã có trong tài liệu. `target` không đổi; `current` cho biết callback nào đang nghe. Đánh dấu đã xử lý không có nghĩa là các node phía trên không được quan sát.
+
+<InteractiveLab demo="event-bindings" mode="event71-2" />
+
+## Viết code từng bước
+
+### Đi ngược đúng nhánh cha–con
+
+Tra callback theo current và topic, gọi tối đa một lần tại mỗi node. Với #pause, đường bình thường là #pause → #tools → #desk; không đi qua nhóm slider bên cạnh.
+
+{/* snippet include/events/bus.hpp#dispatch */}
+
+```cpp title="include/events/bus.hpp — Đi ngược đúng nhánh cha–con"
+inline bool dispatch(Desk& d, Bus& bus, Signal event) {
+    bus.route.clear();
+    const auto pos = d.page.elements.find(event.target);
+    if (bus.edition != d.edition || pos == d.page.elements.end())
+        return false;
+    int index = static_cast<int>(pos->second);
+    event.stopAtGroup = bus.stopAtGroup;
+    ++bus.emitted;
+    while (index >= 0) {
+        const auto i = static_cast<std::size_t>(index);
+        const auto& element = d.page.document.elements[i];
+        event.current = d.page.handles[i];
+        bus.route.push_back(element.id);
+        const auto it = bus.listeners.find({event.current, event.type});
+        if (it != bus.listeners.end())
+            it->second(d, event);
+        if (event.stopped)
+            break;
+        index = element.parent;
+    }
+    bus.commands += event.commands;
+    bus.ancestorCalls += event.groups;
+    return event.handled;
+}
+```
+
+### Cha quan sát mà không làm lại lệnh của con
+
+Nhóm Tools tăng số lần quan sát. Chỉ khi bật chính sách stop mới cắt phần còn lại của đường đi; số lệnh vào solver không tăng theo số node đã thăm.
+
+{/* snippet include/events/binding.hpp#bubble-handler */}
+
+```cpp title="include/events/binding.hpp — Cha quan sát mà không làm lại lệnh của con"
+bus.on(d.page, "tools", Topic::Click, [](Desk&, Signal& e) {
+    ++e.groups;
+    if (e.stopAtGroup)
+        e.stopped = true;
+});
+```
+
+## Ghép các phần lại
+
+Bật E, bấm Pause và đọc hai bộ đếm Commands và Group. Bật B rồi bấm lại. Root không còn trong đường đi nhưng đàn vẫn đổi trạng thái đúng một lần.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_71_checkpoint_2 --parallel 2
+.\build\Release\project_71_checkpoint_2.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Thử dừng vòng lặp ngay khi handled thành true. Nhóm cha không còn đếm được click. Hãy để hành động của nút và quyền truyền tiếp là hai quyết định riêng.
+
+## Tự kiểm tra kết quả
+
+Trường hợp bình thường có đủ ba ID; bật stop chỉ còn hai. Một lần click tạo đúng một lệnh thay model trong cả hai trường hợp.
+
+## Bài tập mở rộng
+
+Nếu đăng ký cả handler click và handler change trên cùng một node, việc click có được gọi cả hai hay không?
+
+[Bài 3: Kéo Radius ra ngoài bảng mà không chọn nhầm chim](/projects/event-bindings/03-chu-so-huu-cua-cu-keo).

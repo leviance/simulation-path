@@ -1,0 +1,111 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đọc một quy tắc CSS đến dấu chấm phẩy
+
+## Vấn đề cần giải quyết
+
+Hãy đọc `button { height: 34px; }` như một câu: tìm các button, rồi đặt chiều cao của chúng. Máy chưa thể biết `34` là pixel hay phần trăm nếu bạn âm thầm bỏ phần còn lại của chuỗi.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi rule có đúng một selector và một danh sách declaration giữ nguyên thứ tự. Giá trị đi qua bộ kiểm riêng: màu là sáu chữ số hex sau #, khoảng cách là số px. Đuôi lạ bị từ chối, không tự phỏng đoán.
+
+<InteractiveLab demo="tiny-css" mode="css69-2" />
+
+## Viết code từng bước
+
+### Tách tên selector rồi đi qua từng cặp key/value
+
+Gặp dấu ngoặc đóng trước dấu chấm phẩy thì báo lỗi. Giữ offset của property để có thể chỉ ngay dòng chữ viết nhầm.
+
+{/* snippet include/style/sheet.hpp#rules */}
+
+```cpp title="include/style/sheet.hpp — Tách tên selector rồi đi qua từng cặp key/value"
+inline Sheet parseSheet(std::string_view source) {
+    checkUtf8(source);
+    Cursor c{source};
+    c.take("\xef\xbb\xbf");
+    Sheet sheet;
+    c.skip();
+    while (c.peek()) {
+        if (sheet.rules.size() >= 64)
+            fail(source, c.pos, "rule limit: 64");
+        Rule rule;
+        if (c.peek() == '#' || c.peek() == '.')
+            rule.selector.prefix = source[c.pos++];
+        rule.selector.name = c.word();
+        if (!identifier(rule.selector.name))
+            fail(source, c.pos, "expected simple selector");
+        c.skip();
+        c.need('{');
+        c.skip();
+        while (!c.take('}')) {
+            Declaration d;
+            d.offset = c.pos;
+            d.key = c.word();
+            c.skip();
+            c.need(':');
+            const auto begin = c.pos;
+            while (c.peek() && c.peek() != ';' && c.peek() != '}')
+                ++c.pos;
+            d.value = trim(source.substr(begin, c.pos - begin));
+            c.need(';');
+            validateProperty(d, source);
+            if (rule.properties.size() >= 24)
+                fail(source, d.offset, "declaration limit: 24");
+            rule.properties.push_back(d);
+            c.skip();
+        }
+        sheet.rules.push_back(std::move(rule));
+        c.skip();
+    }
+    return sheet;
+}
+```
+
+### Kiểm cả stylesheet trước khi dùng
+
+Checkpoint 2 báo số rule hợp lệ. Thử typo ở cuối file: không có chuyện nửa file đầu đã đổi màu trên màn hình.
+
+{/* snippet include/style/editor.hpp#read-sheet */}
+
+```cpp title="include/style/editor.hpp — Kiểm cả stylesheet trước khi dùng"
+inline bool reloadCss(Desk& d, Palette& p, const std::filesystem::path& path) {
+    try {
+        const auto css = readFile(path);
+        checkUtf8(css);
+        d.status = std::to_string(parseSheet(css).rules.size()) + " rules; current theme unchanged";
+        p.filename = path.filename().string();
+        d.error = false;
+        return true;
+    } catch (const std::exception& e) {
+        d.error = true;
+        d.status = path.filename().string() + ":" + e.what();
+        return false;
+    }
+}
+```
+
+## Ghép các phần lại
+
+Bấm 3 để xem `broken.css`, sửa mã màu rồi F5. Thử width là 50% hay display là flex: cả hai đều ngoài phạm vi Project 69. Bấm 1 về bản tối.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_69_checkpoint_2 --parallel 2
+.\build\Release\project_69_checkpoint_2.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Nếu dùng `stoi` mà bỏ đuôi chuỗi, 34em có thể lẻn vào như 34px. Hãy thử số hợp lệ nhưng đơn vị sai thay vì chỉ thử một chữ ngẫu nhiên.
+
+## Tự kiểm tra kết quả
+
+File sai có tên và vị trí; file đúng trả đủ số rule. Tới mốc này các rule chưa thắng hay thua và màu vẫn chưa được áp.
+
+## Bài tập mở rộng
+
+Hãy viết hai declaration liên tiếp cho cùng một property trong một rule. Theo bạn thứ tự nào nên được giữ khi đọc?
+
+[Bài 3: Vì sao riêng nút Pause có màu khác các nút bên cạnh?](/projects/tiny-css/03-rule-nao-thang).

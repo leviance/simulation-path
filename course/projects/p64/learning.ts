@@ -2,243 +2,120 @@ import type { ProjectLearningAssets } from "../../learning/types";
 const data = {
   guides: {
     "p64-l01": {
-      focus:
-        "Chạy terrain/streaming trước, đặt tâm ngắm vào ảnh CPU và phân biệt thao tác xem với sửa dữ liệu.",
-      expected: "Starter có ảnh, resident=1/job=8; bốn tick budget 2 tải đủ 9 chunk.",
-      files: ["src/main.cpp", "include/view.hpp", "include/controller.hpp"],
+      focus: "Đứng giữa tuyết rơi, không đứng trước một tấm rèm",
+      expected:
+        "Ở F8, bông cũ không mất ngay khi tắt T, tuyết sau thân cây bị che. Pool không vượt 768.",
+      files: [
+        "include/trail/flakes.hpp",
+        "include/trail/field-scene.hpp",
+        "include/trail/field-controls.hpp",
+        "include/trail/window.hpp",
+      ],
       steps: [
         {
-          title: "Chạy lại thế giới đang có",
+          title: "Sinh bông quanh người, để bông cũ ở lại trong rừng",
           explanation:
-            "Build và mở starter trước. Bạn phải thấy một chunk, tám job chờ và camera dùng được; N tải tối đa hai job.",
+            "Trong flakes.hpp, giữ một pool 768 chỗ. Tích số bông cần sinh theo giây trong carry; khi đủ một bông mới lấy một chỗ trống và đặt nó quanh vị trí mắt.",
         },
         {
-          title: "Vẽ tâm ngắm trên ảnh, không vào dữ liệu voxel",
+          title: "Cho tuyết đi qua vòng lặp của cảnh",
           explanation:
-            "Bài 01 thêm hai nét nhỏ tại tâm pixel được chọn. Overlay này chỉ là lời nhắc vị trí ngắm, không phải block và không dùng màu pixel để quyết định hit.",
+            "Trong field-scene.hpp, cho Scene sở hữu Snow; trong update, đọc loại địa hình dưới chân. Khi bật tuyết và đang ở vùng núi thì cho tốc độ phát lớn hơn 0; khi tắt, **vẫn gọi** snow.update với cường độ 0 để bông cũ rơi hết.",
         },
         {
-          title: "Đọc và chặn tọa độ ngắm",
+          title: "Nối phím T và chuẩn bị khung chụp",
           explanation:
-            "aim giữ X trong 0..319, Y trong 0..239; cùng pixel thì không đánh dấu query dirty lại. Native gọi nó sau SDL_ConvertEventToRenderCoordinates.",
+            "Trong field-controls.hpp, T đổi snowEnabled, không xóa pool. Trong window.hpp, riêng đường chạy smoke cho tuyết tiến một lúc trước khi chụp để ảnh đầu không trống.",
         },
       ],
     },
     "p64-l02": {
-      focus:
-        "Bù offset player, đi qua tâm pixel và giữ t là khoảng cách từ mặt phẳng origin của camera trực giao.",
-      expected: "Round-trip screen của O+20D khớp x+0.5/y+0.5 trong 1e-9 cho các preset kiểm thử.",
+      focus: "Một Mặt Trời cho cả trời, đá và sóng",
+      expected:
+        "Tại cùng vách đá, đổi giờ làm đĩa Mặt Trời, mặt sáng trên vách và ánh nước thay đổi cùng nhau.",
       files: [
-        "include/view.hpp",
-        "include/ray.hpp",
-        "include/camera-volume.hpp",
-        "include/raster.hpp",
-        "include/controller.hpp",
+        "include/trail/day.hpp",
+        "include/trail/field-scene.hpp",
+        "include/trail/field-render.hpp",
+        "include/trail/field-controls.hpp",
+        "include/trail/window.hpp",
       ],
       steps: [
         {
-          title: "Nhìn lại phép chiếu dùng để vẽ world",
+          title: "Đổi giờ thành hướng chiếu",
           explanation:
-            "Hàm này đưa một point world về hệ tọa độ mà camera hiện tại đang chiếu. Nếu chỉ đảo công thức của một chunk quanh gốc mà quên player, picking có thể đúng ở (8,8) rồi lệch ngay khi WASD hoặc preset âm.",
+            "Trong day.hpp, viết skyAtHour: một vòng 24 giờ cho hướng Mặt Trời, độ sáng ban ngày và sắc ấm gần đường chân trời. Trong field-scene.hpp, tính giờ từ startHour và đồng hồ seconds rồi đưa vào weather.",
         },
         {
-          title: "Dựng origin bằng right, up và normal",
+          title: "Dùng đúng một hướng cho cả trời và vật",
           explanation:
-            "u/v là độ lệch pixel đã chia camera.scale*zoom; dấu Y bị đảo vì screen đi xuống. Tâm world là (player.x,8,player.z), không phải (8,8,8).",
+            "Trong field-render.hpp, gọi hàm trên khi vẽ trời, gán hướng cho draw.sun, pha màu trời/mây và vẽ đĩa vào vùng tia nhìn gần hướng đó. Mặt đá và mặt nước ở các lượt vẽ sau phải lấy cùng draw.sun; nếu dùng một vector cố định cho đá, đĩa sẽ lặn mà vách vẫn như giữa trưa.",
         },
         {
-          title: "Chuẩn hóa và chặn đầu vào trước khi đi qua lưới",
+          title: "Cho người xem trở về cùng một thời điểm",
           explanation:
-            "Origin phải finite trong ±4096, direction finite và khác zero. Near đứng trước mọi chunk resident; renderer và ray dùng cùng lát độ sâu 96. Normalize làm t có đơn vị world distance.",
+            "Trong field-controls.hpp, dấu trừ và dấu bằng lùi/tới hai giờ có vòng lại sau 24. Trong window.hpp, cho --hour đặt giờ ban đầu khi cần lặp phép so giữa hai lần mở.",
         },
       ],
     },
     "p64-l03": {
-      focus:
-        "DDA world có giới hạn; xử lý tọa độ âm, tie và vùng chưa tải mà không chọn xuyên qua dữ liệu chưa biết.",
-      expected: "DDA khớp cell/normal/t với oracle ở ray axis, chéo, camera và tọa độ âm.",
-      files: ["include/query.hpp", "include/ray.hpp"],
+      focus: "Đặt chân lên đất thay vì cho camera bay xuyên đồi",
+      expected: "Đi bộ lên được bậc thấp, vách cao chặn người; P không khóa chân và camera.",
+      files: ["include/trail/field-scene.hpp", "include/trail/field-controls.hpp"],
       steps: [
         {
-          title: "Tra đúng chunk của mỗi cell",
+          title: "Đo khoảng trống cho cả người",
           explanation:
-            "Hàm trả ID 0 cho Air, ID 1..3 cho block và −1 cho chunk chưa resident. Mesher của P62 coi neighbor chưa tải là Air để đóng frontier; picker cố ý khác, vì cho ray đi xuyên dữ liệu chưa biết sẽ sửa nhầm block phía sau.",
+            "Trong field-scene.hpp, coi Air và nước là chỗ đi qua được, còn cột chưa nạp thì **chưa được bước vào**. moveAxis thử những góc của thân người từ chân tới đầu, không chỉ tra ô chứa mắt. Tách bước ngang thành X rồi Z: khi một trục bị chặn, trục kia vẫn có thể trượt dọc vách.",
         },
         {
-          title: "Tìm đoạn đi bên trong, không chỉ một điểm chạm",
+          title: "Đặt chân xuống đất rồi mới cho nhảy",
           explanation:
-            "Mỗi trục cắt một khoảng t. Component bằng zero chỉ cần kiểm origin nằm trong khoảng half-open; không chia cho zero.",
+            "Cũng trong Scene, giữ vận tốc thẳng đứng, trạng thái chạm đất và độ cao mắt 1,65 block so với chân. Trừ trọng lực theo dt, kiểm nền ở vị trí sắp đáp; khi mặt đất chỉ cao hơn một bậc thì kiểm khoảng trống trên đầu trước khi bước lên.",
         },
         {
-          title: "Đi front-to-back và dừng ngay khi kết quả đã rõ",
+          title: "Giữ bay khảo sát là một chế độ riêng",
           explanation:
-            "cell đầu dùng floor, nếu ray đi âm và bắt đầu đúng mặt nguyên thì lùi về ô phía hướng đi. tMax là thời điểm qua mặt kế tiếp, tDelta là khoảng t cho một ô theo trục.",
+            "Trong field-controls.hpp, chỉ nhận Space lúc chạm đất và không bay. F đổi đi bộ/bay, đồng thời đặt vận tốc đứng về 0 để không mang cú rơi ở chế độ cũ sang chế độ mới.",
         },
       ],
     },
     "p64-l04": {
-      focus:
-        "Mỗi action truy vấn lại ray rồi sửa tối đa một cell; không ghi đè, không đặt vượt tầng hoặc vào chunk chưa tải.",
-      expected: "Một action thành công đổi tối đa một cell, material đúng palette.",
-      files: ["include/editing.hpp", "include/controller.hpp"],
+      focus: "Một bếp lửa nhỏ làm mốc giữa chiều xuống",
+      expected: "Ở F9 đốm lửa tàn bên trong bếp. Dừng giờ rồi đi quanh, bếp vẫn ở chỗ cũ.",
+      files: ["include/trail/field-scene.hpp"],
       steps: [
         {
-          title: "Kiểm điều kiện của action trước khi ghi",
+          title: "Đặt vòng đá trên nền, không trước mắt",
           explanation:
-            "Material phải 1..3. Phá dùng chính hit; đặt kiểm normal, tọa độ trong tầng và target Air resident.",
+            "Chỉ sửa field-scene.hpp. Trong draw, lấy campX(region.seed) và z = 147 để tìm chỗ nghỉ, hỏi độ cao nền rồi đặt vòng mười viên đá ở đó.",
         },
         {
-          title: "Ghi một cell bằng cách đơn giản trước",
+          title: "Cho đốm lửa thu nhỏ rồi tàn",
           explanation:
-            "Ở checkpoint 04, writeCell chỉ sửa buffer resident và remesh eager. before==value là no-op, không ghi history hoặc đếm việc thành công.",
-        },
-        {
-          title: "Nối input với action, không với vòng render",
-          explanation:
-            "action tạm dừng queue, tạo ray mới và báo changed/no change. SDL gọi ở button-down hoặc key-down không repeat, không gọi ở mouse-motion hay draw.",
+            "Từ seconds, tính tuổi và pha riêng cho các đốm; lúc mới sinh chúng gần bếp, khi bay lên thì nhỏ dần và đổi màu. Dùng depthDot như với tuyết để viên đá che được phần lửa sau nó.",
         },
       ],
     },
     "p64-l05": {
-      focus:
-        "Tách terrain nền với delta world, lưu cả Air khi phá và phủ lại delta sau regeneration.",
-      expected: "Air tombstone còn sau unload/return; khôi phục đúng base làm delta giảm.",
-      files: ["include/editing.hpp", "include/world.hpp"],
-      steps: [
-        {
-          title: "Hỏi dữ liệu nền bằng địa chỉ world",
-          explanation:
-            "baseBlock dùng heightAt/materialAt P63 tại x/z world và y của cell. Nó không đọc resident hoặc mesh.",
-        },
-        {
-          title: "Tạo nền rồi phủ delta khi load",
-          explanation:
-            "Mỗi Entry nhận một buffer nền mới, sau đó lọc các delta thuộc Key và ghi Block ID. Map delta thuộc World, không thuộc Entry nên erase chunk không xóa công trình.",
-        },
-        {
-          title: "Cập nhật delta cùng buffer như một thay đổi duy nhất",
-          explanation:
-            "Nếu value==base thì erase record; ngược lại giữ cả value=Air. Kiểm cap 512 trước khi chèn một địa chỉ mới.",
-        },
-      ],
-    },
-    "p64-l06": {
-      focus:
-        "Gộp dirty Key sau edit, xử lý mặt biên và tách bộ đếm mesh edit khỏi batch streaming.",
+      focus: "Tự đi mười phút để kiểm một thế giới sống",
       expected:
-        "Interior một mesh, góc X/Z tối đa ba mesh; dirty Key trùng được gộp, lần flush thứ hai trả 0.",
-      files: ["include/editing.hpp", "include/controller.hpp"],
-      steps: [
-        {
-          title: "Ghi đúng tập mesh bị ảnh hưởng",
-          explanation:
-            "Không quét cả world, cũng không thêm neighbor chéo. Nếu source chunk đang offline thì sửa delta không làm frontier resident đổi, nên không cần load/remesh chunk đó.",
-        },
-        {
-          title: "Dựng lại tập đã gộp và giữ counter đúng nghĩa",
-          explanation:
-            "Từ bài 06, keys chỉ là dirty set; nhiều cell trong một chunk vẫn rebuild một lần. rebuild dùng chung tăng lastMeshes của streaming, nên flush chụp/khôi phục counter lịch sử và ghi editRebuilds riêng.",
-        },
-        {
-          title: "Hoàn tất geometry trước khi đưa ảnh mới ra",
-          explanation:
-            "Flush edit trước query/render. Query đọc blocks nên hai action liên tiếp vẫn đúng ngay khi mesh đang dirty; nhưng frame chỉ được công bố khi các mặt liên quan đã dựng lại.",
-        },
+        "Trong chuyến 10–20 phút, đi thật qua bờ biển, sông, hẻm, rừng tuyết và bếp; ghi số liệu tách khỏi lần kiểm tuyến nhanh.",
+      files: [
+        "include/trail/field-walk.hpp",
+        "include/trail/field-scene.hpp",
+        "include/trail/window.hpp",
       ],
-    },
-    "p64-l07": {
-      focus:
-        "Command giữ cell/before/after, lịch sử hữu hạn và có thể hoàn tác cả khi chunk đã gỡ.",
-      expected:
-        "Undo/redo dùng địa chỉ world, làm việc cả offline mà không load; redo branch bị xóa sau edit mới.",
-      files: ["include/editing.hpp"],
       steps: [
         {
-          title: "Hỏi giá trị kể cả khi chunk không còn resident",
+          title: "Lập tuyến đi qua những chỗ dễ lộ lỗi",
           explanation:
-            "Giá trị hiện tại vẫn được quyết định bởi delta hoặc base. Undo offline không cần tải chunk chỉ để sửa một byte trong buffer; nó cập nhật dữ liệu world và Entry mới sau này sẽ phủ lại delta.",
+            "Trong field-walk.hpp, RecordedWalk đi qua một chuỗi điểm bằng chính travel của người chơi; không đặt thẳng tọa độ mắt vào mỗi điểm. Tích quãng đường từ độ dời XZ thật, không từ số lượng phím W đã gửi.",
         },
         {
-          title: "Ghi command sau khi thay đổi thành công",
+          title: "Ghi lại thứ đã xảy ra trong khung hình",
           explanation:
-            "Chỉ record khi changed, không cho no-op hoặc cap failure vào history. Command giữ giá trị theo value, không reference.",
-        },
-        {
-          title: "Replay mà không tự ghi lại chính mình",
-          explanation:
-            "Dùng writeCell(...,false), kiểm expected value trước, rồi mới chuyển command giữa hai stack. Nếu bị từ chối thì không pop lệnh.",
-        },
-      ],
-    },
-    "p64-l08": {
-      focus:
-        "Định dạng VXL1 dùng chung C++/Canvas; parse toàn bộ, kiểm giới hạn rồi mới thay world.",
-      expected:
-        "Fixture VXL1 chung khớp byte, import→export không đổi; CRLF hợp lệ được canonical thành LF.",
-      files: ["include/snapshot.hpp"],
-      steps: [
-        {
-          title: "Xuất một biểu diễn canonical",
-          explanation:
-            "`std::map<Cell,Block>` đã sắp lexicographic theo x/y/z; TypeScript sắp cùng thứ tự. Mỗi dòng record có bốn số nguyên, kể cả ID 0.",
-        },
-        {
-          title: "Đọc số nguyên chặt chẽ",
-          explanation:
-            "from_chars cần tiêu thụ hết token và không overflow. Không chấp nhận 42x, +42 hoặc 1e2.",
-        },
-        {
-          title: "Parse toàn bộ vào state tạm rồi mới thay phiên",
-          explanation:
-            "Kiểm header/config/count và từng cell/material, duplicate và redundant. Chỉ sau đó createWorld bằng config+delta mới và player hiện tại.",
-        },
-      ],
-    },
-    "p64-l09": {
-      focus:
-        "Thêm preset di chuyển giữ edit, ngắm bằng phím, pause/reset, capture/blur và thao tác không auto-repeat.",
-      expected:
-        "Preset giữ delta/history, thao tác tay pause queue; blur/cancel/reset nhả capture.",
-      files: ["include/controller.hpp", "src/main.cpp"],
-      steps: [
-        {
-          title: "Đổi vị trí mà giữ dữ liệu session",
-          explanation:
-            "Preset vị trí chỉ gọi movePlayer và giữ world, giống Project 63. Đổi config tạo generation mới; Reset xóa phiên; import thay config/delta sau validation. Không gộp bốn thao tác này thành một hàm reset chung.",
-        },
-        {
-          title: "Giữ ngắm bằng phím độc lập camera",
-          explanation:
-            "IJKL dịch pixel ngắm 2 đơn vị, arrow orbit camera. Canvas có ô X/Y và các nút thao tác thay phím.",
-        },
-        {
-          title: "Dọn trạng thái tương tác ở điểm mất quyền điều khiển",
-          explanation:
-            "Mất focus/minimize thì pause, hủy dragging và nhả SDL capture. Mọi key command đều bỏ repeat; middle drag chỉ orbit, mouse motion không edit.",
-        },
-      ],
-    },
-    "p64-l10": {
-      focus:
-        "Đối chiếu picking bằng oracle AABB, kiểm surface, session delta, bản lưu và source hoàn chỉnh.",
-      expected:
-        "Node và CTest qua các fixture chung; snapshot VXL1 cùng byte, terrain chưa edit giữ checksum P63.",
-      files: ["include/oracle.hpp", "include/mesh-oracle.hpp", "tests/tests.cpp"],
-      steps: [
-        {
-          title: "Đối chiếu ray bằng đường không dùng tMax",
-          explanation:
-            "Quét AABB block đặc để lấy entry gần nhất, đồng thời quét các chunk Unknown trong miền ray để không kết luận hit xuyên vùng chưa biết. Oracle chậm nhưng chỉ dùng trên fixture hữu hạn, không gọi trong mỗi frame.",
-        },
-        {
-          title: "Kiểm dữ liệu và bề mặt sau khi flush",
-          explanation:
-            "Resident phải đúng effectiveBlock; flush dirty mesh trước khi so multiset địa chỉ/hướng/material. Kết quả audit có ô riêng và chỉ đúng với dữ liệu vừa kiểm: load/unload/edit/undo/redo/import làm nhãn cũ thành cần kiểm lại. Tick idle không thay dữ liệu thì giữ được kết quả.",
-        },
-        {
-          title: "Báo lỗi thật ở cả Debug lẫn Release",
-          explanation:
-            "Không dùng assert bị NDEBUG tắt. Các test kiểm ray round-trip, signed seam, Unknown, action mới, tombstone, offline undo, cap, snapshot byte/malformed và cache idle.",
+            "Trong field-scene.hpp, thêm giờ và số hạt còn sống vào readout. Trong window.hpp, nối --route-check với lượt dò ngắn có giới hạn bước và --survey với đồng hồ thực.",
         },
       ],
     },
@@ -246,171 +123,36 @@ const data = {
   references: {
     "p64-l01": [
       {
-        label: "Base và session delta",
-        href: "/glossary#voxel-session-delta",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Unknown trong picking",
-        href: "/glossary#voxel-unknown-picking",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "VXL1 snapshot",
-        href: "/glossary#voxel-snapshot",
+        label: "Tuyết trong tọa độ world",
+        href: "/glossary#voxel-world-flakes",
         kind: "Thuật ngữ",
       },
     ],
     "p64-l02": [
       {
-        label: "Base và session delta",
-        href: "/glossary#voxel-session-delta",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Unknown trong picking",
-        href: "/glossary#voxel-unknown-picking",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "VXL1 snapshot",
-        href: "/glossary#voxel-snapshot",
+        label: "Đồng hồ cảnh và hướng nắng",
+        href: "/glossary#voxel-day-clock",
         kind: "Thuật ngữ",
       },
     ],
     "p64-l03": [
       {
-        label: "Base và session delta",
-        href: "/glossary#voxel-session-delta",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Unknown trong picking",
-        href: "/glossary#voxel-unknown-picking",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "VXL1 snapshot",
-        href: "/glossary#voxel-snapshot",
+        label: "Đi bộ trên bậc voxel",
+        href: "/glossary#voxel-walk-collision",
         kind: "Thuật ngữ",
       },
     ],
     "p64-l04": [
       {
-        label: "Base và session delta",
-        href: "/glossary#voxel-session-delta",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Unknown trong picking",
-        href: "/glossary#voxel-unknown-picking",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "VXL1 snapshot",
-        href: "/glossary#voxel-snapshot",
+        label: "Đồng hồ cảnh và hướng nắng",
+        href: "/glossary#voxel-day-clock",
         kind: "Thuật ngữ",
       },
     ],
     "p64-l05": [
       {
-        label: "Base và session delta",
-        href: "/glossary#voxel-session-delta",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Unknown trong picking",
-        href: "/glossary#voxel-unknown-picking",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "VXL1 snapshot",
-        href: "/glossary#voxel-snapshot",
-        kind: "Thuật ngữ",
-      },
-    ],
-    "p64-l06": [
-      {
-        label: "Base và session delta",
-        href: "/glossary#voxel-session-delta",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Unknown trong picking",
-        href: "/glossary#voxel-unknown-picking",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "VXL1 snapshot",
-        href: "/glossary#voxel-snapshot",
-        kind: "Thuật ngữ",
-      },
-    ],
-    "p64-l07": [
-      {
-        label: "Base và session delta",
-        href: "/glossary#voxel-session-delta",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Unknown trong picking",
-        href: "/glossary#voxel-unknown-picking",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "VXL1 snapshot",
-        href: "/glossary#voxel-snapshot",
-        kind: "Thuật ngữ",
-      },
-    ],
-    "p64-l08": [
-      {
-        label: "Base và session delta",
-        href: "/glossary#voxel-session-delta",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Unknown trong picking",
-        href: "/glossary#voxel-unknown-picking",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "VXL1 snapshot",
-        href: "/glossary#voxel-snapshot",
-        kind: "Thuật ngữ",
-      },
-    ],
-    "p64-l09": [
-      {
-        label: "Base và session delta",
-        href: "/glossary#voxel-session-delta",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Unknown trong picking",
-        href: "/glossary#voxel-unknown-picking",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "VXL1 snapshot",
-        href: "/glossary#voxel-snapshot",
-        kind: "Thuật ngữ",
-      },
-    ],
-    "p64-l10": [
-      {
-        label: "Base và session delta",
-        href: "/glossary#voxel-session-delta",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Unknown trong picking",
-        href: "/glossary#voxel-unknown-picking",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "VXL1 snapshot",
-        href: "/glossary#voxel-snapshot",
+        label: "Nạp chunk theo bước chân",
+        href: "/glossary#chunk-streaming",
         kind: "Thuật ngữ",
       },
     ],

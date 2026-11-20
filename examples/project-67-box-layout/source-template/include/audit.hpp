@@ -21,6 +21,7 @@ inline void checkLayoutNode(const Widget& node, const LayoutState& state, std::s
     }
 }
 
+// [snippet count]
 inline int auditLayout(const LayoutState& state) {
     if (state.dirty)
         throw std::runtime_error("layout is dirty");
@@ -30,5 +31,6 @@ inline int auditLayout(const LayoutState& state) {
         throw std::runtime_error("ownership/style mismatch");
     return int(paintList(state.scene.tree).size());
 }
+// [/snippet count]
 #endif
 } // namespace lab

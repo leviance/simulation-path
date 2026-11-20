@@ -1,0 +1,103 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Đứng giữa tuyết rơi, không đứng trước một tấm rèm
+
+## Vấn đề cần giải quyết
+
+Đến rừng thông và nhìn một bông tuyết lướt qua thân cây. Nếu bước sang trái mà bông tuyết cũ chạy sang trái đúng bằng mình, nó đang dính lên kính camera. Hãy đặt từng bông ở một vị trí trong thế giới, chỉ mượn vị trí mắt khi tìm chỗ sinh mới.
+
+## Hiểu ý tưởng trước khi viết code
+
+Ta không cần rải tuyết khắp núi. Một hộp nhỏ quanh người đủ cho những hạt có thể nhìn thấy. Dùng lại chỗ trống trong một pool hữu hạn; bông ra khỏi vùng hoặc sống đủ lâu sẽ trả chỗ cho bông sau.
+
+<InteractiveLab demo="voxel-sandbox" mode="voxel64-1" />
+
+## Viết code từng bước
+
+Đứng ở mốc F8 của bản trước: trên cành đã có tuyết trắng, trong không khí vẫn chưa có bông nào. Một bông chỉ hiện khi có đủ ba việc: cấp cho nó một chỗ trong bộ nhớ, cập nhật vị trí, rồi vẽ nó vào cảnh.
+
+### Sinh bông quanh người, để bông cũ ở lại trong rừng
+
+Trong `flakes.hpp`, giữ một pool 768 chỗ. Tích số bông cần sinh theo giây trong `carry`; khi đủ một bông mới lấy một chỗ trống và đặt nó quanh vị trí mắt. Gió và tốc độ rơi cập nhật điểm world của từng bông đang sống. Không cộng chuyển động của camera vào hạt cũ. Khi bông già hoặc ra ngoài vùng thì trả chỗ cho bông sau.
+
+{/* snippet include/trail/flakes.hpp#snow-emit */}
+
+```cpp title="include/trail/flakes.hpp — Phát hạt mới ở vùng tuyết, tính theo giây"
+if (!flake.alive && carry >= 1) {
+    carry -= 1;
+    flake = {{eye.x + (noise() - 0.5) * 24, eye.y + 2 + noise() * 7, eye.z + (noise() - 0.5) * 24}, 1.3 + noise() * 1.8, 0, true};
+}
+```
+
+{/* snippet include/trail/flakes.hpp#snow-step */}
+
+```cpp title="include/trail/flakes.hpp — Cho bông rơi xuống và trôi ngang theo gió"
+const Vec3 gust = windAt(flake.point, seconds, wind);
+flake.point = flake.point + Vec3{gust.x, -flake.fall, gust.z} * dt;
+flake.age += dt;
+if (flake.point.y < eye.y - 5 || flake.age > 12 || std::abs(flake.point.x - eye.x) > 19 || std::abs(flake.point.z - eye.z) > 19) {
+    flake.alive = false;
+}
+```
+
+<VoxelWorkFile project="64" step={1} file="flakes" />
+
+### Cho tuyết đi qua vòng lặp của cảnh
+
+Trong `field-scene.hpp`, cho `Scene` sở hữu `Snow`; trong `update`, đọc loại địa hình dưới chân. Khi bật tuyết và đang ở vùng núi thì cho tốc độ phát lớn hơn 0; khi tắt, **vẫn gọi** `snow.update` với cường độ 0 để bông cũ rơi hết. Trong `draw`, sau khi vẽ đất/cây, duyệt `snow.pool` và vẽ từng hạt còn sống bằng `depthDot`. Độ sâu đã ghi của thân cây phải che bông ở phía sau.
+
+{/* snippet include/trail/field-scene.hpp#snow-tick */}
+
+```cpp title="include/trail/field-scene.hpp — Ngừng phát nhưng tiếp tục cập nhật bông cũ"
+double intensity = 0;
+if (snowEnabled && site.alpine)
+    intensity = smooth(124, 161, site.inland);
+snow.update(camera.eye, dt, intensity, {weather.windAngle, weather.windSpeed}, seconds);
+```
+
+{/* snippet include/trail/field-scene.hpp#snow-draw */}
+
+```cpp title="include/trail/field-scene.hpp — Vẽ bông còn sống có kiểm tra độ sâu"
+for (const auto& f : snow.pool)
+    if (f.alive)
+        depthDot(drawing, f.point, {226, 239, 248}, 0.025, true);
+```
+
+<VoxelWorkFile project="64" step={1} file="field-scene" />
+
+### Nối phím T và chuẩn bị khung chụp
+
+Trong `field-controls.hpp`, T đổi `snowEnabled`, không xóa pool. Trong `window.hpp`, riêng đường chạy smoke cho tuyết tiến một lúc trước khi chụp để ảnh đầu không trống. Bản đang chạy bình thường sinh hạt theo thời gian thực. Chưa có con số bông trên HUD ở bài đầu này.
+
+<VoxelWorkFile project="64" step={1} file="field-controls" />
+
+<VoxelWorkFile project="64" step={1} file="window" />
+
+## Ghép các phần lại
+
+Tới F8, nhìn ngang một thân thông. Nhấn T: bông cũ phải rơi nốt chứ không biến mất đồng loạt. Bật lại, nhấn P rồi bước ngang: một số bông khuất sau thân, số khác còn ở phía trước. Nếu tuyết luôn phủ lên vỏ cây, hãy kiểm chỗ gọi `depthDot`, không chỉnh thêm tốc độ rơi.
+
+Mở terminal cạnh `CMakeLists.txt` của ZIP đã giải nén. Lần cấu hình đầu tạo `work/` từ starter; chỉnh tệp trong đó, rồi build lại cùng target. Cấu hình lần nữa không ghi đè bài làm.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake -S . -B build-work -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_64_work --parallel 1
+.\build-work\Release\project_64_work.exe
+```
+
+Với Ninja hoặc Make trên Linux/macOS, chạy `./build-work/project_64_work` thay cho dòng mở `.exe`.
+
+## Thử làm sai để hiểu đúng
+
+Vẽ hạt lên trên ảnh sau cùng mà không thử độ sâu. Bạn sẽ thấy tuyết phía sau thân cây xuyên qua gỗ; hãy kiểm cả hạt phía trước lẫn phía sau.
+
+## Tự kiểm tra kết quả
+
+Số bông sống không vượt 768. Dừng giờ rồi bước ngang: vị trí bông trong world không đổi nhưng hình chiếu phải đổi. Trở về bãi cát không phát thêm tuyết.
+
+## Bài tập mở rộng
+
+Tắt gió nhưng không tắt trọng lực. Bông còn chuyển động theo chiều nào và đầu ngọn cỏ trở về đâu?
+
+[Bài 2: Một Mặt Trời cho cả trời, đá và sóng](/projects/voxel-sandbox/02-mot-mat-troi-chung).

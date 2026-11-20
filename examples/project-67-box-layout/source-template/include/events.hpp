@@ -41,7 +41,12 @@ inline bool handle(SDL_Renderer* renderer, App& app, SDL_Event event) {
     if (event.type == SDL_EVENT_MOUSE_MOTION)
         pointerMove(tree, app.model, app.ui, {event.motion.x, event.motion.y});
     if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
-        pointerDown(tree, app.model, app.ui, {event.button.x, event.button.y});
+        const Point point{event.button.x, event.button.y};
+        const bool consumed = pointerDown(tree, app.model, app.ui, point);
+        if (!consumed && contains({bench::mapX,bench::mapY,bench::mapW,bench::mapH}, point)) {
+            app.model.colony.selectAt(bench::world(event.button.x, event.button.y));
+            ++app.model.scenePresses;
+        }
         if (app.ui.active != 0 && !SDL_CaptureMouse(true)) {
             cancel(app.ui);
             app.message = "Capture unavailable; gesture cancelled";
@@ -75,6 +80,13 @@ inline bool handle(SDL_Renderer* renderer, App& app, SDL_Event event) {
             if (event.key.key == SDLK_LEFTBRACKET)
                 gap = style.gap - 2;
             setSpacing(state, app.ui, std::clamp(gap, 0.0, 32.0), style.padding.left);
+        }
+        if (!event.key.repeat && (event.key.key == SDLK_MINUS || event.key.key == SDLK_EQUALS)) {
+            const BoxStyle& root = state.scene.styles.at(1);
+            double padding = root.padding.left + 2;
+            if (event.key.key == SDLK_MINUS)
+                padding = root.padding.left - 2;
+            setSpacing(state, app.ui, root.gap, std::clamp(padding, 0.0, 48.0));
         }
 #endif
 #if LAB_CHECKPOINT >= 6

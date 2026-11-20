@@ -1,0 +1,106 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Ẩn Links mà không làm hỏng nhóm tham số
+
+## Vấn đề cần giải quyết
+
+Khi không cần nút Links, người dùng muốn nhặt lại chỗ của nó cho Pause. Hai thanh kéo nằm trong một nhóm khác; chúng không được vô tình biến thành item cùng hàng chỉ vì ta vừa ẩn một nút.
+
+## Hiểu ý tưởng trước khi viết code
+
+Nhìn cây theo từng cấp. Root xếp title, toolbar và nhóm slider; toolbar chỉ xếp con trực tiếp của chính nó. Dùng hình học local ở mỗi bước và cộng tọa độ cha khi duyệt render.
+
+<InteractiveLab demo="tiny-flex" mode="flex70-5" />
+
+## Viết code từng bước
+
+### Đi xuống đúng một tầng mỗi lần
+
+Hình vừa tính trở thành khung cha cho lần gọi kế tiếp. Margin của một nút không bị cộng lần thứ hai ở tổ tiên của nó.
+
+{/* snippet include/flex/layout.hpp#place-children */}
+
+```cpp title="include/flex/layout.hpp — Đi xuống đúng một tầng mỗi lần"
+inline void placeFlex(lab::Widget& parent, lab::Rect frame, const lab::Styles& styles, const FlexMap& all, const lab::Measures& sizes) {
+    parent.local = frame;
+    if (parent.kind != lab::Kind::Panel)
+        return;
+    const auto& box = styles.at(parent.id);
+    const auto opt = all.at(parent.id);
+    const auto inside = lab::contentBox({0, 0, frame.width, frame.height}, box);
+    std::vector<Item> items;
+    std::vector<lab::Widget*> children;
+    for (auto& child : parent.children) {
+        if (!child->visible)
+            continue;
+        children.push_back(child.get());
+        const auto size = sizes.at(child->id);
+        const auto pref = all.at(child->id);
+        const auto& b = styles.at(child->id);
+        Item item{size.height, size.width, 0, b.margin.top, b.margin.bottom, b.margin.left, b.margin.right, b.width == lab::Width::Fill};
+        if (opt.axis == Axis::Row)
+            item = {size.width, size.height, 0, b.margin.left, b.margin.right, b.margin.top, b.margin.bottom, b.height == lab::Height::Auto};
+        if (opt.flex) {
+            item.grow = pref.grow;
+            if (pref.basis >= 0)
+                item.basis = pref.basis;
+        }
+        items.push_back(item);
+    }
+    double length = inside.height, breadth = inside.width;
+    if (opt.axis == Axis::Row) {
+        length = inside.width;
+        breadth = inside.height;
+    }
+    const auto rects = line(opt, length, breadth, box.gap, items);
+    for (std::size_t i = 0; i < children.size(); ++i) {
+        auto r = rects[i];
+        r.x += inside.x;
+        r.y += inside.y;
+        placeFlex(*children[i], r, styles, all, sizes);
+    }
+}
+```
+
+### Đổi visibility theo ID, không xóa con khỏi đàn
+
+Ẩn widget rồi bỏ số đo cũ. Cây và tham số của đàn không đổi. Việc bỏ node khỏi phép xếp phải kéo theo cả việc bỏ một gap và trọng số grow của nó.
+
+{/* snippet include/flex/workshop.hpp#remove-from-line */}
+
+```cpp title="include/flex/workshop.hpp — Đổi visibility theo ID, không xóa con khỏi đàn"
+inline bool toggleControl(Desk& d, const std::string& name) {
+    auto found = d.page.document.byId.find(name);
+    if (found == d.page.document.byId.end())
+        return false;
+    auto& tree = d.page.layout.scene.tree;
+    auto* node = lab::find(*tree.root, d.page.handles.at(found->second));
+    node->visible = !node->visible;
+    lab::invalidate(d.page.layout, d.ui);
+    return true;
+}
+```
+
+## Ghép các phần lại
+
+Bấm H để ẩn Links; Pause lập tức rộng thêm, Reset vẫn cố định. Tab phải bỏ qua nút đã ẩn. Bấm H lần nữa; nút trở về đúng nơi trong hàng.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_70_checkpoint_5 --parallel 2
+.\build\Release\project_70_checkpoint_5.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Để child ẩn trong danh sách tính `totalGrow`, nhưng sau đó không vẽ nó. Kết quả là một khoảng trống vô hình mà Pause không bao giờ nhận được.
+
+## Tự kiểm tra kết quả
+
+Có ít nhất ba flex container: root, toolbar và nhóm thông số. Chỉ người cha trực tiếp phân chia chỗ cho con; giữ chuột rồi đổi visibility không sinh click muộn.
+
+## Bài tập mở rộng
+
+Ẩn lần lượt cả ba nút trong fixture. Chiều cao của một Panel Auto rỗng có nhất thiết bằng 0 không?
+
+[Bài 6: Thử cùng một bảng ở ba độ rộng](/projects/tiny-flex/06-ba-kich-thuoc-cua-so).

@@ -19,9 +19,9 @@ inline BuiltTree buildTree(int preset = 0) {
     Tree& tree = built.tree;
     if (preset == 3)
         tree.root->local.x = 520;
-    add(tree, 1, Kind::Label, {24, 16, 224, 24}, "SIMULATOR");
+    add(tree, 1, Kind::Label, {24, 16, 224, 24}, "FLIGHT DESK / WIDGET TREE");
 #if LAB_CHECKPOINT >= 2
-    int height = 300;
+    int height = 326;
 #if LAB_CHECKPOINT >= 3
     if (preset == 1)
         height = 96;
@@ -33,9 +33,11 @@ inline BuiltTree buildTree(int preset = 0) {
     built.pause = add(tree, 1, Kind::Button, {24, 56, 224, 44}, "Pause / Resume", Action::Pause);
 #endif
 #if LAB_CHECKPOINT >= 5
-    add(tree, built.group, Kind::Label, {0, 128, 224, 24}, "Gravity (px/s2)");
-    built.slider = add(tree, built.group, Kind::Slider, {0, 152, 224, 40});
-    add(tree, built.group, Kind::Label, {0, 204, 224, 24}, "", Action::None, Binding::Gravity);
+    add(tree, built.group, Kind::Button, {0, 108, 224, 32}, "Neighbors", Action::Observe);
+    built.slider = add(tree, built.group, Kind::Slider, {0, 152, 224, 40}, "", Action::None, Binding::Radius);
+    add(tree, built.group, Kind::Label, {0, 192, 224, 24}, "", Action::None, Binding::Radius);
+    add(tree, built.group, Kind::Slider, {0, 226, 224, 40}, "", Action::None, Binding::Separation);
+    add(tree, built.group, Kind::Label, {0, 266, 224, 24}, "", Action::None, Binding::Separation);
     add(tree, 1, Kind::Label, {24, 390, 224, 24}, "", Action::None, Binding::Time);
 #endif
 #if LAB_CHECKPOINT >= 4

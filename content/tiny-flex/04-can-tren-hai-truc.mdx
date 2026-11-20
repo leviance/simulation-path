@@ -1,0 +1,82 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Căn nhóm ở giữa không giống căn chữ trên nút
+
+## Vấn đề cần giải quyết
+
+Một hàng có thể đã đúng thứ tự mà vẫn trông lệch: các nút thấp hơn toolbar và nằm sát mép trên. Đừng sửa từng y. Hãy quyết định nhóm nằm ở đâu dọc dòng, rồi từng nút nằm ở đâu theo bề dày của dòng.
+
+## Hiểu ý tưởng trước khi viết code
+
+justify dùng phần dư *sau* grow; align dùng khoảng cách giữa bề dày khả dụng và bề dày của từng child. space-between chỉ chia giữa hai item trở lên; với một item, nó nằm ở đầu. Stretch chỉ kéo chiều tự động.
+
+<InteractiveLab demo="tiny-flex" mode="flex70-4" />
+
+## Viết code từng bước
+
+### Căn các nút theo mép phải
+
+{/* asset assets/column.css */}
+
+```css title="assets/column.css — Căn các nút theo mép phải"
+.sheet { display: flex; flex-direction: column; padding: 10px; gap: 3px; background: #244147; }
+h1 { background: #244147; color: #B6F1DD; border: 0px; }
+.group { display: flex; flex-direction: column; padding: 5px; gap: 2px; background: #315656; }
+#tools { justify-content: center; align-items: end; height: 136px; }
+button { background: #395B6D; color: #E9F3EC; width: 134px; flex-basis: 29px; margin: 1px; }
+#pause { background: #2B7663; }
+label { color: #D0EDDD; border: 0px; }
+input { color: #94E0C4; border-color: #637F81; }
+```
+
+### Chọn vị trí trên cross axis
+
+Toolbar cao 50, nút cao 10: start cho y=0, center cho y=20, end cho y=40. Chỉ đổi direction thì cùng phép tính này chuyển sang trục x.
+
+{/* snippet include/flex/line.hpp#align */}
+
+```cpp title="include/flex/line.hpp — Chọn vị trí trên cross axis"
+const double extra = std::max(0.0, room - cross);
+if (style.align == Align::Center)
+    inset = extra / 2;
+if (style.align == Align::End)
+    inset = extra;
+```
+
+### Trả Rect về hệ tọa độ cửa sổ
+
+Không đổi orientation của glyph hoặc sự kiện chuột. Một nút dời qua phải trong column vẫn nhận click trong chính border box nó đang vẽ.
+
+{/* snippet include/flex/line.hpp#axes */}
+
+```cpp title="include/flex/line.hpp — Trả Rect về hệ tọa độ cửa sổ"
+inline lab::Rect axisRect(Axis a, double main, double cross, double length, double thickness) {
+    if (a == Axis::Row)
+        return {main, cross, length, thickness};
+    return {cross, main, thickness, length};
+}
+```
+
+## Ghép các phần lại
+
+Nhấn 2 để nạp column.css, rồi chọn X. Các nút xếp dọc, thẳng mép phải theo align-items:end. Thay bằng center rồi F5 để thấy nguyên cột nút dịch vào trong nhóm.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_70_checkpoint_4 --parallel 2
+.\build\Release\project_70_checkpoint_4.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Áp justify cả sau khi grow đã dùng hết phần dư. Khi đó bạn vô tình cộng cùng một khoảng hai lần; nút cuối bị đẩy ra ngoài dù phép cộng basis đúng.
+
+## Tự kiểm tra kết quả
+
+Hàng 120, hai item 40 và gap 10: center cho mép trái 15/65; end cho 30/80; space-between cho 0/80. Đổi row thành column, các con số ấy phải chuyển sang y.
+
+## Bài tập mở rộng
+
+Vì sao space-between với đúng một nút không nên chia cho số khoảng bằng 0?
+
+[Bài 5: Ẩn Links mà không làm hỏng nhóm tham số](/projects/tiny-flex/05-an-nut-trong-cay-long).

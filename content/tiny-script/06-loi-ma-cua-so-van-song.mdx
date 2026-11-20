@@ -1,0 +1,89 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Làm sao để script lỗi không làm treo cửa sổ?
+
+## Vấn đề cần giải quyết
+
+Handler gọi Pause rồi mới gửi một bán kính không hợp lệ. Nếu C++ đã dừng đàn ở câu đầu, người dùng sẽ thấy một nửa hành vi chạy dù app báo lỗi. Cũng không thể để một function gọi lại chính nó vô tận giữ hết thời gian của SDL.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tách hai hàng rào. Ngân sách số bước và độ sâu giữ thời gian hữu hạn. Bộ trạng thái tạm giữ thay đổi globals và lệnh host cho tới khi handler kết thúc, rồi mới đưa cả hai vào phiên thật.
+
+<InteractiveLab demo="tiny-script" mode="script72-6" />
+
+## Viết code từng bước
+
+### Script thử: lệnh đầu đúng, lệnh sau sai
+
+{/* asset assets/bad-host.tiny */}
+
+```javascript title="assets/bad-host.tiny — Script thử: lệnh đầu đúng, lệnh sau sai"
+let calls = 0;
+
+function onPause() {
+    calls = calls + 1;
+    pause();
+    radius(200);
+}
+
+function onReset() { reset(); }
+function onObserve() { links(!showLinks()); }
+function onRadius(value) { radius(value); }
+function onSeparation(value) { separate(value); }
+```
+
+### Trừ chi phí ở ba nơi có thể thực hiện công việc
+
+Tính một expression, đi qua một statement và vào một function đều tiêu bước. Ngân sách 1.024 bước không thay giới hạn 16 lần gọi lồng: mỗi giới hạn bắt một loại lỗi.
+
+{/* snippet include/script/machine.hpp#budget */}
+
+```cpp title="include/script/machine.hpp — Trừ chi phí ở ba nơi có thể thực hiện công việc"
+void spend(std::size_t at) {
+    if (!budget)
+        tiny::fail(p.source, at, "handler exceeded 1024 steps");
+    --budget;
+}
+```
+
+### Đặt kết quả của handler vào model ở đúng một chỗ
+
+Tới được đây nghĩa là không còn lỗi kiểu, phạm vi số hoặc ngân sách. Nếu lỗi ở giữa chương trình, `publish` không chạy, globals tạm cũng bị bỏ.
+
+{/* snippet include/script/host.hpp#apply-host */}
+
+```cpp title="include/script/host.hpp — Đặt kết quả của handler vào model ở đúng một chỗ"
+void publish(tiny::Desk& d) const {
+    if (reset)
+        lab::resetSimulation(d.model);
+    lab::setPaused(d.model, paused);
+    d.model.colony.params.radius = radius;
+    d.model.colony.params.separationWeight = separation;
+    d.model.colony.showNeighbors = visible;
+}
+```
+
+## Ghép các phần lại
+
+Phím 4 nạp bad-host, bấm Pause xem lỗi radius; đàn và biến đếm không được thay nửa chừng. Phím 5 thử đệ quy rồi bấm Pause, sau đó bấm Reset hoặc F9. Cửa sổ vẫn nhận lệnh mới từ SDL.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_72_checkpoint_6 --parallel 2
+.\build\Release\project_72_checkpoint_6.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Chỉ kiểm call depth mà không đếm bước. Một handler phẳng với hàng trăm phép cộng vẫn có thể tốn rất nhiều việc; tests có hai input khác nhau cho hai giới hạn.
+
+## Tự kiểm tra kết quả
+
+Thông báo cho biết file, handler và vị trí. Event kế tiếp có ngân sách mới, không phải khởi động lại ứng dụng để phục hồi. F9 luôn do C++ xử lý.
+
+## Bài tập mở rộng
+
+Phân loại ba lỗi: thẻ HTML sai, thiếu ngoặc trong script, chia cho 0 trong function. Lỗi nào chặn nạp file, lỗi nào chỉ xuất hiện lúc click?
+
+[Bài 7: Cùng một điểm giữa: 80 px hay 50 px?](/projects/tiny-script/07-cung-thanh-keo-hai-hanh-vi).

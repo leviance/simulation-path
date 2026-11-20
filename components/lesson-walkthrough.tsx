@@ -2,6 +2,7 @@ import type { LessonMeta, ProjectMeta } from "@/lib/course";
 import type { LessonCodeGuide } from "@/course/learning/types";
 import { getProjectChangedPaths, getProjectSourceBundle } from "@/lib/project-sources";
 import { SourceFile } from "@/components/source-file";
+import { hasVoxelWorkbook } from "@/lib/voxel-workbook";
 
 export async function LessonWalkthrough({
   project,
@@ -13,6 +14,7 @@ export async function LessonWalkthrough({
   guide: LessonCodeGuide;
 }) {
   const previous = project.lessons[lesson.order - 2];
+  const workbook = hasVoxelWorkbook(project.id);
   const startTarget = previous
     ? `project_${Number(project.id)}_checkpoint_${previous.order}`
     : `project_${Number(project.id)}_starter`;
@@ -45,8 +47,41 @@ export async function LessonWalkthrough({
               : "Bộ khung starter của project"}
           </b>
           <p>
-            Hãy build target <code>{startTarget}</code> một lần trước khi sửa. Nếu điểm xuất phát
-            chưa chạy đúng, code mới sẽ chỉ làm việc tìm lỗi khó hơn.
+            {workbook ? (
+              previous ? (
+                <>
+                  Tiếp tục ngay trong <code>work/</code> của bài trước. Không chép checkpoint lên
+                  bài làm. Build lại <code>project_{project.id}_work</code> trước khi thêm tính
+                  năng.
+                </>
+              ) : (
+                <>
+                  Giải nén ZIP, mở terminal cạnh CMakeLists.txt và chạy{" "}
+                  <code>
+                    cmake -S . -B build-work -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+                  </code>
+                  . CMake tạo <code>work/</code> từ starter đúng một lần. Chạy{" "}
+                  <code>
+                    cmake --build build-work --config Release --target project_{project.id}_work
+                    --parallel 1
+                  </code>{" "}
+                  để thử trước khi sửa.
+                  {project.id !== "58" && (
+                    <>
+                      {" "}
+                      ZIP đã mang theo các phần của Project {Number(project.id) - 1}. Muốn giữ họa
+                      tiết hay cách làm riêng, chuyển các header chung bạn đã sửa sang{" "}
+                      <code>work/</code> mới; giữ các tệp khung mới của project này.
+                    </>
+                  )}
+                </>
+              )
+            ) : (
+              <>
+                Hãy build target <code>{startTarget}</code> một lần trước khi sửa. Nếu điểm xuất
+                phát chưa chạy đúng, code mới sẽ chỉ làm việc tìm lỗi khó hơn.
+              </>
+            )}
           </p>
         </article>
         <article>

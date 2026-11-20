@@ -57,9 +57,6 @@ test("Project66 explains retained ownership, coordinate fixtures, reverse pickin
     )
   ).join("\n");
   for (const pattern of [
-    /SDL_CreateWindow/,
-    /SDL_Renderer/,
-    /SDL_RenderFillRect/,
     /unique_ptr/,
     /std::move/,
     /688,80/,
@@ -70,24 +67,22 @@ test("Project66 explains retained ownership, coordinate fixtures, reverse pickin
     /WidgetView/,
     /1000/,
     /NDEBUG/,
-    /WaitForExit\(10000\)/,
     /-C Debug/,
     /-C Release/,
     /Project 67/,
-    /Sắp ra mắt/,
+    /Separation/,
   ])
     assert.match(text, pattern);
-  const lab = await readFile(path.join(workspace, "components/labs/widget-tree-lab.tsx"), "utf8");
-  for (const pattern of [
-    /cancelAnimationFrame/,
-    /visibilitychange/,
-    /usePauseOnReducedMotion\(stop\)/,
-    /setPointerCapture/,
-    /releasePointerCapture/,
-    /pointer.current!==e.pointerId|pointer.current !== e.pointerId/,
-    /onPointerCancel/,
-    /onLostPointerCapture/,
-    /disabled=\{reduced\}/,
-  ])
-    assert.match(lab, pattern);
+  assert.doesNotMatch(text, /bóng nảy|trọng lực|setGravity/i);
+  const { default: lab } = await import("../course/projects/p66/lab.ts");
+  for (const mode of Object.keys(lab.modes)) {
+    assert.ok(lab.native.lessons[mode]?.length, mode + " needs a native reference");
+    for (const key of lab.native.lessons[mode]) {
+      const picture = await readFile(
+        path.join(workspace, "public", lab.native.directory.slice(1), lab.native.takes[key].poster),
+      );
+      assert.equal(picture.readUInt32BE(16), 960);
+      assert.equal(picture.readUInt32BE(20), 540);
+    }
+  }
 });

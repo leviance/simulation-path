@@ -1,0 +1,86 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Đừng sinh cả con đường trong một khung hình
+
+## Vấn đề cần giải quyết
+
+Khi quay ngoắt sang hướng khác, những chunk đang chờ phía sau không còn cấp thiết. Xử lý tất cả trước khi nhận lần bấm phím kế sẽ làm việc đi bộ giật cục dù FPS lúc đứng yên rất cao.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tách kế hoạch khỏi công việc của một frame. Đổi chunk tâm thì lập lại danh sách cần, còn mỗi lần cập nhật chỉ lấy một số hữu hạn. Chunk mới và đường nối vừa thay đổi là hai khoản chi riêng.
+
+<InteractiveLab demo="voxel-chunk-streaming" mode="voxel62-2" />
+
+## Viết code từng bước
+
+Bạn đã có hàng đợi và hàm xử lý nó. Câu hỏi mới là: nếu mỗi khung được phép nạp hai cột thay vì một thì cảnh bắt kịp người đi nhanh đến đâu? Muốn so sánh, cần một phím đổi mức ngay trong cùng chuyến đi.
+
+### Xác định cái gì thật sự bị giới hạn
+
+`Stream::tick` của bài 1 dùng `budget` cho **số cột mới** trong một lượt. Sau đó còn có việc sửa mép đã đánh dấu qua `markNeighborhood`. Đọc hai đoạn dưới để phân biệt hai hàng việc. Tăng ngân sách từ một lên hai không đồng nghĩa cả frame mất đúng gấp đôi thời gian.
+
+{/* snippet include/trail/stream.hpp#stream-budget */}
+
+```cpp title="include/trail/stream.hpp — Nạp có hạn và sửa có hạn"
+bool tick(Region& world, Mesher mode) {
+    const bool changed = !wanted.empty() || !world.dirty.empty();
+    for (int n = 0; n < budget && !wanted.empty(); ++n) {
+        const Key next = wanted.front();
+        wanted.pop_front();
+        world.load(next);
+        world.rebuild(next, mode);
+    }
+    world.buildSome(1, mode);
+    return changed;
+}
+```
+
+{/* snippet include/trail/region.hpp#dirty-border */}
+
+```cpp title="include/trail/region.hpp — Bổ sung việc sửa mép khi dữ liệu tới"
+void markNeighborhood(Key k) {
+    for (auto delta : std::array<Key, 5>{{{0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1}}}) {
+        const Key key{k.first + delta.first, k.second + delta.second};
+        if (tiles.contains(key))
+            dirty.insert(key);
+    }
+}
+```
+
+### Đưa lựa chọn vào tay người đi
+
+Mở `field-controls.hpp`, tìm `fieldKey`. Ở sự kiện `SDLK_J`, gán `scene.stream.budget = 3 - scene.stream.budget;`. Với hai giá trị 1 và 2, mỗi lần nhấn sẽ chuyển sang mức kia. Đây là thay đổi duy nhất trong bài; không viết lại `tick`. Không đặt lệnh này ở vòng đọc trạng thái giữ phím, nếu không một lần nhấn sẽ đảo liên tục.
+
+{/* snippet include/trail/field-controls.hpp#budget-key */}
+
+```cpp title="include/trail/field-controls.hpp — Mỗi lần nhấn J đổi ngân sách một lần"
+if (key == SDLK_J)
+    scene.stream.budget = 3 - scene.stream.budget;
+```
+
+<VoxelWorkFile project="62" step={2} file="field-controls" />
+
+## Ghép các phần lại
+
+Đi cùng hướng từ cùng điểm xuất phát, theo dõi `queue` ở F1 lúc vừa vượt biên. Thử lại ở mức kia bằng J. Mức hai cho phép lấy nhiều cột mới hơn mỗi lượt khi hàng còn dài. HUD không in trực tiếp mức ngân sách; nếu hàng vốn đã rỗng, đứng yên nhấn J sẽ không tạo ra khác biệt nhìn thấy.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_62_work --parallel 1
+.\build-work\Release\project_62_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Không xóa hàng đợi cũ khi đổi tâm. Cột sau lưng đã ra khỏi bán kính vẫn có thể bất ngờ được nạp lại.
+
+## Tự kiểm tra kết quả
+
+Hai ngân sách cho cùng tập cột sau khi đứng yên, nhưng chia công qua các frame khác nhau. Không có chunk xa tự sống lại sau một lượt đi–về.
+
+## Bài tập mở rộng
+
+Thử dự đoán điều gì xảy ra nếu chỉ giới hạn sinh dữ liệu mà cho phép dựng lại mọi mesh bẩn trong cùng frame.
+
+[Bài 3: Vì sao đám mây không được dán lên màn hình?](/projects/voxel-chunk-streaming/03-may-qua-ngon-cay).

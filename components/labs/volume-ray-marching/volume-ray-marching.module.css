@@ -1,0 +1,366 @@
+.root {
+  background: #0b1720;
+  color: #dce9ee;
+  border: 1px solid #2b4653;
+  border-radius: 14px;
+  padding: 18px;
+  min-width: 0;
+  font-size: 1rem;
+}
+.root p {
+  color: #abc5d1;
+  line-height: 1.65;
+  margin: 12px 0;
+}
+.heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #2c4653;
+}
+.root .heading span {
+  font: 0.875rem/1.5 monospace;
+  color: #68d5bf;
+  letter-spacing: 0.035em;
+}
+.heading h3 {
+  color: #f1eadc;
+  font-size: 22px;
+  margin: 5px 0;
+}
+.root h4 {
+  color: #e9e6d6;
+  font-size: 15px;
+  margin: 8px 0;
+}
+.controls,
+.modes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 14px 0;
+}
+.controls label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.root button,
+.root select {
+  background: #1b3442;
+  color: #deedf0;
+  border: 1px solid #3b5c6c;
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 0.875rem;
+  max-width: 100%;
+}
+.root button {
+  cursor: pointer;
+}
+.root select {
+  appearance: none;
+  padding-right: 30px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #a9cbd9 50%),
+    linear-gradient(135deg, #a9cbd9 50%, transparent 50%);
+  background-position:
+    right 14px center,
+    right 9px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+.root :disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.root :focus-visible {
+  outline: 2px solid #ffbc7c;
+  outline-offset: 3px;
+}
+.root input[type="range"] {
+  width: 128px;
+  max-width: 100%;
+  accent-color: #eeab70;
+}
+.modes button[aria-pressed="true"] {
+  background: #245757;
+  border-color: #6bbcb2;
+  color: #ffebcf;
+}
+.modes span {
+  color: #a4bfc9;
+  font-size: 0.875rem;
+}
+.viewport {
+  margin: 0;
+  background: #08131c;
+  border: 1px solid #34505d;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.viewport figcaption,
+.histogram figcaption {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: #132631;
+  color: #cfdfdf;
+  font-size: 0.875rem;
+}
+.root figcaption strong {
+  color: #eee9d8;
+}
+.viewport figcaption span,
+.histogram figcaption span {
+  color: #95b7c7;
+  font-size: 0.75rem;
+}
+.canvas {
+  display: block;
+  width: 100%;
+  height: 520px;
+  touch-action: none;
+  cursor: grab;
+}
+.canvas:active {
+  cursor: grabbing;
+}
+.root .hint {
+  font-size: 0.875rem;
+  padding: 9px 12px;
+  margin: 0;
+  background: #11222d;
+}
+.root .progress {
+  font-size: 0.875rem;
+  color: #e6bb8c;
+  padding: 8px 12px;
+  margin: 0;
+}
+.status {
+  padding: 10px;
+  background: #172b36;
+  border-radius: 6px;
+}
+.status p {
+  font-size: 0.875rem;
+}
+.status label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.root .explanation {
+  font-size: 0.875rem;
+  border-left: 2px solid #dba16c;
+  padding-left: 10px;
+}
+.root .readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px;
+  background: #142a36;
+  color: #a9cbd9;
+  font: 0.875rem/1.6 monospace;
+}
+.readout output {
+  color: #f7c394;
+}
+.profile,
+.measure {
+  border: 1px solid #315364;
+  border-radius: 8px;
+  padding: 13px;
+  margin: 16px 0;
+  background: #0e202a;
+  min-width: 0;
+}
+.profile header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.profile header span {
+  color: #a6c8d3;
+  font: 0.875rem monospace;
+}
+.profile svg {
+  display: block;
+  width: 100%;
+  height: 146px;
+}
+.profile p,
+.measure p {
+  font-size: 0.875rem;
+}
+.profile summary {
+  color: #e5bc89;
+  cursor: pointer;
+  margin: 12px 0;
+}
+.table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.table table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 0.875rem/1.6 monospace;
+  white-space: nowrap;
+}
+.table th,
+.table td {
+  color: #cee2e9;
+  border-bottom: 1px solid #2b4856;
+  padding: 7px;
+  text-align: right;
+}
+.table tr[aria-current="step"] {
+  background: #27484e;
+}
+.histogram {
+  margin: 16px 0 0;
+  border: 1px solid #2a4858;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.histogram svg {
+  display: block;
+  width: 100%;
+  height: 100px;
+  padding: 8px;
+}
+.cloudLegend,
+.comparison {
+  margin-top: 16px;
+  border: 1px solid #315364;
+  border-radius: 10px;
+  padding: 16px;
+  min-width: 0;
+  background: #10232d;
+}
+.root .cloudLegend h4,
+.root .comparison h4 {
+  font-size: 1.125rem;
+}
+.cloudLegend ul {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 14px 0;
+  padding: 0;
+}
+.cloudLegend li {
+  display: flex;
+  gap: 14px;
+  padding: 10px 12px;
+  border: 1px solid #3d5b68;
+  border-radius: 6px;
+  background: #0a1820;
+  font-size: 0.875rem;
+}
+.root .cloudLegend strong {
+  color: #e7ece5;
+}
+.cloudLegend output {
+  color: #79dbc7;
+  font-family: monospace;
+}
+.densityGradient {
+  height: 12px;
+  border-radius: 4px;
+}
+.gradientLabels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 5px;
+  color: #bad0d9;
+  font-size: 0.875rem;
+}
+.comparisonGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.root .comparisonCard {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  text-align: left;
+  padding: 10px;
+  gap: 8px;
+  min-width: 0;
+  background: #091923;
+}
+.root .comparisonCard[aria-pressed="true"] {
+  border-color: #79dbc7;
+  background: #18373f;
+}
+.root .comparisonCard strong {
+  color: #79dbc7;
+  font: 700 0.875rem monospace;
+}
+.comparisonCard span {
+  color: #e7ece5;
+  font-size: 0.875rem;
+}
+.comparisonCard small {
+  color: #a9c5d2;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+.comparisonCanvas {
+  display: block;
+  width: 100%;
+  height: 140px;
+}
+@media (max-width: 600px) {
+  .comparisonGrid {
+    grid-template-columns: 1fr;
+  }
+  .comparisonCanvas {
+    height: 180px;
+  }
+  .root {
+    padding: 10px;
+  }
+  .heading {
+    display: block;
+  }
+  .heading h3 {
+    font-size: 19px;
+  }
+  .canvas {
+    height: 380px;
+  }
+  .controls {
+    gap: 10px;
+  }
+  .root input[type="range"] {
+    width: 118px;
+  }
+  .root select {
+    min-width: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .root *,
+  .root *::before,
+  .root *::after {
+    animation: none;
+    transition: none;
+    scroll-behavior: auto;
+  }
+}

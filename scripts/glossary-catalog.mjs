@@ -39,6 +39,7 @@ export const glossarySources = [
   { file: "lib/glossary-ui-controls.ts", name: "uiControlGlossaryTerms" },
   { file: "lib/glossary-widget-tree.ts", name: "widgetTreeGlossaryTerms" },
   { file: "lib/glossary-box-layout.ts", name: "boxLayoutGlossaryTerms" },
+  { file: "lib/glossary-flock-ui.ts", name: "flockUiGlossaryTerms" },
 ];
 
 export function assertGlossaryModules(files) {

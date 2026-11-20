@@ -39,12 +39,9 @@ inline bool handle(SDL_Renderer* renderer, App& app, SDL_Event event) {
     if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
         const Point p{event.button.x, event.button.y};
         const bool consumed = pointerDown(app.built.tree, app.model, app.ui, p);
-        if (!consumed && contains({24, 24, 616, 492}, p)) {
-            app.model.y = std::clamp(p.y, 48.0, 446.0);
-            app.model.velocity = 0;
-            app.model.accumulator = 0;
+        if (!consumed && contains({bench::mapX, bench::mapY, bench::mapW, bench::mapH}, p)) {
+            app.model.colony.selectAt(bench::world(float(p.x), float(p.y)));
             ++app.model.scenePresses;
-            ++app.model.clockRevision;
         }
         if (app.ui.active != 0 && !SDL_CaptureMouse(true)) {
             cancel(app.ui);
@@ -80,6 +77,7 @@ inline bool handle(SDL_Renderer* renderer, App& app, SDL_Event event) {
             resetSimulation(app.model);
         }
 #if LAB_CHECKPOINT >= 1
+        if (event.key.key == SDLK_F2 && !event.key.repeat) app.inspect = !app.inspect;
         if (event.key.key == SDLK_T && !event.key.repeat)
             rebuild(app, 0);
 #endif

@@ -3,6 +3,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { loadProjectCatalog, workspace } from "./project-catalog.mjs";
 import { courseCmake } from "./course-cmake.mjs";
+import { courseSourceTemplates } from "./course-source-templates.mjs";
 import { reconcileGeneratedFiles } from "./generated-files.mjs";
 import { checkpointSelection } from "./checkpoint-selection.mjs";
 import {
@@ -37,6 +38,9 @@ function languageFor(relativePath) {
   if ([".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl"].includes(extension))
     return "cpp";
   if (extension === ".md" || extension === ".mdx") return "markdown";
+  if (extension === ".html") return "html";
+  if (extension === ".css") return "css";
+  if (extension === ".tiny") return "tinyscript";
   if ([".comp", ".vert", ".frag", ".geom", ".glsl"].includes(extension)) return "glsl";
   return "text";
 }
@@ -144,8 +148,8 @@ function snapshotDefinitions(project) {
 
 function snapshotFiles(project) {
   const projectDirectory = path.join(workspace, "examples", project.sourceDirectory);
-  const templateDirectory = path.join(projectDirectory, "source-template");
-  const templateFiles = walkFiles(templateDirectory);
+  const inputs = courseSourceTemplates(workspace, project);
+  const templateFiles = [...inputs.keys()].sort((a, b) => a.localeCompare(b));
   if (templateFiles.length === 0) {
     throw new Error(`${project.sourceDirectory}/source-template must not be empty`);
   }
@@ -157,12 +161,14 @@ function snapshotFiles(project) {
   // calls for unchanged headers when materializing starter + lessons + final.
   const templateSources = new Map(
     templateFiles.map((relativePath) => {
-      const sourcePath = path.join(templateDirectory, relativePath);
+      const { sourcePath, checkpointBase, fixedCheckpoint } = inputs.get(relativePath);
       const source = readFileSync(sourcePath);
       return [
         relativePath,
         {
           sourcePath,
+          checkpointBase,
+          fixedCheckpoint,
           source,
           variesByCheckpoint: isCourseTextFile(relativePath) && source.includes("LAB_CHECKPOINT"),
           rendered: new Map(),
@@ -179,7 +185,7 @@ function snapshotFiles(project) {
       // Unversioned text/binary has the same immutable result in every snapshot.
       // Versioned files still validate LAB directives; final reuses checkpoint N.
       // The cache lives only inside this project/input snapshot, never on disk.
-      const renderKey = template.variesByCheckpoint ? snapshot.checkpoint : 0;
+      const renderKey = template.variesByCheckpoint ? (template.fixedCheckpoint ?? (template.checkpointBase + snapshot.checkpoint)) : 0;
       let value = template.rendered.get(renderKey);
       if (!value) {
         value = materializeSnapshotFile({
@@ -241,6 +247,9 @@ function commonModule(project, expected) {
   const commonFiles = [
     "CMakeLists.txt",
     ...walkFiles(path.join(projectDirectory, "tests")).map((file) => path.join("tests", file)),
+    ...(project.sourceSeries === "flock-workbench" && Number(project.id) >= 68
+      ? walkFiles(path.join(projectDirectory, "assets")).map((file) => path.join("assets", file))
+      : []),
   ].filter((file) => isCourseTextFile(file));
   return commonFiles.map((relativePath) => {
     const absolute = path.join(projectDirectory, relativePath);
@@ -355,7 +364,7 @@ function generatedManifestRegistry() {
   return `export const generatedCheckpointSourceLoaders = {\n${loaders.join("\n")}\n} as const;\n`;
 }
 
-const retainedFiles = new Set();
+const checkedDirectories = new Set();
 const result = { changedCount: 0, removedCount: 0, mismatchCount: 0 };
 let outputCount = 0;
 function accumulate(batch) {
@@ -422,7 +431,8 @@ for (const project of selection.projects) {
     }),
   );
   outputCount += expectedFiles.size;
-  for (const target of expectedFiles.keys()) retainedFiles.add(target);
+  checkedDirectories.add(generatedProjectDirectory);
+  checkedDirectories.add(path.join(publicSourceDirectory, project.id));
 }
 const expectedFiles = new Map();
 expectedFiles.set(
@@ -434,9 +444,9 @@ accumulate(
   reconcileGeneratedFiles({
     expectedFiles,
     // Scoped runs may prune only the selected project's roots above. A full run
-    // also removes orphan project payloads, retaining the batches already checked.
+    // also removes orphan project payloads, without rescanning the checked directories.
     managedRoots: selection.scoped ? [] : [generatedSourceDirectory, publicSourceDirectory],
-    retainedFiles,
+    checkedDirectories,
     checkOnly,
     workspace,
   }),

@@ -21,15 +21,18 @@ enum class Kind {
 enum class Action {
     None,
     Pause,
-    Reset
+    Reset,
+    Observe
 };
 enum class Binding {
     None,
-    Gravity,
+    Radius,
+    Separation,
     Time
 };
 
 // Parent sở hữu child. Ui chỉ giữ ID, không giữ con trỏ có thể bị delete.
+// [snippet identity]
 struct Widget {
     WidgetId id = 0;
     Kind kind = Kind::Panel;
@@ -43,6 +46,7 @@ struct Widget {
 #endif
     std::vector<std::unique_ptr<Widget>> children;
 };
+// [/snippet identity]
 
 struct Tree {
     std::unique_ptr<Widget> root = std::make_unique<Widget>();
@@ -79,6 +83,7 @@ inline int depthOf(const Widget& node, WidgetId id, int depth = 0) {
     return -1;
 }
 
+// [snippet own-child]
 inline WidgetId add(Tree& tree, WidgetId parentId, Kind kind, Rect local, const std::string& text = "", Action action = Action::None, Binding binding = Binding::None) {
     Widget* parent = find(*tree.root, parentId);
     if (!parent || parent->kind != Kind::Panel || tree.count >= maxWidgets || tree.nextId > maxId || depthOf(*tree.root, parentId) >= maxDepth || !validRect(local) || text.size() > 40) {
@@ -99,5 +104,6 @@ inline WidgetId add(Tree& tree, WidgetId parentId, Kind kind, Rect local, const 
     ++tree.revision;
     return id;
 }
+// [/snippet own-child]
 #endif
 } // namespace lab

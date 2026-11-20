@@ -15,7 +15,7 @@ enum class Key {
     Escape
 };
 
-// Duyệt focus theo cây, không viết danh sách Pause/Reset/Gravity cố định nữa.
+// Duyệt focus theo cây, không viết danh sách các control cố định nữa.
 inline bool keyDown(const Tree& tree, Model& model, Ui& ui, Key key, bool shift, bool repeat) {
     reconcile(tree, ui);
     if (key == Key::Escape) {
@@ -41,8 +41,10 @@ inline bool keyDown(const Tree& tree, Model& model, Ui& ui, Key key, bool shift,
             if (index < 0)
                 next = static_cast<int>(order.size()) - 1;
         }
+        // [snippet keyboard-order]
         const int size = static_cast<int>(order.size());
         ui.focus = order[static_cast<std::size_t>((next + size) % size)];
+        // [/snippet keyboard-order]
         return true;
     }
     if (ui.active != 0)
@@ -55,14 +57,16 @@ inline bool keyDown(const Tree& tree, Model& model, Ui& ui, Key key, bool shift,
     const auto view = locate(tree, ui.focus);
     if (!view || view->node->kind != Kind::Slider)
         return false;
+    const Binding binding = view->node->binding;
+    const double current = fraction(model, binding);
     if (key == Key::Left)
-        setGravity(model, model.gravity - 20);
+        assign(model, binding, current - 0.05);
     else if (key == Key::Right)
-        setGravity(model, model.gravity + 20);
+        assign(model, binding, current + 0.05);
     else if (key == Key::Home)
-        setGravity(model, 0);
+        assign(model, binding, 0);
     else if (key == Key::End)
-        setGravity(model, 1200);
+        assign(model, binding, 1);
     else
         return false;
     return true;

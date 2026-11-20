@@ -16,6 +16,11 @@ export function isContiguousCodeExcerpt(fragment, source) {
   return haystack.includes(delimiter + expected.join(delimiter) + delimiter);
 }
 
+// Return a fresh expression: callers may replace or iterate without sharing lastIndex.
+export function markedSnippetBlockPattern() {
+  return /(\{\/\* snippet ((?:include|src|tests|shaders)\/[a-zA-Z0-9_./-]+)#([a-z0-9-]+) \*\/\}\r?\n(?:\r?\n)*)```(cpp|glsl) title="([^"]+)"\r?\n[\s\S]*?^```[ \t]*(?=\r?$)/gm;
+}
+
 // Markers survive snapshot generation; read the exact checkpoint, not the template.
 export function markedCodeExcerpt(source, id) {
   if (!/^[a-z0-9-]+$/.test(id)) throw new Error(`Invalid snippet marker: ${id}`);

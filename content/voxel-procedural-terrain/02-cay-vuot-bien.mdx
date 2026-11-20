@@ -1,0 +1,121 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Cho tán thông vượt qua đường biên chunk
+
+## Vấn đề cần giải quyết
+
+Nếu xét riêng các gốc nằm trong chunk đang sinh, nửa tán mọc từ khu bên cạnh sẽ biến mất đúng ở đường nối. Ta cần một cách hỏi “có cây nào vươn tới đây không?” mà không phụ thuộc chunk nào được nạp trước.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chia bản đồ thành những ô dành cho gốc. Seed và địa chỉ ô quyết định vị trí, chiều cao cây; các chunk cùng nhìn thấy một cây thì phải tính ra cùng một gốc. Địa hình thấp có tán lá rộng, vùng lạnh dùng dáng thông thuôn và mặt đất phủ tuyết.
+
+<InteractiveLab demo="voxel-procedural-terrain" mode="voxel63-2" />
+
+## Viết code từng bước
+
+Một cây mọc sát mép chunk không thể bị chặt đôi chỉ vì chunk bên trái nạp sau bên phải. Mỗi cột phải tự trả lời được cây nào phủ tới nó, dù hàng xóm chưa tồn tại.
+
+### Tìm cả những gốc nằm ngoài cột
+
+Cuối `naturalColumn` trong `terrain.hpp`, sau khi làm đất, chia mặt phẳng world thành ô 7 block và chọn vị trí gốc từ seed cùng địa chỉ ô. Mở rộng miền xét sang bên cạnh 3 block để không bỏ phần tán vươn qua mép. Chỉ đặt cây ở nền thích hợp và tránh lối đi. `plantTree` của Project 58 tự giới hạn phần ghi vào cột hiện tại.
+
+{/* snippet include/trail/terrain.hpp#tree-anchors */}
+
+```cpp title="include/trail/terrain.hpp — Mở rộng vùng tìm gốc quanh đường biên"
+const int minX = int(std::floor((cx * side - 3) / 7.0)), minZ = int(std::floor((cz * side - 3) / 7.0));
+const int maxX = int(std::floor((cx * side + side + 2) / 7.0)), maxZ = int(std::floor((cz * side + side + 2) / 7.0));
+for (int gz = minZ; gz <= maxZ; ++gz)
+    for (int gx = minX; gx <= maxX; ++gx) {
+        const auto h = hash(gx, gz, seed + 99);
+        if ((h & 7) == 0)
+            continue;
+        const int tx = gx * 7 + int((h >> 4) % 6), tz = gz * 7 + int((h >> 12) % 6);
+        const Site s = siteAt(tx, tz, seed);
+        if (std::abs(tx + 0.5 - pathX(tz, seed)) < 4.2 || std::hypot(double(tx - campX(seed)), double(tz - 147)) < 5.5)
+            continue;
+        const double lookoutX = std::floor(riverCenter(170, seed) + 18);
+        if (std::hypot(tx - lookoutX, double(tz - 170)) < 4.8)
+            continue;
+        if (s.inland < 12 || s.river || s.ocean || std::abs(tx - s.riverX) < 9.5 || s.ground > 53)
+            continue;
+        plantTree(column, {tx, s.ground + 1, tz, 5 + int((h >> 20) % 3), s.alpine});
+    }
+```
+
+<VoxelWorkFile project="63" step={2} file="terrain" />
+
+### Chọn dáng cây từ nơi nó mọc
+
+Dùng `siteAt` đã có để biết nền và vùng núi trước khi đặt thân. Ở rừng thông, sửa `materials.hpp` để lá kim có những mảng sáng giống tuyết bám. Tuyết này nằm trên cây, chưa phải hạt rơi. Ở rừng thấp, tán lá rộng làm mốc để phân biệt hai vùng từ xa.
+
+{/* snippet include/trail/terrain.hpp#land-profile */}
+
+```cpp title="include/trail/terrain.hpp — Dùng lại độ cao dưới chân từng cây"
+const double bed = s.riverLevel - 2.4;
+const double land = s.riverLevel + 2.8 + mountains * (6 + 7 * broad) + 6 * broad + 2 * fine + canyon * 15;
+const double edge = smooth(2.6, 17.0, bank);
+double ground = std::lerp(bed, land, edge);
+// Lối men bờ có độ cao tăng từ từ để tuyến chuẩn không bị vách đá chặn.
+const double trail = smooth(3.4, 6.4, bank) * (1 - smooth(7.5, 11.5, bank));
+ground = std::lerp(ground, s.riverLevel + 1 + mountains * 3, trail);
+const double coast = std::clamp(12 + 0.24 * s.inland + 1.3 * (fine - 0.5), 3.0, 17.0);
+ground = std::lerp(coast, ground, smooth(-3, 18, s.inland));
+// Nối lòng sông xuyên qua dải cát: cửa sông không có đập chắn vô tình.
+const double estuary = (1 - smooth(2.8, 6.0, bank)) * (1 - smooth(10, 24, s.inland));
+ground = std::lerp(ground, std::min(ground, bed), estuary);
+// Hai mỏm đá phía ngoài bãi cho mắt một mốc khi quan sát đỉnh sóng.
+const double reefA = std::hypot((x + 9.0) / 5.0, (z + 10.0) / 3.3);
+const double reefB = std::hypot((x - 16.0) / 4.2, (z + 14.0) / 2.6);
+ground += 5.4 * (1 - smooth(0, 1, reefA)) + 5.0 * (1 - smooth(0, 1, reefB));
+// Khoảng đất phẳng quanh bếp, đủ cho người quan sát đi vòng.
+const double clearing = 1 - smooth(4, 8, std::hypot(double(x - campX(seed)), double(z - 147)));
+ground = std::lerp(ground, 25.0, clearing);
+if (s.inland > 12) {
+    const double center = pathX(z, seed);
+    const double pathWeight = 1 - smooth(1.9, 3.8, std::abs(x + 0.5 - center));
+    const double pathLevel = std::lerp(s.riverLevel + 1 + mountains * 3, 25.0, 1 - smooth(3, 10, std::abs(z - 147)));
+    ground = std::lerp(ground, pathLevel, pathWeight);
+}
+```
+
+<VoxelWorkFile project="63" step={2} file="materials" />
+
+### Chủ động đổi seed để kiểm phép sinh
+
+Trong `field-controls.hpp`, gắn N với tăng seed và gọi lại `generate()`. Đổi N kiểm rằng **bản đồ khác** có thay đổi. Để kiểm tính lặp lại, giữ **cùng** seed, đi xa cho cột bị gỡ rồi quay lại, hoặc mở lại chương trình với cùng điều kiện.
+
+{/* snippet include/trail/field-controls.hpp#seed-key */}
+
+```cpp title="include/trail/field-controls.hpp — Sinh lại với seed tiếp theo"
+if (key == SDLK_N) {
+    ++scene.region.seed;
+    scene.generate();
+}
+```
+
+<VoxelWorkFile project="63" step={2} file="field-controls" />
+
+## Ghép các phần lại
+
+Chọn một thân gần mép chunk, nhìn cả tán, đi xa rồi quay lại. Ghi vị trí thân và hướng nhánh tán bắc qua mép; chúng phải khớp như trước. Chỉ đếm số cây không đủ để bắt lỗi một cây bị dời hoặc bị cắt tán.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_63_work --parallel 1
+.\build-work\Release\project_63_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Bỏ phần mở rộng tìm gốc. Chọn một cây nằm cách mép một block: thân còn nguyên nhưng bước sang chunk bên cạnh sẽ thấy tán bị cắt phẳng.
+
+## Tự kiểm tra kết quả
+
+Rừng lá rộng và rừng thông nhận ra được từ hình dáng. Cùng tọa độ, cùng seed, số block lá và điểm neo phải lặp lại được kể cả vùng tọa độ âm.
+
+## Bài tập mở rộng
+
+Tắt màu lá, chỉ nhìn bóng cây. Hình dáng nào còn giúp nhận ra thông?
+
+[Bài 3: Nhìn vệt nước chạy qua một tảng đá đứng yên](/projects/voxel-procedural-terrain/03-vet-nuoc-xuoi-dong).

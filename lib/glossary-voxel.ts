@@ -1,26 +1,26 @@
 export const voxelGlossaryTerms = [
   {
     id: "voxel-chunk-storage",
-    term: "Voxel chunk",
+    term: "Voxel chunk và section",
     definition:
-      "Một nhóm block có kích thước hữu hạn. Project 58 dùng 16×16×16 Block ID, tọa độ local 0..15, y hướng lên. Layout x+16*(z+16*y) đặt x liền nhau, sau đó đến z rồi y. Chunk là dữ liệu gốc, không phải danh sách tam giác hoặc framebuffer.",
+      "Section là một khối 16×16×16 ô. Trong Project 58 một chunk mới có một section; tới Project 63 một cột chunk ghép bốn section theo chiều cao. Địa chỉ x + 16 × (z + 16 × y) đặt hai ô kế nhau trên trục x cạnh nhau trong bộ nhớ.",
   },
   {
     id: "voxel-block-id",
     term: "Block ID",
     definition:
-      "Mã vật liệu của một ô voxel: Air=0, Grass=1, Dirt=2, Stone=3 trong Project 58. ID không phải màu RGB, chỉ số vertex hoặc độ cao. Air chiếm chỗ trong mảng dữ liệu nhưng không sinh mặt khi dựng mesh.",
+      "Một ô lưu mã vật liệu, không lưu sẵn màu màn hình. Air bằng 0; Grass, Soil, Stone, Sand, Wood, Leaves và Water có họa tiết riêng. Tới vùng núi ta dùng thêm Snow và Needles. Air vẫn có địa chỉ nhưng không sinh mặt.",
   },
   {
     id: "voxel-naive-mesh",
     term: "Mesh voxel chưa tối ưu",
     definition:
-      "Dựng đủ sáu quad cho mỗi block đặc, mỗi quad hai tam giác. N block tạo 12N tam giác, kể cả mặt chung giữa hai block. Z-buffer quyết định pixel nào được thấy chứ không giảm số tam giác. Loại mặt giáp block đặc là một bước tối ưu riêng ở Project 59.",
+      "Dựng đủ sáu quad cho mỗi block không phải Air, hai tam giác cho mỗi quad. Hai viên đá chạm nhau vẫn tạo 24 tam giác. Z-buffer chỉ quyết định pixel nào ở trước, không bớt được hai mặt bên trong.",
   },
   {
     id: "voxel-slice-inspector",
-    term: "Bảng lớp cắt voxel",
+    term: "Bảng đọc lớp voxel",
     definition:
-      "Bảng 2D đọc các ô x/z tại một y cố định. Cắt mesh ở y<=slice chỉ đổi hình hiển thị, không xóa block khỏi dữ liệu. Chọn ô trong bảng không phải ray picking từ camera và không phải thao tác phá/đặt block.",
+      "Chọn một y cố định rồi đọc các ô theo x/z. Đổi lớp trên bảng không cắt mặt của phong cảnh, không đào và cũng không dựng lại mesh. Hai hình nhìn khác nhau nhưng cùng đọc một mảng block.",
   },
 ];

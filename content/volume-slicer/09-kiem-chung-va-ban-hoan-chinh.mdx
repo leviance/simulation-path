@@ -1,0 +1,132 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng rồi chạy toàn bộ project
+
+## Vấn đề cần giải quyết
+
+Một sphere đối xứng có thể che lỗi đổi trục. Một ảnh nhìn mượt có thể che lỗi lấy scalar từ màu. Cửa sổ mở được cũng chưa chứng minh capture được nhả khi thả chuột. Ta cần các phép kiểm có câu hỏi và đáp số cụ thể trước khi gọi workbench là hoàn chỉnh.
+
+Bản cuối mặc định 128³ = 2.097.152 mẫu Float32. 64³ vẫn là preset học/so sánh, không dùng một volume nhỏ rồi chỉ ghi 128³ trên giao diện. Source hoàn chỉnh cuối bài và ZIP là cùng một chương trình C++/SDL3 độc lập.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tách ba nhóm bằng chứng. **Toán/dữ liệu** kiểm indexing, sampler, đối xứng và việc display không sửa volume. **Ứng dụng** kiểm luồng event, reset, mất focus, resize/DPI và thao tác người dùng. **Chi phí** ghi N, byte, thời gian tạo dữ liệu và dựng ảnh; một số ms ở debug UI không tự biến thành benchmark có warm-up/median.
+
+Fixture cần đủ nhỏ để tự tính đáp số. Với `x+10y+100z`, ta biết số nào ở đâu và giá trị giữa ô phải là gì. Với affine field, trilinear phải tái tạo đúng trong miền giữa các tâm; sai số tuyệt đối 1e−10 áp cho fixture Float32 biểu diễn chính xác, không áp mù quáng cho mọi scalar lớn hoặc vị trí sát bước nhảy.
+
+<InteractiveLab demo="volume-slicer" mode="slice53-9" />
+
+Nút kiểm trên Canvas kiểm dữ liệu CPU và fixture. Nó không kiểm driver, mouse capture của Windows hoặc chứng nhận công cụ y khoa.
+
+## Viết code từng bước
+
+### 1. Dùng check thực sự chạy trong Release
+
+Test giữ bộ đếm failures và trả exit code lỗi khi có check sai. Không dùng `assert` cho acceptance, vì cấu hình Release thường bật NDEBUG.
+
+{/* snippet tests/tests.cpp#check-release */}
+
+```cpp title="tests/tests.cpp — Check không bị NDEBUG tắt"
+void check(bool condition, const char* message) {
+    ++checks;
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << message << '\n';
+    }
+}
+```
+
+`near` trong cùng file còn kiểm actual hữu hạn trước khi so sai số. Nếu chỉ viết một phép so với epsilon mà bỏ NaN, một số cách viết điều kiện có thể vô tình chấp nhận kết quả không hợp lệ.
+
+### 2. Kiểm một điểm có đáp số tính tay
+
+Ta giữ lại phép kiểm 50,5 từ Bài 4, thêm các tâm, tie, cạnh/góc, sáu mặt physical box và singleton. Test địa chỉ so trực tiếp với `x+3*y+6*z`, không chỉ set rồi get qua cùng một hàm có thể sai giống nhau.
+
+{/* snippet tests/tests.cpp#known-eight */}
+
+```cpp title="tests/tests.cpp — Tám trọng số và đáp số biết trước"
+const Vec3 middle{1, 0, 3};
+const auto stencil = linearStencil(fixture, middle).value();
+double weights = 0;
+for (const Contribution& contribution : stencil) {
+    weights += contribution.weight;
+    check(contribution.weight >= 0, "convex weights");
+}
+near(weights, 1, 1e-15, "eight weights sum to one");
+near(sampleLinear(fixture, middle).value(), 50.5, 1e-12, "known half-cell result");
+```
+
+Sphere kiểm đối xứng; Layers/Ramp kiểm hướng trục. Không bắt sphere gánh cả hai việc vì tính đối xứng chính là lý do một lỗi hoán đổi trục dễ bị che.
+
+### 3. Kiểm nhiều điểm affine, không chỉ các tâm
+
+Runtime audit trước hết đo/check storage thật. Sau đó nó dùng một fixture riêng, tạo các world point không trùng tâm và so với biểu thức affine đã biết.
+
+{/* snippet include/analysis.hpp#affine-oracle */}
+
+```cpp title="include/analysis.hpp — Oracle affine độc lập"
+for (int trial = 0; trial < 12; ++trial) {
+    const double x = 0.1 + trial * 0.15;
+    const double y = 0.05 + trial * 0.08;
+    const double z = 0.2 + trial * 0.21;
+    const Vec3 point{grid.origin.x + (x + 0.5) * grid.spacing.x, grid.origin.y + (y + 0.5) * grid.spacing.y, grid.origin.z + (z + 0.5) * grid.spacing.z};
+    const double expected = x + 10 * y + 100 * z;
+    const double error = std::abs(sampleLinear(fixture, point).value() - expected);
+    report.residual = std::max(report.residual, error);
+    ++report.checks;
+    if (error > 1e-10) ++report.failures;
+}
+```
+
+Một audit fixture xanh không thay được kiểm dataset thật. Vì vậy `measure(volume)` chạy trước đoạn này và từ chối storage/giá trị không hợp lệ. Tương tự, audit toán không kiểm mouse capture: phải thử thao tác ấy ở cửa sổ thực tế.
+
+### 4. Cho lệnh kiểm một điểm dừng rõ ràng
+
+App có `--frames`, `--seconds`, `--verify` và `--capture`. Capture mặc định dừng sau ba frame; khi chạy tự động vẫn cần watchdog độc lập để có thể dọn process tree nếu app/driver không trả quyền điều khiển.
+
+{/* snippet src/main.cpp#finite-options */}
+
+```cpp title="src/main.cpp — Lượt kiểm hữu hạn, không chạy vô hạn"
+if (options.frames < 0 || options.frames > 600 || !std::isfinite(options.seconds) || options.seconds < 0 || options.seconds > 60)
+    throw std::invalid_argument("Finite run: frames in [0,600], seconds in [0,60]");
+if (options.side != 0 && options.side != 64 && options.side != 128) throw std::invalid_argument("Size must be 64 or 128");
+if (options.preset < -1 || options.preset > 4) throw std::invalid_argument("Preset must be 0..4");
+if (!options.capture.empty() && options.frames == 0) options.frames = 3;
+if (options.verify && options.frames == 0) options.frames = 3;
+```
+
+Ảnh nghiệm thu được đọc sau khi vẽ và trước present, đúng thời điểm mô tả trong [SDL_RenderReadPixels](https://wiki.libsdl.org/SDL3/SDL_RenderReadPixels). Bản chụp là bằng chứng hình ảnh của một trạng thái, không chứng minh mọi control đã hoạt động.
+
+## Ghép các phần lại
+
+Từ thư mục ZIP đã giải nén, configure/build như một project CMake bình thường. Không cần Node.js hoặc repository website, không cần chép file từ Project 52.
+
+```bash
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 1
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 1
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+```
+
+Với Visual Studio, chạy `build/Release/project_53_final.exe`. Chạy hữu hạn bằng `--verify --frames 3 --seconds 10`; chụp ảnh bằng `--capture specimen.bmp --seconds 10`. Generator single-config đặt executable ngay trong `build/`, không có thư mục cấu hình con.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi một kết quả kiểm biết trước từ 50,5 sang 50,6 rồi chạy cả Debug và Release. Cả hai phải trả lỗi; sau đó khôi phục test đúng. Đây là kiểm test harness, không phải làm yếu test cho code qua.
+2. Gây một lỗi indexing cố ý, chẳng hạn dùng ny thay nx. Xem fixture nào phát hiện và vì sao Sphere có thể vẫn trông gần đúng. Khôi phục trước khi chạy giao diện.
+3. Trong cửa sổ thật, kéo ra ngoài rồi thả/alt-tab, reset khi đang quét, đổi N/preset và resize. Ghi rõ thao tác nào đã kiểm; không dùng dòng “CTest PASS” thay cho danh sách này.
+
+## Tự kiểm tra kết quả
+
+- [ ] Storage, tâm mẫu, nearest/trilinear, outside policy, histogram và symmetry qua trong Debug/Release.
+- [ ] Bản final thực sự cấp phát 2.097.152 Float32; chọn 64³ không đổi world extent.
+- [ ] Chọn điểm/camera/display độc lập; ba view, cap và inspector thống nhất; capture/blur/reset hoạt động.
+- [ ] Source ở mỗi checkpoint chạy độc lập; code bài học khớp source; ZIP không chứa build, binary hoặc thư viện tải về.
+- [ ] Hiểu rõ đây là scalar tổng hợp, không phải HU, công cụ chẩn đoán hoặc tái tạo CT từ projections.
+
+## Bài tập mở rộng
+
+Thêm một dataset có hình bất đối xứng do bạn tự thiết kế và ít nhất ba phép kiểm đáp số biết trước. Nếu muốn xem toàn bộ mật độ dọc tia, đó là volume rendering ở Project 54; nếu muốn từ nhiều phép chiếu dựng lại dữ liệu, đó là bài toán khác ở nhánh CT. Không gắn hai tên ấy lên một ảnh slice chỉ vì nó có tông xám.
+
+Bạn đã có một workbench chạy được và một cách kiểm nó đọc đúng dữ liệu. Phần source đầy đủ bên dưới là điểm xuất phát để mở rộng, không phải một tập helper phải tự đoán cách ghép.

@@ -12,18 +12,22 @@ struct Size {
 using Measures = std::map<WidgetId, Size>;
 
 // availableWidth còn chứa margin của node. Kết quả width/height là border box.
+// [snippet measure]
 inline Size measure(const Widget& node, double availableWidth, const Styles& styles, Measures& sizes) {
     const BoxStyle& style = styles.at(node.id);
     if (!validStyle(style, node) || !std::isfinite(availableWidth) || availableWidth < 0 || availableWidth > 960)
         throw std::out_of_range("invalid layout input");
+    // [snippet offered-width]
     double width = style.fixedWidth;
     if (style.width == Width::Fill)
         width = std::max(0.0, availableWidth - style.margin.left - style.margin.right);
+    // [/snippet offered-width]
     double naturalHeight = style.fixedHeight;
     if (node.kind == Kind::Panel) {
         const double innerWidth = contentBox({0, 0, width, 0}, style).width;
         double childrenHeight = 0;
         int visibleCount = 0;
+        // [snippet natural-height]
         for (const auto& child : node.children) {
             if (!child->visible)
                 continue;
@@ -35,18 +39,23 @@ inline Size measure(const Widget& node, double availableWidth, const Styles& sty
             ++visibleCount;
         }
         naturalHeight = 2 * style.border + style.padding.top + childrenHeight + style.padding.bottom;
+        // [/snippet natural-height]
     }
     double height = style.fixedHeight;
     if (style.height == Height::Auto)
         height = naturalHeight;
+    // [snippet remember-size]
     const Size result{width, height, naturalHeight};
     sizes[node.id] = result;
     return result;
+    // [/snippet remember-size]
 }
+// [/snippet measure]
 #endif
 
 #if LAB_CHECKPOINT >= 4
 // Parent truyền origin local; không cộng tọa độ world ở bước arrange.
+// [snippet arrange]
 inline void arrange(Widget& node, double x, double y, const Styles& styles, const Measures& sizes) {
     const Size size = sizes.at(node.id);
     node.local = {x, y, size.width, size.height};
@@ -72,5 +81,6 @@ inline void arrange(Widget& node, double x, double y, const Styles& styles, cons
         ++visibleCount;
     }
 }
+// [/snippet arrange]
 #endif
 } // namespace lab

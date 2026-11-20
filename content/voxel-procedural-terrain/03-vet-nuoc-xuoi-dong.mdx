@@ -1,0 +1,77 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Nhìn vệt nước chạy qua một tảng đá đứng yên
+
+## Vấn đề cần giải quyết
+
+Mặt nước xanh chưa chứng minh dòng sông đang chảy. Hãy bám mắt vào một viên đá ở bờ. Ta muốn có một vệt nước đi từ phía thượng nguồn, ngang viên đá, rồi mất dần về cửa sông mà camera không hề di chuyển.
+
+## Hiểu ý tưởng trước khi viết code
+
+Gọi s là quãng đường theo chiều hạ lưu. Một gợn sáng có pha không đổi sẽ đi được vận tốc nhân thời gian. Ta dịch chi tiết trên bề mặt, không di chuyển block nước hay giải phương trình chất lưu.
+
+<InteractiveLab demo="voxel-procedural-terrain" mode="voxel63-3" />
+
+## Viết code từng bước
+
+Đất và nước đã nằm đúng chỗ nhưng mặt sông vẫn phẳng lặng như đường lát xanh. Ta muốn đứng yên cạnh một viên đá mà vẫn thấy dòng đi qua. Không cần di chuyển bất kỳ block nước nào.
+
+### Tách chuyển động của vệt khỏi vật liệu của ô
+
+Trong `water.hpp`, `flowPhase` cho biết một vệt đã đi tới đâu trong chu kỳ dài một bước sóng. Trừ phần quãng đường do thời gian tạo ra, rồi lấy phần lẻ để pha lặp. Chọn điểm ở hạ lưu và tự dự đoán khi nào cùng vệt ấy sẽ tới. Hàm `oceanAt` cũng được chuẩn bị trong tệp này, nhưng chưa nối nó với mặt biển.
+
+{/* snippet include/trail/water.hpp#river-tracer */}
+
+```cpp title="include/trail/water.hpp — Đưa quãng đường và thời gian về một pha lặp"
+inline double flowPhase(double downstream, double seconds, double speed, double wavelength) {
+    const double cycles = (downstream - speed * seconds) / wavelength;
+    return cycles - std::floor(cycles);
+}
+```
+
+<VoxelWorkFile project="63" step={3} file="water" />
+
+### Chỉ tô mặt trên của sông
+
+Trong `field-render.hpp`, ở `terrainFace`, lọc `Water` với hướng mặt trên rồi dùng `siteAt` phân biệt sông với biển. Dịch tọa độ họa tiết theo `weather.time` và hướng dọc lòng sông. Vẽ xong đặt `painted = true` để đường vẽ vật liệu thường không phủ đè lên. Các mặt bên và block dưới nước vẫn như cũ.
+
+{/* snippet include/trail/field-render.hpp#river-skin */}
+
+```cpp title="include/trail/field-render.hpp — Dịch hoa văn trên mặt sông"
+std::array<Vertex, 4> skin{};
+for (int i = 0; i < 4; ++i) {
+    const Vec3 point = points[i];
+    const double across = point.x - riverCenter(point.z, weather.seed);
+    const double downstreamUV = point.z + 0.72 * weather.time;
+    skin[i] = {cameraSpace(point, draw.camera.eye, draw.axes), across, downstreamUV};
+}
+brightness += 0.09 * std::cos(2 * pi * flowPhase(-f.origin.z, weather.time, 0.72, 4.0));
+draw.finishQuad(skin, f.block, f.direction, brightness);
+painted = true;
+```
+
+<VoxelWorkFile project="63" step={3} file="field-render" />
+
+## Ghép các phần lại
+
+Mở với `--landmark 1`, lấy một hòn đá bên bờ làm mốc rồi buông phím. Vệt nước phải dịch về hạ lưu trong khi đá đứng yên. Nhấn P để giữ vệt rồi quay đầu: màu nước không được trượt theo camera; số lần dựng mesh không tăng vì dòng chảy.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_63_work --parallel 1
+.\build-work\Release\project_63_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Đảo dấu thời gian. Họa tiết vẫn chuyển động rất đẹp nhưng vệt sáng chạy ngược về núi; hãy kiểm bằng hướng dòng chứ không chỉ kiểm ảnh có đổi.
+
+## Tự kiểm tra kết quả
+
+Lấy hai điểm dọc dòng: vệt đi qua điểm dưới sau điểm trên. Cùng vị trí/giờ ở hai chunk cho cùng pha; khi Pause hai mẫu đều đứng lại.
+
+## Bài tập mở rộng
+
+Tăng tốc độ nhưng giữ bước sóng. Khoảng cách giữa hai đỉnh và thời gian một đỉnh đi qua tảng đá sẽ thay đổi thế nào?
+
+[Bài 4: Đỉnh sóng phải nhô lên khỏi mặt biển](/projects/voxel-procedural-terrain/04-song-ngoai-khoi).

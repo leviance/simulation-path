@@ -1,0 +1,10 @@
+.sheet { background: #172F3A; padding: 14px; gap: 5px; border-color: #396070; }
+.group { background: #24444B; padding: 7px; gap: 3px; border-color: #385D60; }
+h1 { background: #172F3A; color: #9BF0D0; border: 0px; }
+button { background: #325568; color: #E5F3F0; height: 34px; }
+.action { background: #36576B; border-color: #587A83; }
+.primary { background: #286F6A; }
+#pause { background: #217564; }
+label { background: #24444B; color: #E0EFE7; border: 0px; }
+input { background: #193E45; color: #83E2C2; border-color: #466C73; }
+span { background: #172F3A; color: #A5CBC3; border: 0px; }

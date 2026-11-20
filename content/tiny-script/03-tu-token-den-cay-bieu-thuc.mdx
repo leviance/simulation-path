@@ -1,0 +1,121 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Vì sao 2 + 3 × 4 phải ra 14?
+
+## Vấn đề cần giải quyết
+
+Tính theo thứ tự thấy trên màn hình sẽ cho (2+3)×4=20. Bàn điều khiển không cần một ngôn ngữ lớn, nhưng người viết công thức cho slider phải tin rằng nhân/chia và dấu ngoặc hoạt động nhất quán.
+
+## Hiểu ý tưởng trước khi viết code
+
+Nút gốc là phép tính sau cùng. Với 2+3*4, gốc là cộng và con bên phải là phép nhân. Parser chỉ tạo AST; nó không được gọi `radius()` trong lúc mới đọc source.
+
+<InteractiveLab demo="tiny-script" mode="script72-3" />
+
+## Viết code từng bước
+
+### Giữ toán tử có ưu tiên cao hơn ở nhánh con
+
+Đọc vế trái trước. Khi gặp toán tử hợp lệ ở mức hiện tại, đọc vế phải ở mức cao hơn. Cách này giữ phép trừ và chia kết hợp từ trái sang phải.
+
+{/* snippet include/script/parse.hpp#expression */}
+
+```cpp title="include/script/parse.hpp — Giữ toán tử có ưu tiên cao hơn ở nhánh con"
+int expression(int minimum, int level) {
+    depth(level);
+    const Word first = top();
+    int left = -1;
+    if (take("(")) {
+        left = expression(1, level + 1);
+        need(")");
+    } else if (take("-") || take("!"))
+        left = put({Op::Unary, first.offset, first.text, {expression(7, level + 1)}});
+    else if (first.kind == Lex::Number) {
+        ++index;
+        left = put({Op::Number, first.offset, first.text, {}});
+    } else if (take("true") || take("false"))
+        left = put({Op::Bool, first.offset, first.text, {}});
+    else {
+        auto id = name();
+        if (take("(")) {
+            Expr call{Op::Call, first.offset, id, {}};
+            if (!take(")")) {
+                do {
+                    call.args.push_back(expression(1, level + 1));
+                } while (take(","));
+                need(")");
+            }
+            left = put(std::move(call));
+        } else
+            left = put({Op::Variable, first.offset, id, {}});
+    }
+    while (precedence(top().text) >= minimum) {
+        const auto op = tokens[index++];
+        const int right = expression(precedence(op.text) + 1, level + 1);
+        left = put({Op::Binary, op.offset, op.text, {left, right}});
+    }
+    return left;
+}
+```
+
+### Phân biệt câu lệnh với biểu thức
+
+let tạo tên, gán sửa tên đã có, if chứa hai dãy câu lệnh, return gửi một kết quả về nơi gọi. Ghi chỉ số AST thay vì chép chuỗi rồi so với vài mẫu.
+
+{/* snippet include/script/parse.hpp#statements */}
+
+```cpp title="include/script/parse.hpp — Phân biệt câu lệnh với biểu thức"
+int statement(int level) {
+    depth(level);
+    Statement s{St::Expression, top().offset, "", -1, {}, {}};
+    if (take("if")) {
+        s.kind = St::Branch;
+        need("(");
+        s.expression = expression(1, 0);
+        need(")");
+        s.yes = block(level);
+        if (take("else"))
+            s.no = block(level);
+    } else {
+        if (take("let")) {
+            s.kind = St::Let;
+            s.name = name();
+            need("=");
+        } else if (take("return"))
+            s.kind = St::Return;
+        else if (top().kind == Lex::Name && tokens.at(index + 1).text == "=") {
+            s.kind = St::Assign;
+            s.name = name();
+            need("=");
+        }
+        s.expression = expression(1, 0);
+        need(";");
+    }
+    p.statements.push_back(std::move(s));
+    return int(p.statements.size() - 1);
+}
+```
+
+## Ghép các phần lại
+
+Chạy mốc 3, đổi thân một handler thành `radius(20 + (80 - 20) / 2);`; F5 phải dựng được AST, chưa được đổi đàn. Bỏ ngoặc đóng rồi đọc lỗi.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_72_checkpoint_3 --parallel 2
+.\build\Release\project_72_checkpoint_3.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Tách sai phép chia liên tiếp theo bên phải. Với 18/3/2, bạn sẽ ra 12 thay vì 3. Thêm ca này bên cạnh ví dụ nhân trước cộng để thấy hai luật khác nhau.
+
+## Tự kiểm tra kết quả
+
+Nhận được function và số lượng tham số; ngoặc thiếu chỉ đúng chỗ. Một phép gọi trong thân hàm chưa được chạy khi file chỉ mới parse.
+
+## Bài tập mở rộng
+
+Vẽ nhẩm gốc của `20 + (value - 20) / 2`. Nếu bỏ cặp ngoặc bên trong, hàm nearRadius còn cho 50 ở đầu vào 80 không?
+
+[Bài 4: Hai hàm cùng đặt tên biến là value: có dùng chung giá trị không?](/projects/tiny-script/04-bien-tham-so-va-pham-vi).

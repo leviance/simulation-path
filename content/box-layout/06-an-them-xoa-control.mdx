@@ -1,73 +1,71 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Ẩn, thêm và xóa control mà không sửa vị trí phía sau
+# Ẩn Reset, kéo Radius ngay ở chỗ mới
 
 ## Vấn đề cần giải quyết
 
-Bố cục tự động phải xử lý được việc danh sách thay đổi, không chỉ đặt đúng một lần lúc khởi động. Khi ẩn Reset, ta muốn Gravity dịch lên và Group thấp đi. Khi thêm Label, footer phải đi xuống. Không trường hợp nào cần sửa y trong builder.
+Có lúc bạn cần thêm vài dòng ghi chú mà không muốn chúng che slider. Thử ẩn Reset khi đang quan sát một con chim: không chỉ dòng bên dưới phải dời lên, cả vị trí nhận chuột cũng phải dời lên theo.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Hidden có nghĩa node còn thuộc cây nhưng **không tham gia flow**. Disabled chỉ đổi input và cách hiển thị; node vẫn chiếm chỗ. Ta giữ sự phân biệt của Project 66, không dùng visible như một cách xóa owner.
-
-Ẩn Reset loại một outer height 44 và một gap 8, nên Group giảm 52, từ 252 còn 200. Margin không được giữ chỗ cho node hidden. Nếu Panel chỉ còn một child thì không còn gap nào.
+Ẩn không phải xóa. Khi ẩn, node vẫn có ID nhưng không chiếm chỗ trong phép đo. Khi xóa, bỏ luôn style và quyền sở hữu; một Label tạo sau không được mượn lại ID của Label vừa mất.
 
 <InteractiveLab demo="box-layout" mode="box67-6" />
 
 ## Viết code từng bước
 
-### Bước 1 — Bỏ node hidden trước mọi phép cộng
+### Ẩn một node và đánh dấu cần xếp lại
 
-Cả measure và arrange đều kiểm visible ở đầu vòng child. Skip phải đứng trước gap, margin và visibleCount. Khi hiện lại node, thuật toán đo lại từ Style; không lấy Rect bị bỏ lại trong lần ẩn làm đầu vào.
+Reset có border height 36, margin tổng 8 và một gap 8. Bỏ nó làm các hàng sau dời đúng 52 pixel, Group từ 352 còn 300.
 
-```cpp title="include/layout.hpp — không để lại khoảng trống cho child ẩn"
-if (!child->visible)
-    continue;
-const Size childSize = measure(*child, innerWidth, styles, sizes);
+{/* snippet include/runtime.hpp#hide */}
+
+```cpp title="include/runtime.hpp — Ẩn một node và đánh dấu cần xếp lại"
+inline void toggleReset(LayoutState& state, Ui& ui) {
+    Widget* reset = find(*state.scene.tree.root, state.scene.reset);
+    reset->visible = !reset->visible;
+    invalidate(state, ui);
+}
 ```
 
-Đây là đoạn đầu của vòng measure, không phải hàm riêng để chép đè toàn bộ. Source cuối bài có cả vòng lặp và những phần đã có từ bài trước.
+### Cho Label mới tham gia cùng quy tắc
 
-### Bước 2 — Thêm node và Style cùng nhau
+Một ID mới và một Style mặc định là đủ. Không cần tìm slider rồi sửa y. Giới hạn bốn Label để có thể tạo lại cùng tình huống tràn trong kiểm thử.
 
-appendLabel thêm vào Group, tối đa bốn Label. add tạo ID tăng dần và owner; sau đó thêm style theo ID ấy. Rect 1×24 chỉ để add nhận geometry hợp lệ, không phải vị trí cuối của Label. invalidate sẽ hủy gesture cũ và yêu cầu tính lại layout.
+{/* snippet include/runtime.hpp#extra */}
 
-```cpp title="include/runtime.hpp — tạo một Label tham gia flow"
-const WidgetId id = add(state.scene.tree, state.scene.group, Kind::Label, {0, 0, 1, 24}, "Added Label");
-state.scene.styles[id] = defaultStyle(*find(*state.scene.tree.root, id));
-state.extras.push_back(id);
-invalidate(state, ui);
-return true;
+```cpp title="include/runtime.hpp — Cho Label mới tham gia cùng quy tắc"
+inline bool appendLabel(LayoutState& state, Ui& ui) {
+    if (state.extras.size() >= 4)
+        return false;
+    const WidgetId id = add(state.scene.tree, state.scene.group, Kind::Label, {0, 0, 1, 24}, "Added Label");
+    state.scene.styles[id] = defaultStyle(*find(*state.scene.tree.root, id));
+    state.extras.push_back(id);
+    invalidate(state, ui);
+    return true;
+}
 ```
-
-Một Label mới thêm outer height 32 và thêm một gap 8, nên Group cao thêm 40. ID của Pause/Slider vẫn giữ nguyên; không rebuild cả Scene để thêm một node.
-
-### Bước 3 — Xóa dữ liệu phụ cùng owner
-
-removeLabel chỉ xóa Label cuối do demo thêm, không nhận một subtree tùy ý từ bên ngoài. Nó tìm unique_ptr theo ID, erase owner, giảm count và tăng revision của cây. Sau đó phải xóa Style và extras tương ứng. Giữ Style của node đã mất sẽ làm các lần audit hoặc tra ID không còn khớp ownership.
-
-```cpp title="include/runtime.hpp — dọn dữ liệu đi kèm node"
-state.scene.styles.erase(id);
-state.extras.pop_back();
-invalidate(state, ui);
-return true;
-```
-
-Native dùng H ẩn/hiện Reset, A thêm Label, D xóa Label cuối. Host giải phóng capture khi active về 0; sau arrange, reconcile kiểm lại focus. Cancel không hoàn tác gravity đã cập nhật trước đó.
 
 ## Ghép các phần lại
 
-Ở checkpoint 06, thử H→A→D→H native hoặc các nút tương ứng trên web. Mỗi thao tác sửa dữ liệu, invalidate, ensure rồi reconcile; không phải dựng lại Scene. Khi chuyển focus sang control HTML, Canvas cũng hủy gesture đang có trước khi thực hiện thao tác thay thế.
+Bấm H để ẩn Reset, chọn Radius ở chỗ mới rồi kéo; vòng quanh chim vàng phải đổi ngay. Bấm A bốn lần, D để bớt hàng. Bấm R: đàn trở về preset nhưng bố cục đang thử vẫn giữ nguyên.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_67_checkpoint_6 --parallel 2
+.\build\Release\project_67_checkpoint_6.exe
+```
 
 ## Thử làm sai để hiểu đúng
 
-1. Tăng visibleCount trước khi skip hidden. Ẩn control đầu sẽ để thừa một gap ở đầu Group. Kiểm tổng height, không chỉ nhìn xem các control có “gần nhau hơn” không.
-2. Xóa Label khỏi children nhưng quên xóa Style. Node count và số style khác nhau; audit phải bắt được, không tự xóa lỗi rồi báo PASS.
+Thử bỏ qua child ẩn khi vẽ nhưng vẫn đo nó. Reset biến mất mà còn một lỗ trống 52 pixel; đây là lỗi layout chứ không phải lỗi render.
 
 ## Tự kiểm tra kết quả
 
-Ẩn Reset cho Group height=200 và Slider dịch lên 52. Hiện lại trả đúng Rect ban đầu. Thêm rồi xóa Label phục hồi hình học, nhưng nextId không lùi để tái sử dụng ID. Bốn Label thêm làm Group cao 412 và root naturalHeight=520; phần tràn sẽ được giải thích ở bài 08.
+Ẩn rồi hiện trả lại đúng Rect cũ. Khi xóa hàng cuối, cả node lẫn style biến mất; con chim đang chọn không bị đổi chỉ vì bạn sửa bảng.
 
 ## Bài tập mở rộng
 
-Trên bản thử riêng, disable Reset thay vì hide và xác nhận nó vẫn chiếm chỗ nhưng không nhận focus/action. Bài tiếp theo: [chỉ tính lại layout khi cần](/projects/box-layout/07-dirty-layout-va-input).
+Thử đối chiếu hai thao tác: disable Reset và ẩn Reset. Trường hợp nào phải làm những hàng sau dời lên?
+
+[Bài 7: Khi nào thực sự phải xếp lại bảng?](/projects/box-layout/07-dirty-layout-va-input).

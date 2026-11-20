@@ -51,7 +51,7 @@ function walk(directory, predicate) {
 
 let changed = 0;
 const templateFiles = walk(path.join(workspace, "examples"), (file) =>
-  /[\\/](?:source-template|tests)[\\/].*\.(?:cpp|hpp)$/.test(file),
+  /[\\/](?:source-template|tests|voxel-expedition)[\\/].*\.(?:cpp|hpp)$/.test(file),
 );
 for (const file of templateFiles) {
   const source = readFileSync(file, "utf8");

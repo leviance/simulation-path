@@ -1,29 +1,22 @@
 import { expect, test } from "@playwright/test";
-const route = "/projects/box-layout/09-kiem-chung-va-hoan-thien";
-test("box layout reflows hidden children and keeps Model reset independent", async ({ page }) => {
-  await page.goto(route);
-  const read = (label: string) =>
-    page
-      .locator(".lab-readout div")
-      .filter({ has: page.getByText(label, { exact: true }) })
-      .locator("dd");
-  await expect(read("Node / lượt layout")).toHaveText("9 / 1");
-  await expect(read("Root naturalHeight / height")).toHaveText("360 / 492");
-  await page.getByRole("button", { name: "Ẩn Reset", exact: true }).click();
-  await expect(read("Root naturalHeight / height")).toHaveText("308 / 492");
-  await page.getByRole("button", { name: "Reset cảnh (giữ layout)", exact: true }).click();
-  await expect(read("Root naturalHeight / height")).toHaveText("308 / 492");
-  await page.getByRole("button", { name: "Thêm Label", exact: true }).click();
-  await expect(read("Node / lượt layout")).toHaveText("10 / 3");
-});
-test("box layout reduced motion remains paused and Tab can leave Canvas", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto(route);
-  await expect(page.getByRole("button", { name: "Chạy cảnh", exact: true })).toBeDisabled();
-  const canvas = page.getByRole("application", { name: "Vertical Box Layout Lab", exact: true });
-  await canvas.focus();
-  for (let i = 0; i < 4; i++) await canvas.press("Tab");
-  await expect(canvas).not.toBeFocused();
-  await page.getByRole("button", { name: "Một bước 1/120 s", exact: true }).click();
-  await expect(page.locator(".lab-readout")).toContainText("480 / 1");
+
+test("P67 compares actual native layouts before/after reflow and shows the clipped slider", async ({
+  page,
+}) => {
+  await page.goto("/projects/box-layout/06-an-them-xoa-control");
+  const gallery = page.locator("[data-native-media]");
+  await expect(gallery.locator("img")).toHaveAttribute("src", /p67-group\.png$/);
+  const hide = gallery.getByRole("button", { name: "Sau khi ẩn Reset" });
+  await expect(hide).toBeEnabled();
+  await hide.focus();
+  await hide.press("Enter");
+  await expect(gallery.locator("img")).toHaveAttribute("src", /p67-hidden\.png$/);
+  await expect(gallery.locator("figcaption")).toContainText("52 pixel");
+  await page.goto("/projects/box-layout/08-overflow-va-clipping");
+  await expect(page.locator("[data-native-media] img")).toHaveAttribute(
+    "src",
+    /p67-overflow\.png$/,
+  );
+  const zip = await page.request.get("/downloads/project-67-box-layout.zip");
+  expect((await zip.body()).subarray(0, 2).toString()).toBe("PK");
 });

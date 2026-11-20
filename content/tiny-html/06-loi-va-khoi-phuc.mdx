@@ -1,0 +1,102 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Phá một thẻ rồi cứu lại phiên làm việc
+
+## Vấn đề cần giải quyết
+
+Một editor sẽ không có ích nếu chỉ cần quên một dấu khi sửa file là mất cả buổi quan sát. Hãy cố tình đưa một tài liệu sai vào ngay giữa lúc kéo slider, rồi sửa và nạp lại.
+
+## Hiểu ý tưởng trước khi viết code
+
+Nạp lại có hai kết quả: chấp nhận một cây hoàn chỉnh, hoặc báo lỗi và giữ cây đang hiển thị. Bản nháp không được lọt từng phần vào scene. Đừng sao chép lại 192 con chim chỉ để kiểm markup.
+
+<InteractiveLab demo="tiny-html" mode="html68-6" />
+
+## Viết code từng bước
+
+### File sai có chủ ý
+
+Trước khi nhấn 3, hãy chỉ ra thẻ đóng đầu tiên không khớp. Đây đúng là file lỗi được đóng gói trong ZIP.
+
+{/* asset assets/broken.html */}
+
+```html title="assets/broken.html — File sai có chủ ý"
+<div id="desk">
+    <h1>UNFINISHED FIELD NOTE</h1>
+    <div id="tools">
+        <button id="pause">Pause</label>
+    </div>
+</div>
+```
+
+### Báo tên file cùng dòng/cột
+
+Đặt thao tác đọc và kiểm tra trong cùng ranh giới xử lý lỗi. `status` là thông tin cho người dùng; không để exception rơi khỏi vòng lặp native.
+
+{/* snippet include/markup/desk.hpp#reload */}
+
+```cpp title="include/markup/desk.hpp — Báo tên file cùng dòng/cột"
+inline bool reload(Desk& d, const std::filesystem::path& path) {
+    try {
+        const auto source = readFile(path);
+        checkUtf8(source);
+        install(d, source);
+        d.status = std::to_string(d.page.handles.size()) + " widgets from " + path.filename().string();
+        d.name = path.filename().string();
+        d.error = false;
+        return true;
+    } catch (const std::exception& e) {
+        d.error = true;
+        d.status = path.filename().string() + ":" + e.what();
+        return false;
+    }
+}
+```
+
+### Kiểm bằng một chuỗi thao tác thật
+
+Bắt đầu từ hai asset thật và một file sai. Giữ địa chỉ root để xác nhận trường hợp thất bại, kiểm giá trị radius, rồi kiểm focus/active sau khi thay cây thành công.
+
+{/* snippet tests/tests.cpp#reload-test */}
+
+```cpp title="tests/tests.cpp — Kiểm bằng một chuỗi thao tác thật"
+Desk d;
+check(reload(d, assets / "panel.html"), "real file loads");
+const auto first = d.page.handles.at(d.page.document.byId.at("radius"));
+const auto before = lab::locate(d.page.layout.scene.tree, first);
+check(before && before->bounds.x == 647, "independent slider left edge: 616+2+14+3+2+7+3");
+if (!before)
+    return EXIT_FAILURE;
+const lab::Point middle{before->bounds.x + before->bounds.width / 2, before->bounds.y + 8};
+press(d, middle);
+check(d.ui.active == first && d.model.colony.params.radius == 80, "real drag changes flock");
+const auto root = d.page.layout.scene.tree.root.get();
+check(!reload(d, assets / "broken.html") && d.page.layout.scene.tree.root.get() == root && d.edition == 1, "bad file leaves the old tree alive");
+check(d.status.find("broken.html:4:") != std::string::npos, "file and line visible");
+check(reload(d, assets / "survey.html") && !d.ui.active && !d.ui.focus, "successful swap clears gesture and focus");
+check(d.model.colony.params.radius == 80 && d.edition == 2, "model survives reload");
+```
+
+## Ghép các phần lại
+
+Chạy final, nhấn 3. broken.html đóng sai ở dòng 4; đàn và bảng hợp lệ vẫn còn. Sửa thẻ trong file, F5 để nạp chính file vừa sửa, hoặc phím 1 để trở về panel. Sau đó chạy CTest với `--timeout 20`.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_68_final --parallel 2
+.\build\Release\project_68_final.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Xóa cây hiện hành trước lúc parse. Preset hỏng ngay lập tức làm biến mất bảng; bạn không thể dùng ảnh kết quả duy nhất để nhận ra lỗi này. Ca kiểm so sánh địa chỉ root sẽ bắt được.
+
+## Tự kiểm tra kết quả
+
+Hai tài liệu đổi bố cục thật, lỗi có vị trí, kéo/thả sau reload không tác động nhầm. Chạy được ZIP ở một đường dẫn khác. Các phép kiểm vẫn chạy khi build Release với NDEBUG.
+
+## Bài tập mở rộng
+
+Viết một preset quan sát có cùng các control nhưng ít nhãn hơn. Việc đổi màu và khoảng cách bằng file nào sẽ là câu hỏi ở Project 69.
+
+[Tải toàn bộ mã nguồn C++ và các file thực hành](/downloads/project-68-tiny-html.zip) · [Trở lại lộ trình](/roadmap#project-68).

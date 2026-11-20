@@ -1,0 +1,154 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Lưu 128³ mẫu rồi đưa lên texture 3D
+
+## Vấn đề cần giải quyết
+
+Ta đã biết một ray đi qua box ở đâu, nhưng box vẫn rỗng. Nếu viết thẳng hàm density trong shader thì có thể tạo một hình đẹp rất nhanh, song ta chưa xây được viewer đọc dữ liệu volume. Bài này tạo mảng Float32 trên CPU, upload nó lên GPU và đọc một điểm để kiểm đường dữ liệu.
+
+Checkpoint này mặc định 64³ cho tiện dò lỗi; có thể chạy `--size 128` để cấp phát đủ 128³ ngay. Bản cuối mặc định 128³. Cả hai giữ cùng box [-1,1]³; không đổi kích thước vật thể chỉ vì tăng số mẫu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một volume N³ có N*N*N số. X thay đổi nhanh nhất, nên địa chỉ là `x + N*(y + N*z)`. Mỗi số nằm tại tâm một ô có spacing `2/N`: tọa độ tâm trên một trục là `-1 + (i+0.5)*2/N`.
+
+Với N=128, ta có 2.097.152 Float32, tương đương 8.388.608 byte = 8 MiB dữ liệu CPU. Texture dùng GL_R32F có cùng payload một kênh float; không nhét density vào một ảnh RGB giả hoặc thay mảng bằng ba mặt cắt.
+
+Trong texture coordinate, tâm i nằm ở `(i+0.5)/N`. Mapping `uvw=(world+1)/2` đưa world centre về đúng texel centre. `GL_LINEAR` nội suy raw density; `CLAMP_TO_EDGE` lặp mẫu biên. Ray–box vẫn chịu trách nhiệm không march ngoài box — clamp không phải giấy phép bỏ phép giao.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-4" />
+
+## Viết code từng bước
+
+### 1. Giữ storage và hình học thống nhất
+
+`Volume` kiểm side trong [1,128] trước phép nhân/cấp phát; mỗi lần ghi kiểm index và density hữu hạn trong [0,1]. Đoạn dưới chỉ ra hai quy ước dùng xuyên suốt chương trình.
+
+{/* snippet include/volume.hpp#volume-address */}
+
+```cpp title="include/volume.hpp — Địa chỉ và tâm voxel"
+std::size_t index(int x, int y, int z) const {
+    if (x < 0 || y < 0 || z < 0 || x >= side_ || y >= side_ || z >= side_)
+        throw std::out_of_range("Voxel outside volume");
+    return static_cast<std::size_t>(x) + static_cast<std::size_t>(side_) * (y + side_ * z);
+}
+
+Vec3 centre(int x, int y, int z) const {
+    return {-1 + (x + 0.5) * spacing(), -1 + (y + 0.5) * spacing(), -1 + (z + 0.5) * spacing()};
+}
+```
+
+Không dùng N-1 để tính spacing của box này: các mẫu ở tâm ô, không nằm trên hai mặt ngoài. Dùng N-1 sẽ âm thầm đổi quy ước và khiến CPU không còn khớp sampler GPU.
+
+### 2. Điền mọi mẫu thật
+
+`fieldValue` được cung cấp như bộ tạo dữ liệu tổng hợp. Sương xoắn là các dải mật độ tĩnh, không phải fluid solver. Ramp, constant, slab và empty là các preset để kiểm thuật toán, không chỉ để đổi hình cho đẹp.
+
+{/* snippet include/volume.hpp#build-volume */}
+
+```cpp title="include/volume.hpp — Điền từng phần tử của volume"
+inline Volume buildVolume(Preset preset, int side) {
+    if (static_cast<int>(preset) < 0 || static_cast<int>(preset) > 5)
+        throw std::invalid_argument("Unknown dataset");
+    Volume volume(side);
+    for (int z = 0; z < side; ++z) {
+        for (int y = 0; y < side; ++y) {
+            for (int x = 0; x < side; ++x) {
+                double density = fieldValue(volume.centre(x, y, z), preset);
+                if (preset == Preset::Ramp) {
+                    density = 0;
+                    if (side > 1)
+                        density = static_cast<double>(x + 2 * y + 4 * z) / (7 * (side - 1));
+                }
+                volume.set(x, y, z, density);
+            }
+        }
+    }
+    return volume;
+}
+```
+
+Ramp dùng x+2y+4z để mỗi trục có ảnh hưởng khác nhau; một sphere đối xứng không dễ bắt lỗi đảo trục. `State::load` tạo volume mới và histogram trước, upload thành công rồi mới thay dữ liệu đang giữ. Lỗi không được biến nửa mảng mới thành một dataset hợp lệ.
+
+### 3. Upload đúng số mẫu và kiểu dữ liệu
+
+Hãy đọc từng tham số của `TexImage3D`: internal format là R32F, số phần tử mỗi trục là N, source format là RED và source type là FLOAT. Không truyền số byte 8 MiB vào tham số width.
+
+{/* snippet include/renderer.hpp#upload-volume */}
+
+```cpp title="include/renderer.hpp — Một texture 3D cho cả khối"
+void upload(const Volume& volume) {
+    GLint maximum = 0;
+    gl_.GetIntegerv(GL_MAX_3D_TEXTURE_SIZE, &maximum);
+    if (volume.side() > maximum)
+        throw std::runtime_error("3D texture exceeds hardware limit");
+    GLuint texture = 0;
+    gl_.GenTextures(1, &texture);
+    gl_.ActiveTexture(GL_TEXTURE0);
+    gl_.BindTexture(GL_TEXTURE_3D, texture);
+    gl_.PixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    const int side = volume.side();
+    gl_.TexImage3D(GL_TEXTURE_3D, 0, GL_R32F, side, side, side, 0, GL_RED, GL_FLOAT, volume.values().data());
+    gl_.TexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    gl_.TexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    gl_.TexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    gl_.TexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    gl_.TexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    gl_.PixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    if (gl_.GetError() != GL_NO_ERROR) {
+        gl_.DeleteTextures(1, &texture);
+        throw std::runtime_error("Volume upload failed; previous texture retained");
+    }
+    if (densityTexture_)
+        gl_.DeleteTextures(1, &densityTexture_);
+    densityTexture_ = texture;
+    spacing_ = static_cast<float>(volume.spacing());
+}
+```
+
+Texture mới chỉ thay texture cũ sau khi kiểm GL error. Upload xảy ra khi đổi dataset/resolution, không mỗi frame khi kéo camera. Các tham số filtering/wrap là một phần của hợp đồng sampling, không phải tùy chọn trang trí.
+
+### 4. Đọc một midpoint trước khi viết loop
+
+Shader chuyển world point sang uvw rồi đọc kênh đỏ. Tại mốc này, main gọi nó một lần ở giữa entry/exit của mỗi ray.
+
+{/* snippet shaders/volume.frag#texture-sample */}
+
+```glsl title="shaders/volume.frag — Đọc scalar, chưa tích lũy"
+float densityAt(vec3 point) {
+    vec3 uvw = (point + vec3(1.0)) * 0.5;
+    return texture(uDensity, uvw).r;
+}
+```
+
+Ảnh midpoint có thể thay đổi đẹp khi orbit nhưng vẫn **chưa phải ray marching đầy đủ**. Một cấu trúc nằm trước hoặc sau midpoint có thể biến mất; đây chính là hạn chế mà bài kế tiếp sẽ giải quyết.
+
+## Ghép các phần lại
+
+`main` gọi `state.load` sau khi renderer đã có context. Mỗi frame chỉ bind texture đó và render. Thử bản 128³ rồi đọc dòng `VOLUME` trong terminal để xác nhận số mẫu/byte thực.
+
+```powershell
+cmake --build build --config Release --target project_54_checkpoint_4 --parallel 1
+.\build\Release\project_54_checkpoint_4.exe --size 128
+```
+
+Không cần ghép source Project 53 vào ZIP. Phần trilinear CPU có sẵn để làm reference, cùng convention centre/clamp với texture; bài [nội suy tám voxel](../volume-slicer/04-noi-suy-tam-voxel) là phần ôn phù hợp nếu còn lẫn giữa index và world point.
+
+## Thử làm sai để hiểu đúng
+
+1. Đổi filtering sang NEAREST để thấy dữ liệu rời rạc. Nó không tăng số mẫu hay sửa quy ước centre.
+2. Tạm đổi x-fastest thành z-fastest ở bên điền mảng nhưng giữ upload. Dùng Ramp để tìm trục bị đảo, rồi khôi phục.
+3. Chọn Constant: mọi hit phải có cùng density; Empty phải không tạo một “khối sương” chỉ vì có box. Đừng dùng preset đẹp để che lỗi này.
+
+## Tự kiểm tra kết quả
+
+- [ ] Chọn 128³ cho đúng 2.097.152 mẫu/8 MiB, không chỉ thay dòng chữ.
+- [ ] Tâm voxel và tám góc vật lý có fixture trilinear/clamp biết trước.
+- [ ] Đổi camera không fill/upload lại N³.
+- [ ] GUI giữ dữ liệu trước nếu nạp mới thất bại và nói rõ dữ liệu nào đang hiển thị.
+
+## Bài tập mở rộng
+
+Tạo hai cục density giống nhau, một nằm trước và một nằm sau midpoint. Xoay camera để quan sát lúc midpoint bỏ sót chúng. Viết dự đoán: MIP và average của cả đoạn sẽ khác ảnh midpoint ở đâu?
+
+[Bài 5](./05-mip-va-average) sẽ đi dọc toàn interval thay vì trông chờ một mẫu duy nhất đại diện cho cả khối.

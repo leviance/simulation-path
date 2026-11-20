@@ -1,0 +1,97 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nút Pause tìm thấy hàm C++ bằng cách nào?
+
+## Vấn đề cần giải quyết
+
+Nếu kéo nút Pause xuống cuối bảng, bạn muốn nó vẫn dừng đàn. Không thể viết 'nút thứ hai thì dừng' hoặc 'click bên trái toolbar thì dừng'. Cần một cái tên bền hơn vị trí: `id="pause"`.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trong lần nạp tài liệu, tên trong file được đổi thành WidgetId của phiên hiện tại. Với mỗi cặp WidgetId và loại sự kiện, đăng ký một callback. Khi click, callback nhận model đang sống, không sửa một bản sao trong widget.
+
+<InteractiveLab demo="event-bindings" mode="event71-1" />
+
+## Viết code từng bước
+
+### Đặt tên cho những thứ người dùng điều khiển
+
+Ba widget trong toolbar là ba đích khác nhau, dù dùng chung khung cha. Checkbox có nhãn Links chứ không cần giả làm một thanh kéo hai mức.
+
+{/* asset assets/panel.html */}
+
+```html title="assets/panel.html — Các ID dùng để nối callback"
+<div id="desk" class="sheet">
+    <h1>FLOCK CONSOLE / FIELD</h1>
+    <div id="tools" class="toolbar">
+        <button id="pause">Pause</button>
+        <button id="reset">Reset</button>
+        <input id="observe" type="checkbox" label="Links" />
+    </div>
+    <div id="knobs" class="group">
+        <label id="radius-value">Radius</label>
+        <input id="radius" type="range" min="20" max="140" step="2" value="64" />
+        <label id="separation-value">Separation</label>
+        <input id="separation" type="range" min="0" max="5" step="0.1" value="1.5" />
+    </div>
+    <span id="ticks">Clock</span>
+</div>
+```
+
+### Tra một ID trong chính tài liệu đang mở
+
+Không có tên thì trả ID 0. Không tạo node mới để lấp chỗ trống: ở bài cuối ứng dụng sẽ báo rõ binding bắt buộc nào còn thiếu.
+
+{/* snippet include/events/bus.hpp#lookup */}
+
+```cpp title="include/events/bus.hpp — Tra một ID trong chính tài liệu đang mở"
+inline lab::WidgetId elementById(const Page& page, const std::string& name) {
+    const auto found = page.document.byId.find(name);
+    if (found == page.document.byId.end())
+        return 0;
+    return page.handles.at(static_cast<std::size_t>(found->second));
+}
+```
+
+### Đưa lệnh về đúng mô hình đàn
+
+Pause đổi đồng hồ, Reset khởi tạo lại đàn, Observe chỉ đổi lớp nhìn. Radius và Separation có chung đường xác nhận giá trị theo range nhưng tới hai tham số khác nhau.
+
+{/* snippet include/events/binding.hpp#host-binding */}
+
+```cpp title="include/events/binding.hpp — Đưa lệnh về đúng mô hình đàn"
+inline void hostCommand(Desk& d, const std::string& name, double value) {
+    if (name == "pause")
+        lab::setPaused(d.model, !d.model.paused);
+    if (name == "reset")
+        lab::resetSimulation(d.model);
+    if (name == "observe")
+        d.model.colony.showNeighbors = !d.model.colony.showNeighbors;
+    if (name == "radius" || name == "separation")
+        applyRange(d, elementById(d.page, name), value);
+}
+```
+
+## Ghép các phần lại
+
+Chạy checkpoint 1 rồi E. Bấm Pause: đồng hồ đàn dừng một lần; bấm lại nó chạy tiếp. Bỏ con trỏ ra khỏi nút mới thả thì đàn không đổi. Lúc này trace mới dừng ở chính target.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_71_checkpoint_1 --parallel 2
+.\build\Release\project_71_checkpoint_1.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Đổi đăng ký thành tìm nút có tọa độ nhỏ nhất. Khi hai nhóm đổi thứ tự, người dùng sẽ bấm một nút còn model nhận lệnh của nút khác.
+
+## Tự kiểm tra kết quả
+
+Nút gọi đúng hàm dù di chuyển trong cây. Hàm không cần biết SDL vẽ nút bằng gì hay nút rộng bao nhiêu.
+
+## Bài tập mở rộng
+
+Thêm một nút có cùng text Pause nhưng ID khác. Vì sao nó không tự động được cấp quyền dừng mô phỏng?
+
+[Bài 2: Một cú click đi qua ba node nhưng chỉ dừng đàn một lần](/projects/event-bindings/02-mot-click-di-qua-cay).

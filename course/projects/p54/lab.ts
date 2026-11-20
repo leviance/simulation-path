@@ -1,47 +1,53 @@
 import type { ProjectLabMeta } from "../../labs/types";
 const data = {
   base: {
-    label: "VOLUME RAY MARCH LAB",
-    title: "Theo dõi sương qua từng đoạn tia",
+    label: "VOLUME / LIGHTBOX",
+    title: "Một khối dữ liệu, ba cách nhìn",
     description:
-      "CPU oracle nhỏ cho texture density, opacity có ds và front-to-back; GPU thật nằm trong ZIP C++.",
+      "Canvas 2D dùng mảng Float32 thật để đọc ray và so MIP/average/alpha. C++ trong ZIP chạy fragment shader trên viewport lớn, không phải bản Canvas phóng to.",
   },
   modes: {
     "fog54-1": {
-      title: "Vẽ ảnh đầu tiên bằng fragment shader",
-      description: "SDL/OpenGL 3.3, fullscreen triangle và render target nhỏ cố định.",
+      title: "Ảnh đầu tiên của shader",
+      description: "UV và fullscreen triangle; chưa cấp phát volume.",
     },
     "fog54-2": {
-      title: "Tạo một tia cho mỗi pixel của ảnh",
-      description: "Camera orbit, perspective ray và quy ước y CPU/GPU.",
+      title: "Tia perspective từ camera",
+      description: "Xoay camera và đọc origin/direction; chưa tích lũy density.",
     },
     "fog54-3": {
-      title: "Chỉ lấy mẫu trong đoạn tia xuyên volume",
-      description: "Slab interval, miss, camera inside và ray song song.",
+      title: "Đoạn tia trong box",
+      description: "Quan sát entry/exit, camera inside và miss trước khi lấy mẫu.",
     },
     "fog54-4": {
-      title: "Đưa density lên texture 3D và lấy đúng mẫu",
-      description: "R32F, texel centre, GL_LINEAR và clamp-to-edge.",
+      title: "Texture 3D thật",
+      description: "64³/128³ Float32, một midpoint trong mỗi ray và quy ước tâm voxel.",
     },
     "fog54-5": {
-      title: "Đổi density thành opacity có độ dài đoạn",
-      description: "Beer–Lambert, sigma, transmittance và một midpoint approximation.",
+      title: "MIP và average",
+      description: "Hai cách gộp cùng các mẫu; average phải dùng ds của đoạn cuối.",
     },
     "fog54-6": {
-      title: "Cộng từng đoạn dọc tia theo front-to-back",
-      description: "Midpoint, partial tail, C/T và thứ tự tích lũy.",
+      title: "Front-to-back alpha",
+      description: "Tách màu tích lũy khỏi transmittance; opacity gắn với độ dài đoạn.",
     },
     "fog54-7": {
-      title: "Chọn màu để thấy cấu trúc bên trong",
-      description: "Transfer function, C premultiplied và background/gamma sau tích lũy.",
+      title: "Transfer và gradient lighting",
+      description:
+        "Cutoff tạo cùng scalar đã phân loại; ánh sáng cục bộ chỉ là lựa chọn trình bày alpha.",
     },
     "fog54-8": {
-      title: "Đổi chất lượng mà không đổi mô hình độ đặc",
-      description: "Step size, early termination và ngân sách render.",
+      title: "Đọc một tia đã chọn",
+      description: "Chọn u/v, tiến/dừng từng mẫu và đối chiếu bảng số với ảnh 3D.",
     },
     "fog54-9": {
-      title: "Kiểm C/T trên GPU và chạy project hoàn chỉnh",
-      description: "CTest, hidden 16×12 GPU oracle, smoke shader và ZIP độc lập.",
+      title: "Chất lượng và chi phí",
+      description: "So step trên CPU trong Canvas; phép đo GPU thật và IQR nằm ở chương trình C++.",
+    },
+    "fog54-10": {
+      title: "Volume Lightbox hoàn chỉnh",
+      description:
+        "Dữ liệu 128³ thật, ba mode, inspector, kiểm hằng/slab và giới hạn không phải CT y tế.",
     },
   },
 } satisfies ProjectLabMeta;

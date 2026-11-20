@@ -1,0 +1,159 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Từ cửa sổ SDL đến ảnh đầu tiên của shader
+
+## Vấn đề cần giải quyết
+
+Ở Project 53, ta kéo từng mặt cắt để xem bên trong khối dữ liệu. Lần này ta muốn nhìn xuyên cả khối: mỗi pixel sẽ nhìn theo một tia, đọc nhiều mẫu rồi gộp chúng thành màu. Trước khi viết vòng lấy mẫu ấy, hãy làm một việc nhỏ nhưng có thể kiểm tra ngay: mở cửa sổ và cho fragment shader tự tạo một ảnh.
+
+Starter đã có window/context, bộ nạp hàm GL, giao diện và vòng sự kiện. Đây là phần nền để học volume, không phải một framework UI mới cần tự xây. Bài này thêm fullscreen triangle, render target và present. **Chưa có volume, ray hay sương**; nếu ảnh đầu tiên còn sai, đừng sửa bằng cách thêm thuật toán phức tạp hơn.
+
+Toàn học phần dự kiến khoảng 14–20 giờ: đọc 4–5 giờ, tự viết 7–10 giờ và thử/kiểm 3–5 giờ. Thử thách đầu project nằm trong thời gian tự viết; setup và build lần đầu tính riêng. Mỗi bài có checkpoint đầy đủ ở cuối, không yêu cầu tự ghép một chương trình từ các mẩu code.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một fullscreen triangle chỉ là phương tiện gọi fragment shader trên mọi pixel của viewport. Ta không dùng triangle ấy làm bề mặt của khối sương. Dữ liệu volume và phép tích lũy sẽ nằm trong shader ở các bài sau.
+
+Đường vẽ gồm hai pass: `volume.frag` ghi dữ liệu linear vào texture RGBA32F; `present.frag` đưa kết quả ra cửa sổ. Tách hai việc giúp sau này kiểm số GPU trước gamma, thay vì cố suy giá trị từ ảnh chụp 8-bit.
+
+Ảnh đầu tiên dùng `u` làm đỏ, `v` làm xanh lá. Góc dưới trái của GL phải tối ở cả hai kênh; góc trên phải phải sáng hơn. Hãy dự đoán điều này trước khi chạy.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-1" />
+
+## Viết code từng bước
+
+### 1. Chạy được bộ khung trước
+
+Mở `starter/src/main.cpp`: `Platform` được tạo trước rồi mới gọi `open`. Nhờ đó, nếu khởi tạo dở dang, destructor vẫn dọn những tài nguyên đã có. Mỗi lệnh quan trọng được kiểm riêng, không viết tắt nhiều bước vào một biểu thức khó đọc.
+
+{/* snippet include/platform.hpp#open-context */}
+
+```cpp title="include/platform.hpp — Tạo context trước khi nạp hàm GL"
+void open(bool hidden) {
+    if (!SDL_Init(SDL_INIT_VIDEO))
+        throw std::runtime_error(SDL_GetError());
+    if (!SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3))
+        throw std::runtime_error(SDL_GetError());
+    if (!SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3))
+        throw std::runtime_error(SDL_GetError());
+    if (!SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE))
+        throw std::runtime_error(SDL_GetError());
+    if (!SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1))
+        throw std::runtime_error(SDL_GetError());
+    SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    if (hidden)
+        flags |= SDL_WINDOW_HIDDEN;
+    window = SDL_CreateWindow("Project 54 | Volume Lightbox", 1320, 900, flags);
+    if (!window)
+        throw std::runtime_error(SDL_GetError());
+    SDL_SetWindowMinimumSize(window, 960, 760);
+    context = SDL_GL_CreateContext(window);
+    if (!context)
+        throw std::runtime_error(SDL_GetError());
+    gl.load();
+    SDL_GL_SetSwapInterval(1);
+}
+```
+
+OpenGL 3.3 core là yêu cầu của project. `SDL_GLContext` không phải `SDL_Renderer`: ta vẽ bằng GL và kết thúc frame bằng `SDL_GL_SwapWindow`. Không tạo một renderer SDL khác rồi mong nó dùng chung state GL một cách tự động.
+
+### 2. Phủ viewport bằng một triangle
+
+Ba đỉnh dưới đây cố ý vượt khỏi hình vuông clip space. Sau clipping, chúng phủ hết viewport mà không tạo đường chéo nội bộ như hai triangle ghép thành quad.
+
+{/* snippet shaders/fullscreen.vert#fullscreen-triangle */}
+
+```glsl title="shaders/fullscreen.vert — Không cần VBO cho pass fullscreen"
+const vec2 positions[3] = vec2[3](vec2(-1, -1), vec2(3, -1), vec2(-1, 3));
+
+void main() {
+    gl_Position = vec4(positions[gl_VertexID], 0, 1);
+}
+```
+
+`gl_VertexID` lần lượt nhận 0, 1, 2 khi gọi `DrawArrays(..., 0, 3)`. GL core vẫn cần một VAO được bind; `Renderer::open` chuẩn bị VAO và compile/link shader, kèm tên file nếu driver báo lỗi.
+
+### 3. Để fragment shader tạo ảnh
+
+`gl_FragCoord` là tâm fragment trong target hiện tại, không phải tọa độ chuột. Chia cho `uSize` đưa nó về miền chuẩn hóa.
+
+{/* snippet shaders/volume.frag#fragment-main */}
+
+```glsl title="shaders/volume.frag — Ảnh UV đầu tiên"
+void main() {
+    vec2 uv = gl_FragCoord.xy / uSize;
+    result = vec4(uv, 0.2, 1.0);
+}
+```
+
+Ở checkpoint này, `uSize` là kích thước target thực. Chưa cần đọc texture 3D hay bật blending. Present pass đổi linear RGB sang display gamma đúng một lần; đó là lý do màu trên màn hình không nhất thiết bằng trực tiếp số `u`.
+
+### 4. Nối hai pass vào vòng lặp
+
+Trong `main`, sau xử lý input và lấy drawable size, đoạn này resize target nếu cần, render rồi present. `--smoke-gpu` dùng target nhỏ chỉ để kiểm shader; chạy bình thường không đi qua nhánh ấy.
+
+{/* snippet src/main.cpp#draw-frame */}
+
+```cpp title="src/main.cpp — Một frame đi qua hai pass"
+int targetWidth = viewPixels;
+int targetHeight = pixelHeight;
+if (options.smoke) {
+    targetWidth = 24;
+    targetHeight = 18;
+}
+if (targetWidth != failedWidth || targetHeight != failedHeight) {
+    try {
+        renderer.resize(targetWidth, targetHeight);
+        failedWidth = 0;
+        failedHeight = 0;
+    } catch (const std::exception& error) {
+        if (renderer.width == 0 || renderer.height == 0)
+            throw;
+        failedWidth = targetWidth;
+        failedHeight = targetHeight;
+        state.status = error.what();
+    }
+}
+renderer.pollGpu();
+renderer.render(state.camera, state.settings, true);
+if (options.smoke && frames == 0) {
+    const auto raw = renderer.read();
+    for (float value : raw)
+        if (!std::isfinite(value))
+            throw std::runtime_error("Nonfinite shader smoke output");
+}
+renderer.display(state.camera, state.settings, viewPixels, pixelHeight);
+```
+
+`resize` có cache kích thước, không cấp phát lại mỗi frame. Bản cuối dùng target theo viewport thật và công bố kích thước nếu phải giảm vì ngân sách; không giữ ảnh 240×180 rồi phóng to.
+
+## Ghép các phần lại
+
+Từ thư mục ZIP, configure một lần rồi build đúng target đang học:
+
+```powershell
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_54_checkpoint_1 --parallel 1
+.\build\Debug\project_54_checkpoint_1.exe
+```
+
+Giữ `Platform`, `Renderer`, input và UI của starter. Ta chỉ thay phần được giới thiệu trong bài; không cần viết lại bộ khung mỗi lần sang checkpoint. `SDL_GL_SwapWindow` gọi sau khi cả ảnh và UI đã vẽ xong.
+
+## Thử làm sai để hiểu đúng
+
+1. Chỉ vẽ hai vertex. Có còn đủ một triangle không? Quan sát ảnh rồi khôi phục số vertex là 3.
+2. Tạm đổi shader thành một màu đỏ cố định. Nếu cửa sổ vẫn giữ ảnh cũ, kiểm đường dẫn shader/target đang chạy trước khi nghi thuật toán.
+3. Resize cửa sổ. Nếu gradient bị cắt hoặc chỉ nằm ở một góc, so `glViewport`, `uSize` và drawable size; đừng lấy kích thước logical làm pixel size trên màn hình DPI cao.
+
+## Tự kiểm tra kết quả
+
+- [ ] Starter mở/đóng được, lỗi context/shader có thông báo cụ thể.
+- [ ] Checkpoint 1 có ảnh UV phủ viewport, không phải một hình chữ nhật nhỏ giữa cửa sổ.
+- [ ] Resize không tạo texture mới liên tục khi kích thước không đổi.
+- [ ] Chưa có thông báo “đã cấp phát volume” ở mốc chưa tạo dữ liệu.
+
+## Bài tập mở rộng
+
+Tạo checkerboard từ `uv` ngay trong fragment shader. Thay số ô nhưng không đổi fullscreen triangle. Giải thích tại sao số fragment thay theo viewport, còn số vertex vẫn là ba.
+
+[Bài sau](./02-tao-ray-tu-camera) giữ nguyên đường vẽ và thay ý nghĩa màu: mỗi pixel sẽ biểu diễn hướng nhìn của một tia perspective.

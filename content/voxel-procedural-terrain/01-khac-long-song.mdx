@@ -1,0 +1,114 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Khắc một lòng sông từ núi ra biển
+
+## Vấn đề cần giải quyết
+
+Gõ cùng một seed rồi bước qua ranh hai chunk. Con sông không được cụt ở đó. Thay vì cho mỗi chunk tự chọn một bức tranh, ta hỏi cùng một hàm rằng tại vị trí x,z này, đất cao bao nhiêu và gần biển đến đâu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Dựng mặt cắt ngang bằng ba mốc: đáy thấp hơn mặt nước, bờ dần nâng cao, đất xa bờ chuyển thành đồi. Dọc sông, cao độ hạ chậm về phía biển. Dùng bốn section chồng lên nhau để vách núi có chiều cao thật.
+
+<InteractiveLab demo="voxel-procedural-terrain" mode="voxel63-1" />
+
+## Viết code từng bước
+
+Các cột ở Project 62 đã biết khi nào phải nạp, nhưng chúng vẫn lặp lại phong cảnh bờ suối có sẵn. Giữ bộ nạp ấy. Thứ cần thay là câu trả lời cho câu hỏi: tại tọa độ world này, mặt đất cao tới đâu và được phủ bằng gì?
+
+### Vẽ mặt cắt từ biển lên núi
+
+Trong `terrain.hpp`, viết `riverCenter` để dòng sông có tim uốn theo z. `siteAt` nhận x/z **world** và seed, tính khoảng cách tới bờ biển và tim sông, hạ thấp lòng sông, nâng hai bên thành đất rồi chừa lối men bờ. Nếu dùng tọa độ local 0–15, hình núi sẽ lặp lại ở mọi cột và gãy tại đường nối.
+
+{/* snippet include/trail/terrain.hpp#land-profile */}
+
+```cpp title="include/trail/terrain.hpp — Nối đáy, bờ và sườn đồi"
+const double bed = s.riverLevel - 2.4;
+const double land = s.riverLevel + 2.8 + mountains * (6 + 7 * broad) + 6 * broad + 2 * fine + canyon * 15;
+const double edge = smooth(2.6, 17.0, bank);
+double ground = std::lerp(bed, land, edge);
+// Lối men bờ có độ cao tăng từ từ để tuyến chuẩn không bị vách đá chặn.
+const double trail = smooth(3.4, 6.4, bank) * (1 - smooth(7.5, 11.5, bank));
+ground = std::lerp(ground, s.riverLevel + 1 + mountains * 3, trail);
+const double coast = std::clamp(12 + 0.24 * s.inland + 1.3 * (fine - 0.5), 3.0, 17.0);
+ground = std::lerp(coast, ground, smooth(-3, 18, s.inland));
+// Nối lòng sông xuyên qua dải cát: cửa sông không có đập chắn vô tình.
+const double estuary = (1 - smooth(2.8, 6.0, bank)) * (1 - smooth(10, 24, s.inland));
+ground = std::lerp(ground, std::min(ground, bed), estuary);
+// Hai mỏm đá phía ngoài bãi cho mắt một mốc khi quan sát đỉnh sóng.
+const double reefA = std::hypot((x + 9.0) / 5.0, (z + 10.0) / 3.3);
+const double reefB = std::hypot((x - 16.0) / 4.2, (z + 14.0) / 2.6);
+ground += 5.4 * (1 - smooth(0, 1, reefA)) + 5.0 * (1 - smooth(0, 1, reefB));
+// Khoảng đất phẳng quanh bếp, đủ cho người quan sát đi vòng.
+const double clearing = 1 - smooth(4, 8, std::hypot(double(x - campX(seed)), double(z - 147)));
+ground = std::lerp(ground, 25.0, clearing);
+if (s.inland > 12) {
+    const double center = pathX(z, seed);
+    const double pathWeight = 1 - smooth(1.9, 3.8, std::abs(x + 0.5 - center));
+    const double pathLevel = std::lerp(s.riverLevel + 1 + mountains * 3, 25.0, 1 - smooth(3, 10, std::abs(z - 147)));
+    ground = std::lerp(ground, pathLevel, pathWeight);
+}
+```
+
+<VoxelWorkFile project="63" step={1} file="terrain" />
+
+### Lấp đất trước, rót nước sau
+
+Trong `naturalColumn`, dùng bốn section xếp chồng để có 64 ô chiều cao. Với mỗi vị trí ngang, lấp đến `ground` rồi mới điền `Water` từ ô trên nền đến mực sông hoặc biển. Đổi đá trên mặt thành cát, tuyết hay cỏ theo kết quả `siteAt`. Như vậy nước không lơ lửng dưới mái hang và núi không bị cắt ngang ở y = 16.
+
+{/* snippet include/trail/terrain.hpp#fill-water */}
+
+```cpp title="include/trail/terrain.hpp — Chỉ lấp nước từ đáy đến mặt thoáng"
+int water = 0;
+if (s.ocean)
+    water = 12;
+else if (s.river)
+    water = int(std::floor(s.riverLevel));
+for (int y = s.ground + 1; y <= water; ++y)
+    column.put(x, y, z, Block::Water);
+```
+
+### Nối địa hình mới vào đường nạp đang chạy
+
+Trong `region.hpp`, đổi nguồn của `Region::load` từ `makeBank` sang `naturalColumn` và truyền seed. Trong `field-scene.hpp`, đặt mắt lên cao độ tại điểm đến thay vì dùng một độ cao cho mọi cảnh. Thêm xử lý `--landmark` trong `window.hpp` để mở lại đúng góc quan sát khi so sánh. Bài này chưa gắn F5–F9.
+
+{/* snippet include/trail/region.hpp#load-land */}
+
+```cpp title="include/trail/region.hpp — Đưa cảnh vừa sinh vào đúng cột"
+put(naturalColumn(key.first, key.second, seed));
+```
+
+<VoxelWorkFile project="63" step={1} file="region" />
+
+<VoxelWorkFile project="63" step={1} file="field-scene" />
+
+<VoxelWorkFile project="63" step={1} file="window" />
+
+## Ghép các phần lại
+
+Chạy bản của bạn rồi thử thêm `--landmark 0` và `--landmark 3` ở cuối lệnh mở chương trình. Ở một đầu là bờ biển thấp, đầu kia là nền núi cao. Giữ nguyên seed rồi quay lại cùng tọa độ: nền và mực nước không được đổi. Cây và nước động sẽ làm ở các bài sau.
+
+Mở terminal cạnh `CMakeLists.txt` của ZIP đã giải nén. Lần cấu hình đầu tạo `work/` từ starter; chỉnh tệp trong đó, rồi build lại cùng target. Cấu hình lần nữa không ghi đè bài làm.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake -S . -B build-work -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_63_work --parallel 1
+.\build-work\Release\project_63_work.exe
+```
+
+Với Ninja hoặc Make trên Linux/macOS, chạy `./build-work/project_63_work` thay cho dòng mở `.exe`.
+
+## Thử làm sai để hiểu đúng
+
+Dùng local x,z để tính độ cao. Mỗi cột sẽ có một đoạn sông giống nhau, nhưng hai đoạn sát nhau không nhất thiết nối được.
+
+## Tự kiểm tra kết quả
+
+Cùng seed và tọa độ world cho cùng độ cao ở hai thứ tự nạp. Một cột có 64 tầng; có khoảng không thực bên trên đất chứ không phải chỉ một tấm heightmap để nhìn từ xa.
+
+## Bài tập mở rộng
+
+Chọn hai mặt cắt gần và xa biển, ghi độ cao đáy, mặt nước và đỉnh bờ. Đoạn nào giống thung lũng, đoạn nào giống hẻm?
+
+[Bài 2: Cho tán thông vượt qua đường biên chunk](/projects/voxel-procedural-terrain/02-cay-vuot-bien).

@@ -34,6 +34,12 @@ examples/drafts/<slug>/        source đang xây, chưa tham gia catalog hoặc 
 
 ## Source C++ và checkpoint
 
+Một project có thể khai báo `native` trong `course/projects/pXX/lab.ts`. Overview và các mode được liệt kê hiển thị đúng ảnh/video từ chương trình, kèm nguồn và mô tả. Video không tự chạy; trang chỉ gắn media của cảnh đang xem. Các mode còn lại vẫn dùng Canvas cho thí nghiệm. Tư liệu ở `public/field-notes/` là đầu ra biên tập được chọn, không phải thư mục chứa tất cả frame.
+
+Khi đang bật Vite trên Windows, không cho SDL ghi PNG thẳng vào `public`: file có thể còn bị khóa độc quyền khi watcher nhận sự kiện thêm file. Dùng `node scripts/publish-native-still.mjs <executable> <collection> <ten-anh.png> [tham số native]`. Công cụ chỉ đưa file đã đóng từ `.validation/` sang thư mục public cùng volume bằng rename.
+
+Chuỗi `flock-workbench` (65–72) dùng lại đúng bảy header Boids/grid của Project 28, khóa ở checkpoint 10. Tệp được lấy từ nguồn authored khi sinh ZIP, không trỏ sang một thư mục `final/` trên máy người học. Phần bàn quan sát mới thuộc `examples/flock-workbench/`; không sao chép solver vào tám project và không nhúng solver khác vào trình duyệt.
+
 `source-template/` giữ nguyên cấu trúc thư mục mà snapshot cần có:
 
 ```text
@@ -57,6 +63,14 @@ CMake dùng một target `project_N_runtime_files` để chuẩn bị DLL SDL v�
 Project có shader thay đổi theo checkpoint có thể bật `shaderRuntimePerTarget` trong catalog. Khi bật, mỗi target có bản fallback tại `shaders/<target-name>/` cạnh executable và nhận đường này qua `COURSE_SHADER_FALLBACK_SUBDIRECTORY`; các target không chép đè GLSL của nhau. Source directory của đúng snapshot vẫn được ưu tiên để hỗ trợ hot reload. Các project chưa bật option giữ cách tìm runtime shader hiện tại.
 
 ## File được sinh tự động
+
+### Nền C++ dùng chung của tuyến cảnh quan voxel
+
+Với Project 58–64, một mục catalog có thể khai báo `sourceSeries: "voxel-expedition"`. Header authored dùng xuyên suốt nằm ở `examples/voxel-expedition/include/trail/`; kiến thức mới ở các mốc sau đặt trong `from-NN/include/trail/`. Generator chỉ lấy các thư mục tới đúng project hiện hành. Trong header chung, `LAB_CHECKPOINT >= 6102` nghĩa là từ Bài 02 của Project 61. File local của từng project vẫn dùng số checkpoint bắt đầu từ 0. Hai nguồn cùng tên file bị từ chối. Bộ sinh snapshot, trình kiểm đường dẫn code guide và giới hạn dung lượng cùng đọc một danh sách đầu vào. ZIP đã chứa mọi header cần dùng, không cần giải nén các project trước hoặc nối nhiều thư mục bằng tay.
+
+Trong ZIP voxel, cấu hình `cmake -S . -B build-work -DVOXEL_WORKBOOK=ON` tạo `work/` từ starter **chỉ khi chưa có thư mục này**. Target `project_N_work` và CTest của cấu hình này đọc code người học. Không đưa work vào generator, ZIP hay Git. Phần thực hành trong MDX dùng `VoxelWorkFile` đúng tại bước chỉnh từng header; bộ đọc chỉ tải hai snapshot khi mở tệp và cho biết đoạn phải chèn/thay, kèm mốc phía trên/dưới. Phần diff và bản final cuối trang chỉ để đối chiếu.
+
+`tests/voxel-workbook.cases.mjs` làm theo các bước theo thứ tự từ starter đến hết, kiểm các mốc chèn và toàn bộ tệp sau mỗi bài. Để kiểm cả native trên một ZIP, chạy `node --experimental-strip-types scripts/verify-voxel-workbook.mjs 58 <thư-mục-SDL3Config.cmake>` (đổi 58 thành ID cần kiểm). Lệnh dùng SDL đã có, một tiến trình build, một thư mục tạm riêng và timeout tổng bốn phút cho mỗi project. Không chạy tự động phiên khảo sát 10 phút.
 
 `npm run generate:course` đồng bộ:
 
@@ -97,9 +111,9 @@ Payload public vẫn là một JSON versioned cho mỗi snapshot. Server giữ b
 
 ## Giới hạn chống phình file
 
-Code block C++ của Project 01–32, Project 40–53 và từ Project 56 trở đi phải khớp một đoạn token liên tiếp trong đúng source checkpoint, bỏ qua comment và khoảng trắng nhưng giữ literal/toán tử. `tests/source-contract.cases.mjs` dùng `scripts/code-snippets.mjs` cho hợp đồng này; Project 40–45 và 51 còn kiểm cả GLSL trong suite riêng. Các project còn lại trong khoảng 33–55 dùng kiểm tra subsequence riêng; test mới không được bỏ qua token như giá trị trả về để làm một snippet sai được chấp nhận.
+Code block C++ của Project 01–32, Project 40–54 và từ Project 56 trở đi phải khớp một đoạn token liên tiếp trong đúng source checkpoint, bỏ qua comment và khoảng trắng nhưng giữ literal/toán tử. `tests/source-contract.cases.mjs` dùng `scripts/code-snippets.mjs` cho hợp đồng này; Project 40–45 và 51 còn kiểm cả GLSL trong suite riêng. Các project còn lại trong khoảng 33–55 dùng kiểm tra subsequence riêng; test mới không được bỏ qua token như giá trị trả về để làm một snippet sai được chấp nhận.
 
-Project 47–53 gắn code block với `// [snippet id]` / `// [/snippet id]` trong source. Sau khi sinh checkpoints, chạy `node scripts/sync-marked-snippets.mjs --project=52` (hoặc ID 47–53); thêm `--check` để đối chiếu read-only. Script hỗ trợ C++ và GLSL, kiểm ngôn ngữ/đường dẫn và đọc đúng snapshot của lesson, không lấy phần thuật toán tương lai trong source-template. Comments MDX giữ đường dẫn/marker; tests riêng của P51/P52/P53 yêu cầu mọi code block giảng dạy khớp đúng marker, không chỉ khớp một subsequence.
+Project 47–54 gắn code block với `// [snippet id]` / `// [/snippet id]` trong source. Sau khi sinh checkpoints, chạy `node scripts/sync-marked-snippets.mjs --project=54` (hoặc ID 47–54); thêm `--check` để đối chiếu read-only. Script hỗ trợ C++ và GLSL, kiểm ngôn ngữ/đường dẫn và đọc đúng snapshot của lesson, không lấy phần thuật toán tương lai trong source-template. Comments MDX giữ đường dẫn/marker; tests riêng của P51/P52/P53/P54 yêu cầu mọi code block giảng dạy khớp đúng marker, không chỉ khớp một subsequence.
 
 `npm run check:architecture` áp dụng các budget:
 
@@ -120,9 +134,17 @@ Nếu một project vượt budget, hãy chia dữ liệu hoặc component ngay 
 2. Tạo `course/projects/pXX/{manifest,learning,lab}.ts`.
 3. Tạo lesson trong `content/<slug>/` với tiền tố `01-`, `02-`…
 4. Tạo `examples/project-XX-<slug>/source-template/`, tests và README; generator sẽ tạo CMake.
-5. Tạo `components/labs/<demo>-lab.tsx`.
+5. Chọn cách minh họa theo bài: tạo `components/labs/<demo>-lab.tsx` khi cần tương tác với thuật toán; để xem thành phẩm native, khai báo `native` trong `lab.ts`. Có thể dùng cả hai ở các bài khác nhau. Học phần chỉ dùng ảnh/video không cần tạo một Canvas trống hay thêm client chunk.
 6. Chạy `npm run generate:course` và `npm run package:projects`.
 7. Chạy `npm run lint` và `npm test`.
+
+### Bàn Boids dùng chung (Project 65–72)
+
+Giữ một bản source của solver ở Project 28. `scripts/course-source-templates.mjs` ghim đúng checkpoint kế thừa; các lớp UI nối tiếp nằm trong `examples/flock-workbench/`. Thêm tính năng tại mốc sớm nhất được phép dạy, không sao chép thư mục của bài trước vào Git. Generator đưa đủ mã vào từng starter, checkpoint, final và ZIP: máy người học không cần checkout project trước.
+
+Đoạn C++ trong bài lấy từ marker của chính checkpoint đó. Với dữ liệu ngắn mà chương trình thực sự đọc (`.html`, `.css`, `.tiny`), đặt marker MDX `{/* asset assets/tên-file.css */}` ngay trước code block; file trong ZIP không chứa ký hiệu dành cho giáo trình. Dùng `node scripts/sync-marked-snippets.mjs --project=72 --check` để phát hiện sai lệch.
+
+Ảnh trong `public/field-notes/flock-workbench/` do đúng executable ghi lại. Sau khi build với `BUILD_CHECKPOINTS=ON`, có thể chụp lại bằng `node --experimental-strip-types scripts/capture-flock-series.mjs 72 đường-dẫn-build/Release`. Script đọc danh sách ảnh của học phần, chọn đúng checkpoint/final, rồi công bố PNG sau khi SDL đã đóng file để Vite không đọc ảnh còn viết dở.
 
 `npm test` kiểm tra pipeline development bằng các fixture cố định có đủ MDX, công thức, Canvas và code block; production build vẫn compile toàn bộ lesson. Khi sửa cấu hình MDX/Vite, dùng `npm run test:mdx-dev-full` để ép development pipeline compile từng lesson theo các batch giới hạn concurrency.
 

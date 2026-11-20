@@ -1,0 +1,73 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Có chỗ trống: chia cho nút nào?
+
+## Vấn đề cần giải quyết
+
+Nới rộng cửa sổ. Reset chỉ cần vừa nhãn; Links có thể dùng thêm diện tích để dễ bấm. Nếu cho cả ba nút rộng bằng nhau, việc khai báo ưu tiên khác nhau mất ý nghĩa.
+
+## Hiểu ý tưởng trước khi viết code
+
+Trừ hết basis, margin và gap trước. Phần còn lại chia theo grow: 1 và 2 thì mỗi ba pixel dư, nút thứ nhất được một, nút thứ hai được hai. Con số này mô tả *phần tăng thêm*, không phải tỉ lệ chiều rộng cuối cùng.
+
+<InteractiveLab demo="tiny-flex" mode="flex70-3" />
+
+## Viết code từng bước
+
+Trước khi viết vòng lặp C++, thử ngay trường hợp trong bộ test: khung rộng 150 px, hai nút cần 20 và 30 px, giữa hai nút chừa 10 px. Như vậy còn 90 px. Với trọng số 1:2, nút A nhận thêm 30 px thành 50 px; nút B nhận thêm 60 px thành 90 px. Kéo mép vàng về 50 px: bây giờ không còn gì để chia, vậy 10 px nào nằm ngoài khung?
+
+<InteractiveLab demo="tiny-flex" mode="flex70-share" />
+
+### Đặt đúng mẫu số
+
+`totalGrow` chỉ tính các item hiện trong dòng, không tính item ẩn. Grow bằng 0 giữ basis; không có ai muốn nhận thì chỗ dư còn cho justify ở bài sau.
+
+{/* snippet include/flex/line.hpp#occupied */}
+
+```cpp title="include/flex/line.hpp — Đặt đúng mẫu số"
+double occupied = 0, totalGrow = 0;
+if (items.size() > 1)
+    occupied = gap * double(items.size() - 1);
+for (const auto& it : items) {
+    occupied += it.before + it.basis + it.after;
+    totalGrow += it.grow;
+}
+double remainder = std::max(0.0, available - occupied);
+```
+
+### Chia phần dư một lần
+
+Ví dụ hai basis 20 và 30, gap 10, dòng rộng 150: dư 90. Hai nút grow 1:2 có bề rộng cuối 50 và 90, không phải 50 và 100.
+
+{/* snippet include/flex/line.hpp#share */}
+
+```cpp title="include/flex/line.hpp — Chia phần dư một lần"
+if (totalGrow > 0) {
+    perWeight = remainder / totalGrow;
+    remainder = 0;
+}
+```
+
+## Ghép các phần lại
+
+Chạy mốc 3 và nới cửa sổ. Giữ nhãn Reset trong tầm nhìn: width của nó đứng yên trong khi Pause và Links dài ra. Trong style.css, đổi grow của Links về 0 rồi F5.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_70_checkpoint_3 --parallel 2
+.\build\Release\project_70_checkpoint_3.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Chia cả 150 theo tỉ lệ 1:2 rồi cộng thêm hai basis và gap. Toolbar sẽ tràn dù còn đủ chỗ. Phép cộng cuối cùng phải quay về đúng 150.
+
+## Tự kiểm tra kết quả
+
+Rộng thêm 30 pixel chỉ làm phần grow 1 nở 10 và phần grow 2 nở 20 khi cả hai đều nhìn thấy. Không chia cho 0 nếu tổng grow bằng 0.
+
+## Bài tập mở rộng
+
+Thu hẹp tới khi tổng basis lớn hơn vùng chứa. Vì sao hai nút vẫn giữ kích thước mà không nhận grow âm?
+
+[Bài 4: Căn nhóm ở giữa không giống căn chữ trên nút](/projects/tiny-flex/04-can-tren-hai-truc).

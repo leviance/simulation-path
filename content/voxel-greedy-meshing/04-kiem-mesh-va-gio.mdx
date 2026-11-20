@@ -1,0 +1,90 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Đo riêng công dựng đất và công vẽ ngọn cây
+
+## Vấn đề cần giải quyết
+
+Mặt đất có thể gộp thành vài quad, nhưng gió khiến ta vẫn phải vẽ lại ảnh. Muốn biết tối ưu đúng chỗ chưa, đừng chỉ nhìn FPS: một frame mới không nhất thiết cần một mesh đất mới.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đếm riêng số lần dựng mesh, số mặt và thời gian của lần dựng vừa rồi. Để so hai phương pháp, giữ nguyên chunk, vật liệu, camera và góc sáng. Tắt khung dây khi đo thời gian vẽ vì chính đường chéo cũng tốn công.
+
+<InteractiveLab demo="voxel-greedy-meshing" mode="voxel61-4" />
+
+## Viết code từng bước
+
+Ở đây không cần viết thuật toán gộp lần thứ hai. Điều còn thiếu là biết nó đã tốn bao nhiêu thời gian và có bỏ nhầm một mặt nào không. Hai câu hỏi này cần hai phép kiểm khác nhau.
+
+### Đưa số đo đã có lên HUD
+
+Trong `field-scene.hpp`, mở `readout` và in `region.lastBuildMs` bên cạnh số quad. Giá trị là thời gian dựng mesh của **cột vừa được dựng gần nhất**, không phải tổng thời gian của cả vùng hay FPS. Đo ở cùng preset, cùng chỗ đứng; đừng so một lần nhìn vào trời với một lần nhìn xuyên rừng.
+
+{/* snippet include/trail/field-scene.hpp#mesh-readout */}
+
+```cpp title="include/trail/field-scene.hpp — In thời gian dựng cột vừa xong"
+out << " | mesh " << std::round(region.lastBuildMs * 100) / 100 << " ms";
+```
+
+<VoxelWorkFile project="61" step={4} file="field-scene" />
+
+### Kiểm hình học trước khi kết luận nhanh hơn
+
+Hai đoạn dưới là điểm tựa để đọc tests, không phải mã mới. Dùng `sample` để tìm hàng xóm kể cả ở cột âm; khi bung mỗi quad gộp, ghi lại từng ô, hướng và vật liệu. So tập đó với bản Visible. Hai tập có thể bằng số phần tử mà vẫn sai nếu một mặt bị thiếu còn một mặt khác bị vẽ hai lần.
+
+{/* snippet include/trail/region.hpp#lookup-neighbor */}
+
+```cpp title="include/trail/region.hpp — Cho hai cách dựng đọc cùng hàng xóm"
+const auto sample = [&](int wx, int y, int wz) {
+    const int x = wx - key.first * side, z = wz - key.second * side;
+    if (x >= 0 && x < side && z >= 0 && z < side)
+        return column.get(x, y, z);
+    return read(wx, y, wz);
+};
+```
+
+{/* snippet include/trail/greedy.hpp#greedy-emit */}
+
+```cpp title="include/trail/greedy.hpp — Đổi đơn vị đo về mặt block"
+for (int dy = 0; dy < height; ++dy)
+    std::fill_n(mask.begin() + (v + dy) * side + u, width, Block::Air);
+const Cell c = maskCell(face, plane, u, v);
+const Vec3 world{double(column.cx * side + c.x), double(c.y), double(column.cz * side + c.z)};
+mesh.push_back({world + faceStarts[face], face, width, height, key});
+```
+
+## Ghép các phần lại
+
+Chọn bức tường đồng nhất rồi thử một bề mặt chia vật liệu. Ghi số quad và `mesh … ms` cho từng chế độ F2; với khối đặc, Greedy còn đúng 6 quad. Bật gió rồi đứng yên: nếu số lần dựng mesh tăng theo thời gian, hãy xem lại bước uốn đỉnh trước khi diễn giải con số thời gian.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_61_work --parallel 1
+.\build-work\Release\project_61_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Đánh dấu toàn bộ chunk là bẩn mỗi khi đồng hồ gió tăng. Số quad có thể không đổi nhưng builds tăng đều; đây là công việc thừa dễ bị bỏ qua.
+
+## Tự kiểm tra kết quả
+
+Bảng kiểm gồm khối đặc, bàn cờ, hốc rỗng và biên hai cột. Gió chạy nhiều nhịp vẫn không làm thay đổi bất kỳ mặt đất tĩnh nào.
+
+
+Khi bản của bạn đã đủ các tính năng, chạy bộ kiểm của project trên chính `work/include`. Dùng lại thư mục `build-work` đã cấu hình với `VOXEL_WORKBOOK=ON`; chạy test của bản mẫu trong thư mục khác không kiểm được mã này.
+
+```bash title="Windows / Visual Studio — kiểm bài làm ở cả hai cấu hình"
+cmake --build build-work --config Debug --target project_61_tests --parallel 1
+ctest --test-dir build-work -C Debug --output-on-failure --timeout 30
+cmake --build build-work --config Release --target project_61_tests --parallel 1
+ctest --test-dir build-work -C Release --output-on-failure --timeout 30
+```
+
+Với Ninja/Make, kiểm Release trong `build-work`. Để kiểm Debug thật, cấu hình thêm `cmake -S . -B build-work-debug -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Debug` rồi dùng `build-work-debug` cho hai lệnh Debug. Cả hai đọc cùng một thư mục `work/`.
+
+## Bài tập mở rộng
+
+So thời gian vẽ khi đứng sát rừng và lúc nhìn trời. Số quad lưu trữ giống nhau có bảo đảm thời gian vẽ giống nhau không?
+
+[Tải mã hoàn chỉnh của Project 61](/downloads/project-61-voxel-greedy-meshing.zip) · [Sang Project 62](/projects/voxel-chunk-streaming).

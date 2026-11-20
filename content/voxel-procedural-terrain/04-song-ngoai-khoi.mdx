@@ -1,0 +1,76 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Đỉnh sóng phải nhô lên khỏi mặt biển
+
+## Vấn đề cần giải quyết
+
+Ở biển, chỉ cuộn hoa văn thì đường chân của mặt nước vẫn thẳng như tấm kính. Ta cần thấy một đỉnh sóng đi qua mốc bờ: chính độ cao đỉnh trên mặt lưới thay đổi, kéo theo hướng hắt sáng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Cộng hai sóng có hướng khác nhau để bớt cảm giác những hàng rào song song. Cùng một hàm độ cao cho ta cả độ dốc ngang lẫn dọc. Một vector vuông góc với mặt dốc là cơ sở để tô sáng, không cần thêm mô hình biển riêng.
+
+<InteractiveLab demo="voxel-procedural-terrain" mode="voxel63-4" />
+
+## Viết code từng bước
+
+Nếu chỉ tô một vệt sáng chạy trên mặt xanh thì nhìn sát mép đá, nước vẫn phẳng như tấm kính. Muốn thấy sóng ngoài khơi, phải thay cả chiều cao của bề mặt lẫn hướng hắt sáng.
+
+### Đọc chiều cao và độ dốc từ cùng một hàm
+
+`oceanAt` trong `water.hpp` đã có từ bài trước. Hai sóng đi theo hai hướng; sin cho độ cao, cos cho độ dốc theo x và z. Normal hướng lên lấy từ hai độ dốc ấy. Tại cùng vị trí world và thời gian, hai chunk phải nhận cùng giá trị ở đỉnh chung.
+
+{/* snippet include/trail/water.hpp#ocean-wave */}
+
+```cpp title="include/trail/water.hpp — Tính chiều cao và normal ở cùng điểm"
+inline WaterSurface oceanAt(double x, double z, double seconds) {
+    const double a = 0.53 * x + 0.23 * z - 1.6 * seconds;
+    const double b = -0.21 * x + 0.78 * z - 2.1 * seconds;
+    const double height = 0.32 * std::sin(a) + 0.13 * std::sin(b);
+    const double dx = 0.32 * 0.53 * std::cos(a) - 0.13 * 0.21 * std::cos(b);
+    const double dz = 0.32 * 0.23 * std::cos(a) + 0.13 * 0.78 * std::cos(b);
+    return {height, normalized({-dx, 1, -dz})};
+}
+```
+
+### Uốn bốn góc rồi mới tô nước biển
+
+Chỉ sửa `field-render.hpp`. Trong nhánh `site.ocean`, lấy bốn đỉnh của mặt nước, gọi `oceanAt` ở tọa độ world từng đỉnh rồi cộng `height` vào y. Lấy normal gần tâm để tính ánh phản chiếu trước khi gửi quad đi vẽ. Project 61 đã cố ý không gộp các mặt `Water`, nên lưới đang có đã đủ đỉnh. Không cần dựng lại chunk hay thêm một bộ mô phỏng chất lỏng.
+
+{/* snippet include/trail/field-render.hpp#sea-vertices */}
+
+```cpp title="include/trail/field-render.hpp — Nâng đỉnh trước rồi mới chiếu ra màn hình"
+for (Vec3& point : points)
+    point.y += oceanAt(point.x, point.z, weather.time).height;
+const Vec3 n = oceanAt(f.origin.x + 0.5, f.origin.z + 0.5, weather.time).normal;
+const Vec3 half = normalized(draw.sun + normalized(draw.camera.eye - f.origin));
+const Vec3 eye = normalized(draw.camera.eye - f.origin);
+const double crest = oceanAt(f.origin.x + 0.5, f.origin.z + 0.5, weather.time).height;
+brightness = 0.64 + 0.40 * std::max(0.0, dot(n, draw.sun)) + 0.24 * (1 - std::abs(dot(n, eye))) + 0.32 * crest + 0.68 * std::pow(std::max(0.0, dot(n, half)), 18);
+```
+
+<VoxelWorkFile project="63" step={4} file="field-render" />
+
+## Ghép các phần lại
+
+Mở ở bờ biển (`--landmark 0`), nhìn ngang nơi mặt nước cắt một rạn đá gần. Đỉnh rồi hõm phải lần lượt đi qua đá; không chỉ có màu xanh nhấp nháy. Bấm P, đổi góc nhìn: hình gợn giữ nguyên ở vị trí đó.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_63_work --parallel 1
+.\build-work\Release\project_63_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Chỉ đổi normal mà để độ cao bằng 0. Ánh phản xạ vẫn chạy nhưng đường viền sóng bên mốc bờ không nhô lên.
+
+## Tự kiểm tra kết quả
+
+Điểm tại cùng tọa độ/giờ có cùng độ cao và normal bất kể chunk. Kiểm normal bằng sai phân độ cao ở hai phía; Pause giữ nguyên hình, block nước không đổi.
+
+## Bài tập mở rộng
+
+Đặt biên độ sóng thứ hai bằng 0. Đường đỉnh đều lên theo hướng nào và khi nào việc thêm sóng thứ ba không còn giúp bài học?
+
+[Bài 5: Theo một con sông qua năm điểm hẹn](/projects/voxel-procedural-terrain/05-di-tu-tuyet-ra-bien).

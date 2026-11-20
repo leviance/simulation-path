@@ -1,296 +1,212 @@
 #pragma once
-#include "controls.hpp"
-#include "diagnostics.hpp"
-#include "state.hpp"
-#include <SDL3/SDL.h>
+#include "ui.hpp"
 
-namespace slices {
-enum class DragKind { None,
-                      Cut,
-                      Level,
-                      Width,
-                      Probe,
-                      Orbit };
+namespace slice53 {
+// Camera, probe and sliders have distinct drag modes and share a single capture lifetime.
+enum class DragKind { None, Camera, Probe, Slice, Level, Width };
+struct Drag { DragKind kind = DragKind::None; int view = 0; double x = 0; double y = 0; };
 
-struct Drag {
-    DragKind kind = DragKind::None;
-    int view = 0;
-    double x = 0;
-    double y = 0;
-};
+inline void release(Drag& drag, State& state) {
+    drag.kind = DragKind::None;
+    state.paused = true;
+    SDL_CaptureMouse(false);
+}
 
+inline void applyButton(State& state, int action) {
 #if LAB_CHECKPOINT >= 2
-inline void keyboard(State& state, SDL_Keycode key, bool repeat, bool control = false) {
-    if (key != SDLK_SPACE) {
-        state.paused = true;
+    if (action == 0) state.load(static_cast<Preset>((static_cast<int>(state.preset) + 1) % 5), state.side);
+    if (action == 1) {
+        int next = 128;
+        if (state.side == 128) next = 64;
+        state.load(state.preset, next);
     }
-#if LAB_CHECKPOINT >= 3
-    if (control) {
-        if (key == SDLK_LEFT) {
-            state.camera.yaw -= 0.08;
-        }
-        if (key == SDLK_RIGHT) {
-            state.camera.yaw += 0.08;
-        }
-        if (key == SDLK_UP) {
-            state.camera.pitch += 0.06;
-        }
-        if (key == SDLK_DOWN) {
-            state.camera.pitch -= 0.06;
-        }
-        limitCamera(state.camera);
-        return;
-    }
-    if (key == SDLK_Q) {
-        state.camera.yaw -= 0.08;
-    }
-    if (key == SDLK_E) {
-        state.camera.yaw += 0.08;
-    }
-    if (key == SDLK_MINUS) {
-        state.camera.distance *= 1.1;
-    }
-    if (key == SDLK_EQUALS || key == SDLK_PLUS) {
-        state.camera.distance /= 1.1;
-    }
-    if (key == SDLK_F && !repeat) {
-        state.camera = {};
-    }
-    if (key == SDLK_O && !repeat) {
-        state.cutaway = !state.cutaway;
-    }
-    if (key >= SDLK_1 && key <= SDLK_3) {
-        state.activeView = static_cast<int>(key - SDLK_1);
-    }
-    limitCamera(state.camera);
-#else
-    (void)control;
 #endif
-    if (key == SDLK_R && !repeat) {
-        state.reset();
-    }
-    if (key == SDLK_P && !repeat) {
-        const auto next = static_cast<Preset>((static_cast<int>(state.preset) + 1) % 5);
-        (void)state.loadDataset(next, state.grid.count[0]);
-    }
-    if (key == SDLK_N && !repeat) {
-        int side = 128;
-        if (state.grid.count[0] == 128) {
-            side = 64;
-        }
-        state.setResolution(side);
-    }
-    const auto axes = axesFor(state.activeView);
-    double step = 1;
-#if LAB_CHECKPOINT >= 5
-    step = 0.1;
-#endif
-    // [snippet move-cut]
-    if (key == SDLK_PAGEUP) {
-        state.cursor[axes.cut] += step * state.grid.spacing[axes.cut];
-    }
-    if (key == SDLK_PAGEDOWN) {
-        state.cursor[axes.cut] -= step * state.grid.spacing[axes.cut];
-    }
-    state.cursor = clampPoint(state.grid, state.cursor);
-    // [/snippet move-cut]
 #if LAB_CHECKPOINT >= 4
-    if (key == SDLK_W) {
-        state.windowing.level = std::min(1.0, state.windowing.level + 0.02);
-    }
-    if (key == SDLK_S) {
-        state.windowing.level = std::max(0.0, state.windowing.level - 0.02);
-    }
-    if (key == SDLK_A) {
-        state.windowing.width = std::max(0.05, state.windowing.width - 0.05);
-    }
-    if (key == SDLK_D) {
-        state.windowing.width = std::min(1.5, state.windowing.width + 0.05);
-    }
-    if (key == SDLK_C && !repeat) {
-        state.color = !state.color;
-    }
-    if (key == SDLK_H && !repeat) {
-        state.showHistogram = !state.showHistogram;
-    }
+    if (action == 2) state.linear = !state.linear;
 #endif
-    if (key == SDLK_T && !repeat) {
-        state.dark = !state.dark;
-    }
 #if LAB_CHECKPOINT >= 5
-    if (key == SDLK_L && !repeat) {
-        state.linear = !state.linear;
-    }
+    if (action == 3) state.colored = !state.colored;
 #endif
 #if LAB_CHECKPOINT >= 6
-    if (key == SDLK_SPACE && !repeat) {
+    if (action == 4) state.cut = !state.cut;
+#endif
+#if LAB_CHECKPOINT >= 8
+    if (action == 5) {
+        const int axis = axesFor(state.activeView).fixed;
+        if (state.probe[axis] >= (state.grid().origin + state.grid().extent())[axis])
+            state.probe[axis] = state.grid().origin[axis];
         state.paused = !state.paused;
     }
-    if (key == SDLK_LEFT) {
-        state.cursor[axes.horizontal] -= state.grid.spacing[axes.horizontal];
-    }
-    if (key == SDLK_RIGHT) {
-        state.cursor[axes.horizontal] += state.grid.spacing[axes.horizontal];
-    }
-    if (key == SDLK_UP) {
-        state.cursor[axes.vertical] += state.grid.spacing[axes.vertical];
-    }
-    if (key == SDLK_DOWN) {
-        state.cursor[axes.vertical] -= state.grid.spacing[axes.vertical];
-    }
-    state.cursor = clampPoint(state.grid, state.cursor);
 #endif
-#if LAB_CHECKPOINT >= 7
-    if (key == SDLK_V && !repeat) {
-        const auto report = auditVolume(state.volume);
-        state.audit = "FAIL";
-        if (report.failures == 0) {
-            state.audit = "PASS";
-        }
-        state.audit += " | " + std::to_string(report.checks) + " checks";
+    if (action == 6) state.reset();
+#if LAB_CHECKPOINT >= 9
+    if (action == 7 && state.volume) {
+        const Audit report = audit(*state.volume);
+        state.status = "CHECK: " + std::to_string(report.checks) + " checks / " + std::to_string(report.failures) + " failures; affine residual " + number(report.residual, 12);
+        state.paused = true;
     }
 #endif
+    if (action == 8) state.debug = !state.debug;
+    state.dirty = true;
 }
 
-inline void movePointer(State& state, Drag& drag, double x, double y) {
-    bool threeViews = false;
-#if LAB_CHECKPOINT >= 3
-    threeViews = true;
-    if (drag.kind == DragKind::Orbit) {
+inline void dragTo(State& state, Drag& drag, double x, double y) {
+    const Grid grid = state.grid();
+    if (drag.kind == DragKind::Camera) {
         state.camera.yaw += (x - drag.x) * 0.008;
         state.camera.pitch += (y - drag.y) * 0.008;
-        limitCamera(state.camera);
-        drag.x = x;
-        drag.y = y;
+        state.camera.limit();
     }
-#endif
-    if (drag.kind == DragKind::Cut) {
-        const int axis = axesFor(drag.view).cut;
-        const auto rect = sliceSlider(drag.view, 1440, 900, threeViews);
-        double index = sliderPosition(rect, x) * (state.grid.count[axis] - 1);
-#if LAB_CHECKPOINT < 5
-        index = std::floor(index + 0.5);
-#endif
-        state.cursor[axis] = worldCoordinate(state.grid, axis, index);
-        state.activeView = drag.view;
+    if (drag.kind == DragKind::Slice) {
+        const Rect slider = sliderRect(drag.view);
+        const int axis = axesFor(drag.view).fixed;
+        const double fraction = std::clamp((x - slider.x) / slider.width, 0.0, 1.0);
+        state.probe[axis] = grid.origin[axis] + fraction * grid.extent()[axis];
     }
-#if LAB_CHECKPOINT >= 4
-    if (drag.kind == DragKind::Level) {
-        state.windowing.level = sliderPosition(levelSlider, x);
-    }
-    if (drag.kind == DragKind::Width) {
-        state.windowing.width = 0.05 + sliderPosition(widthSlider, x) * 1.45;
-    }
-#endif
-#if LAB_CHECKPOINT >= 6
+#if LAB_CHECKPOINT >= 7
     if (drag.kind == DragKind::Probe) {
-        const auto rect = fitSlice(state.grid, drag.view, panelRect(drag.view, 1440, 900, true));
-        const auto point = pickSlice(state.grid, drag.view, state.cursor, rect, std::clamp(x, rect.x, rect.x + rect.width), std::clamp(y, rect.y, rect.y + rect.height));
-        if (point) {
-            state.cursor = *point;
-        }
-    }
-#else
-    (void)y;
-#endif
-}
-
-inline Drag pointerDown(State& state, double x, double y) {
-    const bool wasPaused = state.paused;
-    state.paused = true;
-    for (int index = 0; index < 5; ++index) {
-        if (contains(presetButton(index), x, y)) {
-            (void)state.loadDataset(static_cast<Preset>(index), state.grid.count[0]);
-            return {};
-        }
-    }
-    if (contains(resolutionButton, x, y)) {
-        keyboard(state, SDLK_N, false);
-        return {};
-    }
-    if (contains(resetButton, x, y)) {
-        state.reset();
-        return {};
-    }
-    if (contains(themeButton, x, y)) {
-        keyboard(state, SDLK_T, false);
-        return {};
-    }
-#if LAB_CHECKPOINT >= 3
-    if (contains(sceneViewport, x, y)) {
-        return {DragKind::Orbit, -1, x, y};
-    }
-    if (contains(cutawayButton, x, y)) {
-        keyboard(state, SDLK_O, false);
-        return {};
-    }
-    if (contains(cameraButton, x, y)) {
-        keyboard(state, SDLK_F, false);
-        return {};
-    }
-#endif
-#if LAB_CHECKPOINT >= 4
-    if (contains(paletteButton, x, y)) {
-        keyboard(state, SDLK_C, false);
-        return {};
-    }
-    if (contains(histogramButton, x, y)) {
-        keyboard(state, SDLK_H, false);
-        return {};
-    }
-    for (const auto kind : {DragKind::Level, DragKind::Width}) {
-        Rect rect = levelSlider;
-        if (kind == DragKind::Width) {
-            rect = widthSlider;
-        }
-        if (contains(rect, x, y)) {
-            Drag drag{kind, 0};
-            movePointer(state, drag, x, y);
-            return drag;
-        }
+        const Rect image = smallImage(grid, drag.view);
+        const double insideX = std::clamp(x, image.x, std::nextafter(image.x + image.width, image.x));
+        const double insideY = std::clamp(y, image.y, std::nextafter(image.y + image.height, image.y));
+        const auto point = pickSlice(grid, drag.view, image, insideX, insideY, state.probe);
+        if (point) state.probe = *point;
     }
 #endif
 #if LAB_CHECKPOINT >= 5
-    if (contains(samplerButton, x, y)) {
-        keyboard(state, SDLK_L, false);
-        return {};
+    if (drag.kind == DragKind::Level) state.window.level = std::clamp((x - 500) / 296, 0.0, 1.0);
+    if (drag.kind == DragKind::Width) state.window.width = 0.05 + 1.45 * std::clamp((x - 500) / 296, 0.0, 1.0);
+#endif
+    drag.x = x;
+    drag.y = y;
+    state.dirty = true;
+}
+
+inline bool handleEvent(State& state, Drag& drag, SDL_Event event, SDL_Renderer* renderer) {
+    if (event.type == SDL_EVENT_QUIT) return false;
+    if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) release(drag, state);
+    if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT) {
+        drag.kind = DragKind::None;
+        SDL_CaptureMouse(false);
+    }
+    // [snippet logical-input]
+    if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_MOTION)
+        SDL_ConvertEventToRenderCoordinates(renderer, &event);
+    if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
+        const double x = event.button.x;
+        const double y = event.button.y;
+        for (const Button& button : buttons(state)) {
+            if (button.enabled && contains(button.rect, x, y)) {
+                if (button.action == 0 || button.action == 1 || button.action == 6) release(drag, state);
+                applyButton(state, button.action);
+                return true;
+            }
+        }
+        state.paused = true;
+        drag = {};
+        drag.x = x;
+        drag.y = y;
+#if LAB_CHECKPOINT >= 6
+        if (contains(sceneArea, x, y)) drag.kind = DragKind::Camera;
+#endif
+        int views = 1;
+#if LAB_CHECKPOINT >= 3
+        views = 3;
+#endif
+        for (int view = 0; view < views; ++view) {
+            if (contains(slicePanel(view), x, y)) state.activeView = view;
+            if (contains(sliderRect(view), x, y)) { drag.kind = DragKind::Slice; drag.view = view; }
+#if LAB_CHECKPOINT >= 7
+            if (contains(smallImage(state.grid(), view), x, y)) { drag.kind = DragKind::Probe; drag.view = view; }
+#endif
+        }
+#if LAB_CHECKPOINT >= 5
+        if (contains({500, 750, 296, 24}, x, y)) drag.kind = DragKind::Level;
+        if (contains({500, 778, 296, 24}, x, y)) drag.kind = DragKind::Width;
+#endif
+        if (drag.kind != DragKind::None) {
+            if (!SDL_CaptureMouse(true))
+                state.status = "Mouse capture unavailable; release or blur cancels dragging.";
+            dragTo(state, drag, x, y);
+        }
+        state.dirty = true;
+    }
+    // [/snippet logical-input]
+    // [snippet drag-motion]
+    if (event.type == SDL_EVENT_MOUSE_MOTION && drag.kind != DragKind::None) {
+        // Recover even when a platform failed to capture the mouse-up outside its window.
+        if ((event.motion.state & SDL_BUTTON_LMASK) == 0) {
+            release(drag, state);
+        } else {
+            dragTo(state, drag, event.motion.x, event.motion.y);
+        }
+    }
+    // [/snippet drag-motion]
+#if LAB_CHECKPOINT >= 6
+    if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+        state.camera.distance *= std::exp(-event.wheel.y * 0.08);
+        state.camera.limit();
+        state.dirty = true;
     }
 #endif
-#if LAB_CHECKPOINT >= 6
-    if (contains(scanButton, x, y)) {
-        state.paused = !wasPaused;
-        return {};
+    if (event.type != SDL_EVENT_KEY_DOWN) return true;
+    const SDL_Keycode key = event.key.key;
+    if (key == SDLK_ESCAPE) return false;
+    if (key == SDLK_R) { release(drag, state); state.reset(); }
+    if (key == SDLK_HOME) { state.camera = {}; state.dirty = true; }
+#if LAB_CHECKPOINT >= 2
+    if (key >= SDLK_1 && key <= SDLK_5 && !event.key.repeat) {
+        release(drag, state);
+        state.load(static_cast<Preset>(key - SDLK_1), state.side);
     }
-#else
-    (void)wasPaused;
+    if (key == SDLK_N && !event.key.repeat) { release(drag, state); applyButton(state, 1); }
+#endif
+#if LAB_CHECKPOINT >= 3
+    if (key == SDLK_TAB) state.activeView = (state.activeView + 1) % 3;
+#endif
+#if LAB_CHECKPOINT >= 4
+    if (key == SDLK_T && !event.key.repeat) applyButton(state, 2);
+#endif
+#if LAB_CHECKPOINT >= 5
+    if (key == SDLK_C && !event.key.repeat) applyButton(state, 3);
+    if (key == SDLK_J) state.window.level = std::max(0.0, state.window.level - 0.02);
+    if (key == SDLK_K) state.window.level = std::min(1.0, state.window.level + 0.02);
+    if (key == SDLK_U) state.window.width = std::max(0.05, state.window.width - 0.02);
+    if (key == SDLK_I) state.window.width = std::min(1.5, state.window.width + 0.02);
+#endif
+#if LAB_CHECKPOINT >= 6
+    if (key == SDLK_O && !event.key.repeat) applyButton(state, 4);
+    if (key == SDLK_EQUALS || key == SDLK_KP_PLUS) state.camera.distance *= 0.9;
+    if (key == SDLK_MINUS || key == SDLK_KP_MINUS) state.camera.distance /= 0.9;
+    if (event.key.mod & SDL_KMOD_CTRL) {
+        if (key == SDLK_LEFT) state.camera.yaw -= 0.08;
+        if (key == SDLK_RIGHT) state.camera.yaw += 0.08;
+        if (key == SDLK_UP) state.camera.pitch += 0.08;
+        if (key == SDLK_DOWN) state.camera.pitch -= 0.08;
+        state.camera.limit();
+        state.dirty = true;
+        return true;
+    }
 #endif
 #if LAB_CHECKPOINT >= 7
-    if (contains(auditButton, x, y)) {
-        keyboard(state, SDLK_V, false);
-        return {};
-    }
+    // [snippet linked-keyboard]
+    const Grid grid = state.grid();
+    const Axes axes = axesFor(state.activeView);
+    if (key == SDLK_LEFT) state.probe[axes.horizontal] -= grid.spacing[axes.horizontal];
+    if (key == SDLK_RIGHT) state.probe[axes.horizontal] += grid.spacing[axes.horizontal];
+    if (key == SDLK_UP) state.probe[axes.vertical] += grid.spacing[axes.vertical];
+    if (key == SDLK_DOWN) state.probe[axes.vertical] -= grid.spacing[axes.vertical];
+    if (key == SDLK_PAGEUP) state.probe[axes.fixed] += grid.spacing[axes.fixed];
+    if (key == SDLK_PAGEDOWN) state.probe[axes.fixed] -= grid.spacing[axes.fixed];
+    state.probe = grid.clamp(state.probe);
+    // [/snippet linked-keyboard]
 #endif
-    int views = 1;
-#if LAB_CHECKPOINT >= 3
-    views = 3;
+#if LAB_CHECKPOINT >= 8
+    if ((key == SDLK_SPACE || key == SDLK_Q) && !event.key.repeat) applyButton(state, 5);
 #endif
-    for (int view = 0; view < views; ++view) {
-        if (contains(sliceSlider(view, 1440, 900, views == 3), x, y)) {
-            Drag drag{DragKind::Cut, view};
-            movePointer(state, drag, x, y);
-            return drag;
-        }
-#if LAB_CHECKPOINT >= 6
-        const auto rect = fitSlice(state.grid, view, panelRect(view, 1440, 900, true));
-        if (contains(rect, x, y)) {
-            state.activeView = view;
-            Drag drag{DragKind::Probe, view};
-            movePointer(state, drag, x, y);
-            return drag;
-        }
+#if LAB_CHECKPOINT >= 9
+    if (key == SDLK_V && !event.key.repeat) applyButton(state, 7);
 #endif
-    }
-    return {};
+    state.dirty = true;
+    return true;
 }
-#endif
-} // namespace slices
+} // namespace slice53

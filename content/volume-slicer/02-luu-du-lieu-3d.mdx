@@ -1,0 +1,142 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Lưu cả khối thay vì tính riêng từng ảnh
+
+## Vấn đề cần giải quyết
+
+Bài trước tạo được một lát nhưng công thức sphere vẫn được gọi trực tiếp cho mỗi pixel. Cách đó dễ làm ta tưởng đang xem một khối dữ liệu, trong khi thực ra chỉ đang tính một ảnh theo z. Bây giờ ta sẽ tính toàn bộ scalar một lần, lưu vào mảng rồi đọc lại từ mảng ấy.
+
+Kết quả cần thấy là đổi được dataset và 64³/128³ ngay trong chương trình. Đổi màu hay xoay camera về sau không được bí mật tạo lại hàng triệu mẫu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một volume là mảng số kèm mô tả hình học. Bộ ba chỉ số `(i,j,k)` cho biết mẫu nào; `origin` và `spacing` cho biết tâm mẫu ấy ở đâu trong world. Không thể suy ra mm chỉ từ địa chỉ mảng.
+
+World box của ứng dụng luôn rộng 160×192×224 mm, đặt giữa gốc tọa độ. Tại 128³, spacing là 1,25/1,5/1,75 mm; tại 64³, mỗi bước lớn gấp đôi. Tâm voxel đầu tiên không nằm ngay trên mặt box, mà cách mặt box nửa spacing.
+
+Ta chọn Float32 để lưu scalar: 64³ có 262.144 mẫu, chiếm 1 MiB; 128³ có 2.097.152 mẫu, chiếm 8 MiB. Tọa độ và phép nội suy vẫn dùng double. Số byte này chỉ tính mảng scalar, không phải toàn bộ RAM của cửa sổ, ảnh và vỏ 3D.
+
+<InteractiveLab demo="volume-slicer" mode="slice53-2" />
+
+## Viết code từng bước
+
+### 1. Kiểm kích thước trước khi cấp phát
+
+`Grid::count` kiểm cả ba trục trước khi tạo `std::vector`. Giới hạn 128/trục vừa là phạm vi bản chuẩn, vừa chặn việc truyền nhầm kích thước rồi cấp phát ngoài ý muốn.
+
+{/* snippet include/grid.hpp#grid-count */}
+
+```cpp title="include/grid.hpp — Đếm số mẫu có kiểm giới hạn"
+std::size_t count() const {
+    std::size_t result = 1;
+    for (int axis = 0; axis < 3; ++axis) {
+        if (size[axis] < 1 || size[axis] > 128)
+            throw std::invalid_argument("Each dimension must be in [1,128]");
+        if (!std::isfinite(origin[axis]) || !std::isfinite(spacing[axis]) || spacing[axis] <= 0)
+            throw std::invalid_argument("Finite origin and positive spacing required");
+        if (!std::isfinite(origin[axis] + size[axis] * spacing[axis]))
+            throw std::invalid_argument("Physical extent must be finite");
+        result *= static_cast<std::size_t>(size[axis]);
+    }
+    return result;
+}
+```
+
+Spacing phải dương và hữu hạn; tổng origin với extent cũng phải hữu hạn. Một số hữu hạn rất lớn vẫn có thể tạo extent vô hạn sau phép nhân, nên chỉ kiểm `isfinite(spacing)` chưa đủ.
+
+### 2. Đặt đúng tâm mẫu
+
+`centre` đổi chỉ số nguyên thành world point. `coordinate` làm phép đổi ngược về tọa độ grid liên tục; nó không làm tròn và chưa chọn voxel.
+
+{/* snippet include/grid.hpp#voxel-centre */}
+
+```cpp title="include/grid.hpp — Chỉ số mẫu và vị trí theo mm"
+Vec3 centre(int x, int y, int z) const {
+    return {origin.x + (x + 0.5) * spacing.x, origin.y + (y + 0.5) * spacing.y, origin.z + (z + 0.5) * spacing.z};
+}
+
+double coordinate(double world, int axis) const {
+    return (world - origin[axis]) / spacing[axis] - 0.5;
+}
+```
+
+Ở 128³, tâm (0,0,0) nằm tại (-79,375; -95,25; -111,125) mm. Nếu kết quả của bạn đúng bằng origin, bạn đang lấy mẫu trên góc thay vì tâm voxel. Lỗi nửa voxel này sẽ làm nội suy và hình đặt trong world lệch nhau.
+
+### 3. Gói ba chỉ số vào một địa chỉ
+
+Ta cho x đổi nhanh nhất. Đi sang một mẫu theo x tăng địa chỉ 1; sang y tăng `nx`; sang z tăng `nx * ny`.
+
+{/* snippet include/volume.hpp#flat-index */}
+
+```cpp title="include/volume.hpp — Mảng phẳng, địa chỉ 3D rõ ràng"
+std::size_t index(int x, int y, int z) const {
+    if (x < 0 || x >= grid_.size[0] || y < 0 || y >= grid_.size[1] || z < 0 || z >= grid_.size[2])
+        throw std::out_of_range("Voxel index outside volume");
+    return static_cast<std::size_t>(x) + static_cast<std::size_t>(grid_.size[0]) * (static_cast<std::size_t>(y) + static_cast<std::size_t>(grid_.size[1]) * z);
+}
+
+float at(int x, int y, int z) const { return values_.at(index(x, y, z)); }
+
+void set(int x, int y, int z, double value) {
+    if (!std::isfinite(value) || std::abs(value) > 1e30)
+        throw std::invalid_argument("Scalar must be finite and representable");
+    values_.at(index(x, y, z)) = static_cast<float>(value);
+}
+```
+
+Phần lưu trữ được giữ private. `set` từ chối scalar không hữu hạn hoặc quá lớn trước khi chuyển sang float; `at` không lén kẹp một chỉ số sai thành mẫu biên. Chính sách biên của truy vấn world là việc của sampler, không phải cách che một địa chỉ mảng lỗi.
+
+### 4. Điền toàn bộ dữ liệu một lần
+
+`buildVolume` duyệt hết x/y/z và gọi `fieldValue` tại các tâm mẫu. Ngoài Sphere còn có Gaussian, các lớp theo z, ramp kiểm hướng và mẫu vật có lõi/lỗ khoan. Tất cả đều cho scalar tổng hợp; không dataset nào là dữ liệu bệnh nhân.
+
+{/* snippet include/field.hpp#fill-volume */}
+
+```cpp title="include/field.hpp — Tạo volume trước khi dựng ảnh"
+inline Volume buildVolume(Preset preset, int side) {
+    if (static_cast<int>(preset) < 0 || static_cast<int>(preset) > 4)
+        throw std::invalid_argument("Unknown dataset preset");
+    Volume volume(makeGrid(side));
+    const Grid& grid = volume.grid();
+    for (int z = 0; z < grid.size[2]; ++z) {
+        for (int y = 0; y < grid.size[1]; ++y) {
+            for (int x = 0; x < grid.size[0]; ++x) {
+                const Vec3 point = grid.centre(x, y, z);
+                volume.set(x, y, z, fieldValue(preset, point));
+            }
+        }
+    }
+    return volume;
+}
+```
+
+Đây là lúc công thức tạo dataset được gọi N³ lần. Khi `State::load` nhận volume mới thành công, nó mới thay dữ liệu đang xem. Ở checkpoint này, ảnh XY đọc trực tiếp chỉ số gần nhất theo từng trục; tham số view và linear chưa dùng vì hai khả năng ấy sẽ được thêm ở Bài 3–4.
+
+## Ghép các phần lại
+
+`State` giữ `volume`, preset và side. Dataset/N thay đổi mới gọi `load`; `refresh` chỉ tạo ảnh từ volume hiện có. Các thống kê cơ bản được tính khi load để đếm đủ dữ liệu, không tính lại mỗi frame.
+
+```bash
+cmake --build build --config Debug --target project_53_checkpoint_2 --parallel 1
+```
+
+Chạy checkpoint 2, chọn 128³ rồi nhìn số mẫu và byte trong cửa sổ. Đổi lại 64³: vật không nhỏ đi trong world; chỉ số mẫu trên cùng một chiều dài bị giảm.
+
+## Thử làm sai để hiểu đúng
+
+1. Dự đoán `index(1,1,1)` của grid 3×2×4 trước khi tính. Đáp số là 10. Thử thay nhầm một hệ số bằng `nz` và xem fixture bắt được lỗi nào.
+2. Bỏ `+0.5` trong `centre`, tạo lại Sphere rồi kiểm đối xứng. Vì sao một lỗi nhỏ trong tọa độ lại làm hai phía của sphere không còn tương ứng qua tâm?
+3. Thử gọi `makeGrid(129)` hoặc spacing bằng 0 trong một test, không sửa UI để chạy volume khổng lồ. Chương trình phải từ chối trước cấp phát, không báo dataset đã sẵn sàng.
+
+## Tự kiểm tra kết quả
+
+- [ ] 64³/128³ là mảng có đúng N³ phần tử, không chỉ là nhãn trên giao diện.
+- [ ] Hai độ phân giải giữ cùng world extent; spacing đổi theo N.
+- [ ] Chọn dataset mới thật sự thay scalar trong ảnh.
+- [ ] Chỉ số ngoài mảng và scalar NaN/Inf bị từ chối; nạp lỗi không phá dữ liệu trước đó.
+
+## Bài tập mở rộng
+
+Tạo fixture 3×2×4 với scalar `x + 10*y + 100*z`, không dùng sphere. Viết ra toàn bộ 24 số theo thứ tự bộ nhớ. Sau đó chỉ nhìn một lát z = 1 và đọc được vị trí của từng số mà chưa cần cửa sổ.
+
+Ở bài tiếp theo ta sẽ dùng cùng volume để dựng đủ XY, XZ và YZ. Nếu ba ảnh không thống nhất, fixture nhỏ này sẽ dễ chẩn đoán hơn một mẫu vật nhiều chi tiết.

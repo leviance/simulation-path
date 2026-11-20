@@ -1,0 +1,94 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Một Mặt Trời cho cả trời, đá và sóng
+
+## Vấn đề cần giải quyết
+
+Nhìn một vách đá buổi sáng rồi quay lại lúc chiều. Nếu Mặt Trời đã sang phía kia nhưng vách vẫn sáng cùng một bên, hai nửa chương trình đang kể hai giờ khác nhau. Ta dùng một đồng hồ và một hướng sáng chung.
+
+## Hiểu ý tưởng trước khi viết code
+
+Tưởng tượng một vòng tròn trên trời: sáng ở gần chân trời phía đông, trưa ở cao, chiều lặn về phía tây. Hướng từ mặt đất đến Mặt Trời vừa định vị đĩa sáng vừa cho biết mặt nào của vách đón nắng.
+
+<InteractiveLab demo="voxel-sandbox" mode="voxel64-2" />
+
+## Viết code từng bước
+
+Đổi giờ mà chỉ thấy một đĩa tròn chạy trên trời thì chưa phải là hoàng hôn. Ta sẽ chọn một vách đá làm mốc: khi Mặt Trời sang phía kia, mặt sáng của vách và ánh lóe trên nước cũng phải đổi theo.
+
+### Đổi giờ thành hướng chiếu
+
+Trong `day.hpp`, viết `skyAtHour`: một vòng 24 giờ cho hướng Mặt Trời, độ sáng ban ngày và sắc ấm gần đường chân trời. Trong `field-scene.hpp`, tính giờ từ `startHour` và đồng hồ `seconds` rồi đưa vào `weather`. Không dùng đồng hồ riêng cho nước và cho đá.
+
+{/* snippet include/trail/day.hpp#sun-track */}
+
+```cpp title="include/trail/day.hpp — Từ giờ trong ngày tới hướng chiếu sáng"
+inline Daylight skyAtHour(double hour) {
+    const double phase = 2 * pi * (hour - 6) / 24;
+    const Vec3 axis = normalized({std::cos(phase), 0.84 * std::sin(phase), 0.54 * std::sin(phase)});
+    const double day = smooth(-0.12, 0.30, axis.y);
+    const double dusk = (1 - smooth(0, 0.38, std::abs(axis.y))) * day;
+    return {axis, day, dusk};
+}
+```
+
+<VoxelWorkFile project="64" step={2} file="day" />
+
+<VoxelWorkFile project="64" step={2} file="field-scene" />
+
+### Dùng đúng một hướng cho cả trời và vật
+
+Trong `field-render.hpp`, gọi hàm trên khi vẽ trời, gán hướng cho `draw.sun`, pha màu trời/mây và vẽ đĩa vào vùng tia nhìn gần hướng đó. Mặt đá và mặt nước ở các lượt vẽ sau phải lấy cùng `draw.sun`; nếu dùng một vector cố định cho đá, đĩa sẽ lặn mà vách vẫn như giữa trưa.
+
+{/* snippet include/trail/field-render.hpp#sun-disk */}
+
+```cpp title="include/trail/field-render.hpp — Đặt đĩa sáng bằng chính hướng vừa tính"
+const double toSun = dot(ray, draw.sun);
+if (ray.y > -0.04 && toSun > 0.978) {
+    color = blend(color, {255, 221, 159}, 0.45 * smooth(0.978, 0.999, toSun));
+    color = blend(color, {255, 243, 194}, smooth(0.9987, 0.9994, toSun));
+}
+```
+
+{/* snippet include/trail/field-render.hpp#shared-sun */}
+
+```cpp title="include/trail/field-render.hpp — Cùng một hướng sáng cho trời và đất"
+const Daylight sun = skyAtHour(weather.hour);
+draw.sun = sun.direction;
+daylight = sun.daylight;
+dusk = sun.dusk;
+```
+
+<VoxelWorkFile project="64" step={2} file="field-render" />
+
+### Cho người xem trở về cùng một thời điểm
+
+Trong `field-controls.hpp`, dấu trừ và dấu bằng lùi/tới hai giờ có vòng lại sau 24. Trong `window.hpp`, cho `--hour` đặt giờ ban đầu khi cần lặp phép so giữa hai lần mở. Gõ phím đổi giờ không có nghĩa là cho tuyết nhảy trước hai giờ mô phỏng.
+
+<VoxelWorkFile project="64" step={2} file="field-controls" />
+
+<VoxelWorkFile project="64" step={2} file="window" />
+
+## Ghép các phần lại
+
+Chọn một vách, nhấn P để giữ dòng thời gian rồi dùng phím `-` và `=` đổi giờ. Giữ nguyên camera, nhìn lần lượt phía có nắng, màu bầu trời và điểm lóe trên mặt nước. Phím C tắt mây nếu cần nhìn rõ vị trí Mặt Trời.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_64_work --parallel 1
+.\build-work\Release\project_64_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Đổi hướng vẽ đĩa sáng nhưng giữ hướng cũ cho terrain. Quan sát hai mặt vuông góc của cùng một hòn đá thay vì chỉ nhìn màu trời.
+
+## Tự kiểm tra kết quả
+
+Sáng/chiều có thành phần ngang trái dấu, trưa cao hơn bình minh, và ban đêm tối hơn ban ngày. Pause đóng băng đồng hồ trong khi mắt vẫn quay được.
+
+## Bài tập mở rộng
+
+Chọn một hướng nhìn trong đó không thấy trực tiếp Mặt Trời. Chỉ dựa vào vách và màu trời, bạn còn phân biệt được sáng với chiều không?
+
+[Bài 3: Đặt chân lên đất thay vì cho camera bay xuyên đồi](/projects/voxel-sandbox/03-dat-chan-len-duong-mon).

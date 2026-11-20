@@ -1,75 +1,40 @@
-# Project 65 — Bảng điều khiển C++: Pause, Reset và slider chỉnh trọng lực
+# Project 65 — Bàn quan sát đàn chim
 
-Sau phần voxel, ta quay về một cảnh nhỏ để tập trung vào một việc mới: tự viết UI cho simulator. Bóng rơi và nảy trên sàn là nội dung cần điều khiển; ba control bên phải là sản phẩm chính. Không cần kéo theo renderer 3D hay source Project 64.
+Bạn vừa dừng một đàn 192 con ở giữa đường bay. Chim màu vàng đang nhìn thấy những con nào? Kéo **Sense radius** khi đang Pause: vòng quan sát nở ra, chim mới lọt vào vòng chuyển xanh, nhưng không con nào được dịch chuyển. **Separation** trả lời câu khác: những con đã nhìn thấy nhau sẽ tránh nhau mạnh đến đâu ở bước kế tiếp?
 
-## Thử tự xây trước khi đọc lời giải
+## Tự thử trước khi đọc lời giải
 
-Dành 90–150 phút viết một cửa sổ có bóng rơi, nút Pause/Resume, Reset và slider trọng lực 0..1200. Pause phải giữ UI hoạt động. Thử nhấn nút rồi kéo ra ngoài trước khi thả, kéo slider ngoài cửa sổ và chuyển sang ứng dụng khác giữa thao tác. Giải thích quy tắc Reset trước khi viết code: ở đây Reset giữ gravity và Pause, chỉ khôi phục cảnh.
+Vẽ bảng điều khiển ngay cạnh đàn bằng SDL3. Làm hai nút Pause/Resume, Reset, một checkbox và hai slider. Thử kéo từ panel ra giữa đàn: không được vô tình chọn một con chim mới. Đừng dùng ImGui; cây widget và layout tự động là việc của Project 66, 67.
 
-Prerequisites: Project 01–05 và chuyển động/va chạm cơ bản từ Project 22–24; C++ struct, enum class, hàm và tham chiếu. Thời gian học 9–12 giờ. ZIP tự build độc lập, không cần assets hoặc thư viện UI.
+## Mở và chạy
 
-## Một chương trình, bảy bước phát triển
-
-| Snapshot | Kết quả |
-| --- | --- |
-| starter | Window, renderer, nền cảnh, sàn và hình vuông đánh dấu vị trí bóng; chưa chạy vật lý |
-| 01 | Bóng tròn, fixedDt 1/120 s, readout y/v/ticks; Space chạy/dừng, N một bước khi Pause |
-| 02 | Panel và hai button được vẽ từ Rect; hover dùng hit-test half-open, chưa click được |
-| 03 | Hot/active/focus, press/release, capture, Pause/Reset và clockRevision |
-| 04 | Slider gravity cập nhật liên tục, clamp hai đầu và giữ active ngoài panel |
-| 05 | Focus ring, Tab/Shift+Tab, Enter/Space, arrows/Home/End, chặn activation repeat |
-| 06 | Window resizable, logical letterbox, đổi tọa độ event, UI nhận trước scene; click cảnh đổi Y bóng |
-| 07/final | State audit F1 và bộ kiểm chứng thuần, full source, nghiệm thu Debug/Release |
-
-`source-template/` là nguồn chuẩn trong repository website; `npm run generate:course` tạo snapshot và CMake. ZIP đã có starter, checkpoints/01…07, final và tests. Cuối mỗi bài trên web có toàn bộ mã chạy được ở mốc đó.
-
-## Build, chạy và kiểm tra
-
-```bash
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 20
-./build/Debug/project_65_final.exe
-```
-
-C++20, CMake ≥3.24, Windows/Visual Studio 2022 Desktop development with C++; SDL khóa 3.4.8 bằng FetchContent và checksum, link SDL3::SDL3. Final là target mặc định; BUILD_CHECKPOINTS thêm starter và project_65_checkpoint_1…7. Với Ninja/Make single-config, thêm CMAKE_BUILD_TYPE=Debug và chạy executable ngay trong build/. Không chạy Debug lẫn Release vào cùng một thư mục single-config.
+Cần C++20, CMake từ 3.24 và SDL 3.4.8 (CMake tự lấy đúng bản khi cấu hình lần đầu). Từ thư mục có `CMakeLists.txt`:
 
 ```powershell
-$smoke = Start-Process -FilePath ".\build\Debug\project_65_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
-if (-not $smoke.WaitForExit(30000)) {
-    $smoke.Kill()
-    throw "Smoke quá 30 giây."
-}
-if ($smoke.ExitCode -ne 0) { throw "Smoke thất bại." }
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure --timeout 15
+.\build\Release\project_65_final.exe
 ```
 
-Hidden smoke chỉ vẽ một frame rồi thoát, không file/clipboard. CTest không mở window; check vẫn chạy trong Release, không dùng assert bị NDEBUG tắt. Automation cần deadline cho cả process tree, tối đa hai compiler. Smoke không thay kiểm chuột/bàn phím thật. Không có lệnh tự mở dev server.
+Với Ninja single-config, thêm `-DCMAKE_BUILD_TYPE=Release` ở bước cấu hình và chạy `./build/project_65_final`. Trên Windows dùng Visual Studio 2022. `starter`, bảy `checkpoints` và `final` đều tự đủ. Không cần tải ZIP Project 28; các header `boids/` và `grid/` được cung cấp từ đúng project đó. Bài này không đổi luật Boids và không đặt lại mục tiêu benchmark 10.000 cá thể.
 
-## Quy tắc điều khiển
+## Con đường từ starter đến bản hoàn chỉnh
 
-- Khởi động Pause. Tab/Shift+Tab đi vòng Pause → Reset → Gravity; Enter/Space nhấn nút một lần. Không còn Space toàn cục từ checkpoint 05 để tránh đụng focus.
-- Slider: chuột hoặc arrows từng 20, Home/End về 0/1200; arrow được repeat, button không được repeat. N một bước khi Pause, F1 log audit ở final. Esc hủy gesture, không thoát app.
-- Nhấn và thả cùng button mới kích hoạt. Nhấn rồi ra ngoài, thả ngoài thì hủy; ra ngoài rồi quay lại trước khi thả vẫn hợp lệ.
-- Khi giữ slider, active vẫn là Gravity dù hot sang control khác. Capture chỉ tồn tại trong gesture. Capture không hỗ trợ thì native log lỗi và hủy gesture; giá trị slider đã cập nhật khi nhấn không rollback.
-- Up nhận tọa độ slider cuối trước khi xóa active, kể cả khi không có motion ngay trước đó. Down (800,252) rồi up (1200,252) cho gravity=1200; up (−100,252) cho 0. Cancel không thêm tọa độ cuối và không rollback giá trị đã kéo.
-- Gravity đổi ngay, kể cả khi Pause, nhưng không tự đổi vị trí/vận tốc. Reset y=90, v=0, ticks=0, accumulator=0 và giữ gravity/paused. Reset đang chạy vẫn chạy tiếp từ cảnh mới; frame action không tính thời gian cũ.
-- Panel, kể cả chỗ trống, nhận input trước scene. Chỉ click trong scene mới đổi Y bóng và tăng scenePresses. Kéo slider qua scene không được di chuyển bóng.
-- Resize/focus lost/minimized/hidden hủy kéo và Pause; người dùng chủ động Resume. Vùng letterbox ngoài mặt phẳng logic không hit control.
+1. Cho đàn bay theo bước 1/60 giây; Pause không khóa cửa sổ.
+2. Vẽ panel và thử hover theo cùng bounds được dùng để vẽ.
+3. Phân biệt press với click hoàn tất; làm Reset và checkbox.
+4. Nối chuột vào bán kính 20–140 px và trọng số tách 0–5.
+5. Dùng Tab, Shift+Tab, Enter/Space, mũi tên và Home/End.
+6. Chọn chim khi resize hoặc có letterbox; hủy capture khi mất focus.
+7. Đối chiếu hàng xóm lưới với vét cạn, rồi nghiệm thu cả panel.
 
-## Mô hình và giới hạn
+## Checklist trong cửa sổ C++
 
-Mọi tọa độ dùng mặt phẳng logic 960×540. Y tăng xuống; v += g*h rồi y += v*h với h=1/120 s. Gravity đơn vị logical pixel/s², không phải m/s². Sàn y=460, bán kính 14; tâm bóng nằm trong [48,446]. Va chạm trần/sàn nhân tốc độ với 0.72, sàn cho dừng khi |v|<8 để tránh rung mãi. Đây là cảnh minh họa, không phải bộ giải va chạm tổng quát hoặc bảo toàn năng lượng.
+- Chọn chim bằng click vào viewport. Vàng là chim đang theo dõi; xanh là láng giềng theo khoảng cách tuần hoàn. Một con gần mép có thể thấy một con ở mép đối diện.
+- Pause, đổi Radius: ID và tick giữ nguyên. Đổi Separation: quỹ đạo chỉ đổi sau khi chạy hoặc bấm N để tiến đúng một bước.
+- Tắt Neighbors, quan sát đàn tiếp tục bay như trước. Reset khôi phục seed 28, bán kính 64, Separation 1,5, bật quan sát và giữ trạng thái chạy/dừng.
+- Nhấn một nút, kéo ra ngoài và thả. Lệnh không được chạy. Kéo slider ra khỏi panel thì giá trị vẫn phải cập nhật và dừng ở hai đầu.
+- F1 ghi kết quả đối chiếu vào log; chạy thêm `ctest --test-dir build -C Debug --output-on-failure --timeout 15` sau khi build Debug.
 
-Một frame nhận tối đa 0.1 s, tối đa 12 bước. Frame quá chậm bị bỏ bớt thời gian, không chạy bù vô hạn. Pause xóa accumulator; clockRevision làm main bỏ elapsed cũ khi pause/resume/reset/đổi vị trí. UI/render không bị Pause chặn.
-
-Native dùng SDL_RenderDebugText với nhãn ASCII; đây là font debug nhỏ, không hỗ trợ chữ tiếng Việt. Bài tập mở rộng có thể dùng SDL_ttf sau. Chưa widget tree, layout tự động, HTML/CSS, theme engine, text input, nhiều cửa sổ hoặc lưu trạng thái.
-
-Canvas dùng cùng công thức, Rect và quy tắc input, không chạy C++ qua WebAssembly. Mặc định mỗi bài chạy đúng checkpoint: bài 02 chỉ vẽ/hover, bài 03 nhận click, bài 04 thêm slider, bài 05 thêm focus, bài 06 cho click vào cảnh. Có tùy chọn xem bản hoàn chỉnh; đổi chế độ sẽ reset để không giữ state của tính năng chưa học. Control HTML hỗ trợ trình đọc màn hình, bước thủ công, DPR và reduced-motion. Slider/preset xuất hiện từ bài 04; Tab thoát Canvas ở hai đầu từ bài 05. Preset cố ý Pause rồi reset; Reset thường giữ Pause. Blur/ẩn tab/resize hủy kéo và Pause. Không localStorage cho dữ liệu mô phỏng.
-
-## Nghiệm thu
-
-Kiểm endpoints và biên half-open; round-trip letterbox ở kích thước rộng/cao/2×; release mồ côi, release khác nút, kéo ra rồi vào lại; slider midpoint/clamp; hover không lấy active/focus; keyboard repeat/Tab hai chiều; UI không lọt click xuống scene; reset giữ lựa chọn. Free-flight 60 bước được đối chiếu bằng tổng cấp số cộng độc lập, không gọi lại thuật toán simulator. Test dt partitions, giới hạn frame, NaN/Infinity và stress hữu hạn 12000 frame. Audit chỉ kiểm invariant, không chứng minh toàn bộ UI đúng; capture thực tế cần desktop QA riêng.
-
-Tiếp theo là Project 66: giữ một cây giao diện qua nhiều frame. Các project chưa phát hành được ghi **Sắp ra mắt** trong roadmap.
+Ảnh minh họa trên web lấy từ chính executable bằng `--capture ten-anh.png`. Hai ảnh so bán kính dùng checkpoint 4, cùng tick 0 và seed, với `--take near` hoặc `--take wide`. Không dùng ảnh để thay cho kiểm input thật.

@@ -1,0 +1,10 @@
+.sheet { display: flex; flex-direction: column; background: #18343D; padding: 12px; gap: 5px; }
+h1 { background: #18343D; color: #A3E6CC; border: 0px; }
+.group { display: flex; flex-direction: column; padding: 6px; gap: 4px; background: #294A4F; }
+#tools { display: flex; flex-direction: row; justify-content: start; align-items: center; height: 56px; gap: 6px; }
+button { background: #365F6A; color: #E0F1E8; height: 30px; flex-basis: 60px; margin: 1px; }
+#pause { background: #286D5F; flex-grow: 1; }
+#observe { flex-basis: 82px; flex-grow: 2; }
+label { color: #DAEBDF; border: 0px; }
+input { color: #92E2C7; border-color: #586F73; height: 32px; }
+span { color: #94C6BA; background: #18343D; border: 0px; }

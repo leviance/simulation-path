@@ -1,0 +1,167 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chọn một điểm, cập nhật cả ba view
+
+## Vấn đề cần giải quyết
+
+Ta đã dời được từng mặt cắt bằng slider, nhưng người xem thường muốn bấm thẳng vào một lõi hoặc mép lỗ khoan. Một điểm được chọn trên XY phải xuất hiện đúng ở XZ và YZ, không cần người dùng tự tính lại hai slider còn lại.
+
+Bài này nối input vào một probe world duy nhất. Kéo ảnh là chọn điểm; kéo vùng 3D là đổi góc nhìn. Hai thao tác không được chia sẻ cùng một biến tọa độ.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chọn trên XY xác định x và y, còn z giữ nguyên. Khi x thay đổi, mặt YZ phải dời theo x mới; khi y thay đổi, mặt XZ phải dời theo y mới. Ảnh XY vẫn nằm ở cùng z nhưng crosshair dời tới điểm vừa chọn.
+
+Ta phải đổi tọa độ chuột qua hai bước: window → logical presentation → phần ảnh thật trong panel. Click vào phần letterbox quanh ảnh không phải một điểm thuộc volume. Việc đổi event sang logical còn quan trọng khi resize hoặc thay DPI.
+
+<InteractiveLab demo="volume-slicer" mode="slice53-7" />
+
+## Viết code từng bước
+
+### 1. Từ rectangle ảnh về hai tọa độ world
+
+Hàm `pickSlice` chỉ nhận actual image rectangle do `sliceRect` tạo. Một click ngoài rectangle trả miss; không kẹp nó thành một điểm biên ngay từ đầu.
+
+{/* snippet include/layout.hpp#pick-slice */}
+
+```cpp title="include/layout.hpp — Chọn điểm chỉ trong ảnh thật"
+inline std::optional<Vec3> pickSlice(const Grid& grid, int view, Rect image, double x, double y, Vec3 probe) {
+    if (!contains(image, x, y)) return std::nullopt;
+    const double u = (x - image.x) / image.width;
+    const double v = 1.0 - (y - image.y) / image.height;
+    return grid.clamp(slicePoint(grid, view, u, v, probe));
+}
+```
+
+u tăng sang phải, v tăng lên trên. Hai tọa độ này đi qua chính `slicePoint` đã dùng để dựng ảnh. Trục fixed giữ từ probe cũ, nên một click không thể tự ý đổi vị trí mặt cắt đang xem.
+
+### 2. Đổi event, nhận diện thao tác rồi mới kéo
+
+Đoạn dưới nằm trong `handleEvent`. Button, camera, slider và ảnh được phân loại trước khi capture chuột. Những thao tác thay/reset dataset cũng hủy drag trước để không kéo tiếp bằng trạng thái cũ.
+
+{/* snippet include/input.hpp#logical-input */}
+
+```cpp title="include/input.hpp — Event logical và loại drag"
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_MOTION)
+    SDL_ConvertEventToRenderCoordinates(renderer, &event);
+if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT) {
+    const double x = event.button.x;
+    const double y = event.button.y;
+    for (const Button& button : buttons(state)) {
+        if (button.enabled && contains(button.rect, x, y)) {
+            if (button.action == 0 || button.action == 1 || button.action == 6) release(drag, state);
+            applyButton(state, button.action);
+            return true;
+        }
+    }
+    state.paused = true;
+    drag = {};
+    drag.x = x;
+    drag.y = y;
+    if (contains(sceneArea, x, y)) drag.kind = DragKind::Camera;
+    int views = 1;
+    views = 3;
+    for (int view = 0; view < views; ++view) {
+        if (contains(slicePanel(view), x, y)) state.activeView = view;
+        if (contains(sliderRect(view), x, y)) { drag.kind = DragKind::Slice; drag.view = view; }
+        if (contains(smallImage(state.grid(), view), x, y)) { drag.kind = DragKind::Probe; drag.view = view; }
+    }
+    if (contains({500, 750, 296, 24}, x, y)) drag.kind = DragKind::Level;
+    if (contains({500, 778, 296, 24}, x, y)) drag.kind = DragKind::Width;
+    if (drag.kind != DragKind::None) {
+        if (!SDL_CaptureMouse(true))
+            state.status = "Mouse capture unavailable; release or blur cancels dragging.";
+        dragTo(state, drag, x, y);
+    }
+    state.dirty = true;
+}
+```
+
+Sau khi đã bắt đầu drag bên trong ảnh, `dragTo` được phép kẹp vị trí khi chuột ra ngoài để người xem kéo tới mép. Đó là chính sách cho một drag đang có capture, khác với chấp nhận một click mới ở bất cứ đâu.
+
+Capture có thể không được nền tảng hỗ trợ, hoặc sự kiện thả chuột có thể không tới cửa sổ. Vì vậy còn một đường kết thúc dự phòng: nếu motion cho biết nút trái không còn giữ, ta phải hủy drag thay vì tiếp tục dời điểm.
+
+{/* snippet include/input.hpp#drag-motion */}
+
+```cpp title="include/input.hpp — Không kéo tiếp sau một lần thả bị bỏ lỡ"
+if (event.type == SDL_EVENT_MOUSE_MOTION && drag.kind != DragKind::None) {
+    // Recover even when a platform failed to capture the mouse-up outside its window.
+    if ((event.motion.state & SDL_BUTTON_LMASK) == 0) {
+        release(drag, state);
+    } else {
+        dragTo(state, drag, event.motion.x, event.motion.y);
+    }
+}
+```
+
+`release` đặt drag về None, dừng quét và gọi `SDL_CaptureMouse(false)`. Không chỉ xóa một biến tọa độ: nếu giữ nguyên loại drag, lần di chuột tiếp theo vẫn có thể sửa probe dù người dùng đã thả nút.
+
+Theo [SDL_ConvertEventToRenderCoordinates](https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates), event đã đổi vẫn có thể ở ngoài vùng render. Vì vậy đổi event không thay thế bước kiểm rectangle.
+
+### 3. Bàn phím cũng đi qua cùng probe
+
+Tab chọn view. Mũi tên dời điểm trên hai trục ảnh; PageUp/Down dời trục fixed. Không viết một phép cập nhật riêng làm ảnh hoặc nhãn thay đổi mà probe đứng yên.
+
+{/* snippet include/input.hpp#linked-keyboard */}
+
+```cpp title="include/input.hpp — Cùng một phép đo cho chuột và phím"
+const Grid grid = state.grid();
+const Axes axes = axesFor(state.activeView);
+if (key == SDLK_LEFT) state.probe[axes.horizontal] -= grid.spacing[axes.horizontal];
+if (key == SDLK_RIGHT) state.probe[axes.horizontal] += grid.spacing[axes.horizontal];
+if (key == SDLK_UP) state.probe[axes.vertical] += grid.spacing[axes.vertical];
+if (key == SDLK_DOWN) state.probe[axes.vertical] -= grid.spacing[axes.vertical];
+if (key == SDLK_PAGEUP) state.probe[axes.fixed] += grid.spacing[axes.fixed];
+if (key == SDLK_PAGEDOWN) state.probe[axes.fixed] -= grid.spacing[axes.fixed];
+state.probe = grid.clamp(state.probe);
+```
+
+Ở bản C++, Ctrl+mũi tên được xử lý trước để chỉ đổi camera. Trên Canvas, focus từng ảnh để dùng phím dời điểm; focus khối 3D để dùng mũi tên xoay camera. Các nút DOM là đường điều khiển tương đương khi không dùng chuột.
+
+### 4. Reset một cách có nghĩa
+
+Reset đưa probe, camera và display window về trạng thái ban đầu, không đổi preset hoặc N. Nhờ đó ta có thể quay về cùng một góc quan sát mà không phải tạo lại hàng triệu scalar.
+
+{/* snippet include/state.hpp#reset-view */}
+
+```cpp title="include/state.hpp — Đặt lại phép quan sát"
+void reset() {
+    paused = true;
+    probe = initialProbe();
+    camera = {};
+    window = {};
+    activeView = 0;
+    dirty = true;
+}
+```
+
+Hủy capture không nằm trong hàm reset thuần này. Input gọi `release` trước reset; tách hai việc giúp reset không phụ thuộc SDL khi kiểm state và tránh quên nhả chuột ở đường bàn phím.
+
+## Ghép các phần lại
+
+`main` chuyển event cho `handleEvent`; nó cập nhật state/drag và đặt dirty. Lần refresh kế tiếp dựng ảnh cần thiết, còn UI đọc probe để vẽ crosshair và inspector. Không cần gửi tọa độ chéo qua ba đối tượng view rồi cố đồng bộ chúng bằng callback vòng tròn.
+
+```bash
+cmake --build build --config Debug --target project_53_checkpoint_7 --parallel 1
+```
+
+Để thử, chọn Layers rồi click một vị trí trong XZ. y giữ nguyên, x/z đổi; ảnh XY phải chuyển lớp theo z mới và crosshair YZ phải theo cùng z ấy.
+
+## Thử làm sai để hiểu đúng
+
+1. Ghi probe rồi click vùng trống quanh ảnh. Nó phải giữ nguyên. Thử bỏ kiểm rectangle để hiểu vì sao chỉ kiểm trong panel là chưa đủ.
+2. Tạm cho drag camera sửa probe. Sau khi quay, inspector sẽ đọc một điểm khác dù người dùng chỉ muốn nhìn từ phía sau. Khôi phục đường điều khiển tách biệt.
+3. Kéo ra ngoài canvas/window rồi thả, thử alt-tab hoặc nhấn R khi đang kéo. Sau đó chỉ di chuột: không được tiếp tục đổi điểm vì còn capture hoặc drag cũ.
+
+## Tự kiểm tra kết quả
+
+- [ ] Một điểm được chọn xuất hiện đúng trên cả ba view; trục fixed của ảnh chọn được giữ nguyên.
+- [ ] Click vùng trống không đổi điểm; drag đang có capture được kẹp tới mép.
+- [ ] Resize/DPI/letterbox không làm lệch picking.
+- [ ] Orbit/zoom giữ scalar và probe; blur/reset/preset nhả capture đúng vòng đời.
+
+## Bài tập mở rộng
+
+Cho phép nhập x/y/z bằng ba ô số, nhưng giữ nguyên hàm clamp và một probe duy nhất. Kiểm rằng nhập một tọa độ, kéo một slider và bấm một điểm tương đương đều dẫn tới cùng kết quả lấy mẫu.
+
+Bài sau thêm quét tự động và cache. Khi giao diện có nhiều đầu vào cùng tác động, ta cần biết chính xác dữ liệu nào đã đổi trước khi tính lại ảnh.

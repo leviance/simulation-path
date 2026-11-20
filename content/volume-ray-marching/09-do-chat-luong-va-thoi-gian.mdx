@@ -1,0 +1,178 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đổi step rồi đo chất lượng và thời gian
+
+## Vấn đề cần giải quyết
+
+Ảnh đã có đủ cấu trúc để quan sát. Step nhỏ hơn thường giúp đọc chi tiết tốt hơn, nhưng cũng tăng số texture reads; bật lighting còn thêm sáu mẫu phụ mỗi đoạn. Ta cần đo trên cùng input, không đoán hiệu năng từ cảm giác kéo chuột.
+
+Bài này thêm job so bốn step, GPU timer và early termination alpha. Nó không giảm volume 128³ hay giữ một render target tí hon để gọi sản phẩm là “nhanh”. Target kiểm số, target benchmark và viewport sử dụng là ba quy mô khác nhau, được ghi riêng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hard cap 512 là giới hạn an toàn. Nếu không phủ hết interval trong cap thì báo lỗi, không trả phần đầu như ảnh đúng. Early termination là quyết định xấp xỉ khác: chỉ alpha được dừng khi T≤0,0005. Với màu/nền bounded [0,1], phần đóng góp linear còn lại mỗi kênh bị chặn bởi T ấy.
+
+Bound này áp cho C/T linear, không phải chênh lệch pixel sau gamma hoặc mọi đại lượng khác. MIP/average không dùng điều kiện dừng theo T; dừng chúng khi gặp một giá trị “trông đủ đậm” sẽ đổi phép gộp.
+
+Để so chất lượng, ta dùng 48 pixel cố định của target 320×240 và reference CPU step 0,002. Đây là ước lượng tại 48 ray, không phải oracle giải tích hoặc bound cho toàn ảnh. Sai số không bắt buộc giảm đơn điệu ở mọi step: hai dãy midpoint không nhất thiết chứa cùng các điểm.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-9" />
+
+## Viết code từng bước
+
+### 1. Giữ early stop tách khỏi cap
+
+Đoạn dưới nằm sau khi đã tích lũy sample. Nó không thay count, không tăng cap và không áp cho hai phép chiếu scalar.
+
+{/* snippet shaders/volume.frag#shader-early */}
+
+```glsl title="shaders/volume.frag — Một xấp xỉ có điều kiện rõ"
+if (uMode == 2 && uEarly != 0 && transmittance <= 0.0005) break;
+```
+
+Khi so step trong benchmark, tắt early để không trộn việc giảm số mẫu do opacity với việc đổi spacing dọc ray. Khi kiểm early riêng, so với cùng settings nhưng early off và giữ threshold cho linear output.
+
+### 2. Chỉ đọc GPU timer khi kết quả sẵn sàng
+
+Đo CPU quanh `DrawArrays` chủ yếu thấy thời gian gửi lệnh. `GL_TIME_ELAPSED` bao quanh draw volume; OpenGL ghi kết quả nanosecond khi GPU đã thực thi. Ta poll availability, không chặn UI bằng một vòng while chờ query.
+
+{/* snippet include/renderer.hpp#poll-timer */}
+
+```cpp title="include/renderer.hpp — Poll không phải busy-wait"
+bool pollGpu() {
+    if (!queryPending_)
+        return false;
+    GLint available = 0;
+    gl_.GetQueryObjectiv(query_, GL_QUERY_RESULT_AVAILABLE, &available);
+    if (!available) {
+        if (SDL_GetTicks() - queryStarted_ > 3000)
+            throw std::runtime_error("GPU timer wait exceeded 3 seconds");
+        return false;
+    }
+    GLuint64 nanoseconds = 0;
+    gl_.GetQueryObjectui64v(query_, GL_QUERY_RESULT, &nanoseconds);
+    gpuMilliseconds = static_cast<double>(nanoseconds) / 1e6;
+    queryPending_ = false;
+    return true;
+}
+```
+
+Timer này không gồm fill/upload, readback, present hay swap. Benchmark ghi một warm-up rồi năm lần đo, báo median và IQR. Không lấy GPU time của target nhỏ để hứa FPS ở mọi cửa sổ hoặc mọi máy.
+
+### 3. Tiến job từng tick và cho hủy
+
+`Benchmark::start` chụp camera/settings/dataset, tạo target 320×240 và chuẩn bị CPU fine reference. Hàm tick chỉ gửi tối đa một draw mới; các lần sau kiểm query, thu đủ năm mẫu rồi sang step tiếp.
+
+{/* snippet include/benchmark.hpp#benchmark-tick */}
+
+```cpp title="include/benchmark.hpp — Không khóa event loop để chạy cả benchmark"
+void tick() {
+    if (!active)
+        return;
+    if (SDL_GetTicks() - started_ > 15000) {
+        cancel();
+        message = "Benchmark cancelled: total 15-second budget.";
+        return;
+    }
+    if (waiting_) {
+        if (!renderer_->pollGpu())
+            return;
+        if (repetition_ >= 0)
+            times_.push_back(renderer_->gpuMilliseconds);
+        ++repetition_;
+        waiting_ = false;
+        if (repetition_ == 5)
+            finishStep();
+    }
+    if (!active)
+        return;
+    settings_.stepLength = steps_[stepIndex_];
+    renderer_->render(camera_, settings_, true);
+    waiting_ = true;
+}
+```
+
+Job có deadline 15 giây. Đổi camera/dataset/parameter hủy job và xóa kết quả cũ; bảng có n/4 để không nhận vài dòng còn dở là một lượt hoàn chỉnh. Esc hủy đo trước, Esc lần nữa mới thoát. Watchdog không thể preempt một GPU command đã gửi hoặc bảo đảm driver không treo, nên mỗi draw vẫn phải hữu hạn.
+
+### 4. Giữ viewport thật, nhưng chặn cấp phát
+
+Viewport thường dùng đúng drawable pixels. Target RGBA32F bị chặn ở 4 Mi pixels và 4096 mỗi chiều; nếu màn hình vượt ngân sách, kích thước ray target thực vẫn hiện trong UI.
+
+{/* snippet include/renderer.hpp#resize-target */}
+
+```cpp title="include/renderer.hpp — Cấp phát theo cửa sổ và ngân sách"
+void resize(int requestedWidth, int requestedHeight) {
+    if (requestedWidth < 1 || requestedHeight < 1)
+        throw std::invalid_argument("Positive target dimensions required");
+    GLint maximum = 0;
+    gl_.GetIntegerv(GL_MAX_TEXTURE_SIZE, &maximum);
+    double scale = std::min(1.0, 4096.0 / std::max(requestedWidth, requestedHeight));
+    scale = std::min(scale, static_cast<double>(maximum) / std::max(requestedWidth, requestedHeight));
+    const double pixels = static_cast<double>(requestedWidth) * requestedHeight;
+    scale = std::min(scale, std::sqrt(4194304.0 / pixels));
+    const int newWidth = std::max(1, static_cast<int>(requestedWidth * scale));
+    const int newHeight = std::max(1, static_cast<int>(requestedHeight * scale));
+    if (newWidth == width && newHeight == height)
+        return;
+    GLuint texture = 0;
+    GLuint framebuffer = 0;
+    gl_.GenTextures(1, &texture);
+    gl_.BindTexture(GL_TEXTURE_2D, texture);
+    gl_.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, newWidth, newHeight, 0, GL_RGBA, GL_FLOAT, nullptr);
+    gl_.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    gl_.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    gl_.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    gl_.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    gl_.GenFramebuffers(1, &framebuffer);
+    gl_.BindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    gl_.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    const bool complete = gl_.CheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    const GLenum error = gl_.GetError();
+    gl_.BindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (!complete || error != GL_NO_ERROR) {
+        gl_.DeleteFramebuffers(1, &framebuffer);
+        gl_.DeleteTextures(1, &texture);
+        throw std::runtime_error("RGBA32F target allocation failed; previous target retained");
+    }
+    if (framebuffer_)
+        gl_.DeleteFramebuffers(1, &framebuffer_);
+    if (resultTexture_)
+        gl_.DeleteTextures(1, &resultTexture_);
+    framebuffer_ = framebuffer;
+    resultTexture_ = texture;
+    width = newWidth;
+    height = newHeight;
+}
+```
+
+Drawable pixels có thể khác kích thước logical trên màn hình DPI cao; xem [SDL_GetWindowSizeInPixels](https://wiki.libsdl.org/SDL3/SDL_GetWindowSizeInPixels). Không phóng ảnh 240×180 thành “full viewport” rồi bỏ qua số ray thực đã chạy.
+
+## Ghép các phần lại
+
+```powershell
+cmake --build build --config Release --target project_54_checkpoint_9 --parallel 1
+.\build\Release\project_54_checkpoint_9.exe
+```
+
+Nhấn B, đợi đủ 4/4. Ghi GPU/build config, N, dataset, camera, mode, cutoff, lighting và target benchmark. So max error, median và IQR; trong Canvas, bảng ghi rõ **CPU JavaScript cho một ray**, không phải phép đo GPU này.
+
+## Thử làm sai để hiểu đúng
+
+1. So hai step nhưng đổi luôn lighting ở giữa. Tại sao kết luận về chi phí step không còn đáng tin?
+2. Thử step thô với cấu trúc mỏng. Tìm một ca lỗi tăng/giảm không đều; không sửa test thành “mọi step nhỏ phải tốt hơn” để ép một quy luật không có.
+3. Bắt đầu đo rồi đổi preset hoặc kéo camera. Bảng cũ phải bị vô hiệu hóa; kiểm job không ghi kết quả muộn lên state mới.
+4. Chọn Constant để thấy sai số gần zero qua nhiều step. Điều này kiểm mô hình, không chứng minh medium biến thiên cũng đúng với mọi step.
+
+## Tự kiểm tra kết quả
+
+- [ ] Benchmark dùng cùng input, warm-up/five repeats và GPU execution time, không phải enqueue time.
+- [ ] Ghi rõ error tại 48 ray so CPU fine, không suy rộng thành whole-image accuracy.
+- [ ] Early chỉ áp alpha, bound tính trong linear và không thay hard cap.
+- [ ] Cancel/deadline/parameter change dọn job; kết quả cũ không còn được trình bày như còn phù hợp.
+- [ ] Kích thước ray target và N thực luôn đọc được; không hứa FPS chung.
+
+## Bài tập mở rộng
+
+Ghi hai bảng với cùng step list: một bảng lighting off, một bảng lighting on. Dự đoán trước phần chi phí nào tăng và đại lượng nào vẫn không đổi. So IQR trước khi kết luận từ một chênh lệch thời gian rất nhỏ.
+
+[Bài cuối](./10-kiem-chung-va-hoan-thien) chốt các oracle, build/ZIP và checklist để người khác có thể chạy sản phẩm mà không cần môi trường website.

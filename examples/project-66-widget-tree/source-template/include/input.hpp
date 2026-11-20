@@ -24,15 +24,20 @@ inline void activate(const Tree& tree, Model& model, WidgetId id) {
         setPaused(model, !model.paused);
     if (view->node->action == Action::Reset)
         resetSimulation(model);
+    if (view->node->action == Action::Observe)
+        model.colony.showNeighbors = !model.colony.showNeighbors;
 }
 
+// [snippet drag]
 inline void drag(const Tree& tree, Model& model, WidgetId id, double x) {
     const auto view = locate(tree, id);
     if (view && view->enabled && view->node->kind == Kind::Slider) {
-        setGravity(model, (x - view->bounds.x) / view->bounds.width * 1200);
+        assign(model, view->node->binding, (x - view->bounds.x) / view->bounds.width);
     }
 }
+// [/snippet drag]
 
+// [snippet reconcile]
 inline void reconcile(const Tree& tree, Ui& ui) {
     // Kiểm cả visibility kế thừa: child vẫn tồn tại nhưng parent có thể đã ẩn.
     const auto valid = [&tree](WidgetId id) {
@@ -46,6 +51,7 @@ inline void reconcile(const Tree& tree, Ui& ui) {
     if (!locate(tree, ui.hot))
         ui.hot = 0;
 }
+// [/snippet reconcile]
 
 inline bool pointerDown(const Tree& tree, Model& model, Ui& ui, Point point) {
     reconcile(tree, ui);
@@ -70,6 +76,7 @@ inline void pointerMove(const Tree& tree, Model& model, Ui& ui, Point point) {
     drag(tree, model, ui.active, point.x);
 }
 
+// [snippet release]
 inline void pointerUp(const Tree& tree, Model& model, Ui& ui, Point point) {
     reconcile(tree, ui);
     const WidgetId active = ui.active;
@@ -79,5 +86,6 @@ inline void pointerUp(const Tree& tree, Model& model, Ui& ui, Point point) {
     if (active != 0 && active == ui.hot)
         activate(tree, model, active);
 }
+// [/snippet release]
 #endif
 } // namespace lab

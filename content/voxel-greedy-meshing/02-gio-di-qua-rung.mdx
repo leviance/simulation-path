@@ -1,0 +1,92 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Cho cơn gió đi qua rừng, thay vì lắc cả cảnh
+
+## Vấn đề cần giải quyết
+
+Nhìn hai ngọn cây cách nhau một quãng. Nếu cả hai cùng ngả đúng một góc tại cùng thời điểm, chúng giống hai hình dán. Dấu hiệu ta muốn thấy là bụi cây gần đón cơn gió trước, bụi phía sau mới nghiêng theo.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chiếu vị trí gốc cây lên hướng gió để biết nó nằm ở đâu dọc đường truyền. Pha dao động phụ thuộc cả quãng đường đó và thời gian. Cùng một vị trí trong thế giới luôn nhận cùng mẫu gió, bất kể mắt đứng ở đâu.
+
+<InteractiveLab demo="voxel-greedy-meshing" mode="voxel61-2" />
+
+## Viết code từng bước
+
+Đứng dưới cây khi camera bất động. Nếu cả thân lắc qua lắc lại cùng đầu cành thì trông như ta đang lay một tấm bìa. Ta cần một cơn gió có vị trí trong thế giới và một trọng số khác nhau dọc theo cây.
+
+### Cho cơn gió có hướng và thời gian
+
+Trong `wind.hpp`, viết `windAt`: lấy vị trí world và thời gian làm pha. Hai cây ở hai chỗ sẽ lần lượt đón cùng một cơn gió. `sway` nhân độ dời với bình phương độ cao tương đối; trọng số bằng 0 ở gốc thì gió mạnh đến đâu gốc cũng không trượt.
+
+{/* snippet include/trail/wind.hpp#wind-field */}
+
+```cpp title="include/trail/wind.hpp — Lấy mẫu gió theo vị trí gốc"
+inline Vec3 windAt(Vec3 root, double seconds, Wind wind) {
+    const Vec3 direction{std::cos(wind.angle), 0, std::sin(wind.angle)};
+    const double along = dot(root, direction);
+    const double gust = 0.62 + 0.26 * std::sin(1.8 * seconds - 0.31 * along) + 0.12 * std::sin(3.0 * seconds - 0.52 * along);
+    return direction * (wind.speed * gust);
+}
+```
+
+{/* snippet include/trail/wind.hpp#sway-root */}
+
+```cpp title="include/trail/wind.hpp — Giảm độ uốn khi đi xuống gốc"
+inline Vec3 sway(Vec3 rest, Vec3 root, double height, double flexibility, double seconds, Wind wind) {
+    const double u = std::clamp((rest.y - root.y) / height, 0.0, 1.0);
+    return rest + windAt(root, seconds, wind) * (flexibility * u * u);
+}
+```
+
+<VoxelWorkFile project="61" step={2} file="wind" />
+
+### Uốn đỉnh lúc vẽ, đừng sửa cây trong chunk
+
+Trong `field-render.hpp`, tìm mặt lá hoặc lá kim rồi xác định cây mà mặt đó thuộc về. Tạo tọa độ đỉnh để vẽ từ tọa độ gốc cùng độ uốn. Không ghi đỉnh đã uốn đè lên mesh tĩnh: cộng thêm mỗi frame sẽ làm cây trôi mất.
+
+<VoxelWorkFile project="61" step={2} file="field-render" />
+
+### Chạy đồng hồ khi người xem đứng yên
+
+Trong `field-scene.hpp`, chỉ tiến `seconds` khi chưa Pause và báo cần vẽ khung mới. Trong `field-controls.hpp`, nối G để quay hướng gió và hai phím ngoặc vuông để giảm/tăng cường độ. Chưa có bụi cỏ chuyển động ở bài này; nhìn vào ngọn cây.
+
+<VoxelWorkFile project="61" step={2} file="field-scene" />
+
+{/* snippet include/trail/field-controls.hpp#wind-keys */}
+
+```cpp title="include/trail/field-controls.hpp — Đổi sức gió và hướng gió"
+if (key == SDLK_LEFTBRACKET)
+    scene.weather.windSpeed = std::max(0.0, scene.weather.windSpeed - 0.25);
+if (key == SDLK_RIGHTBRACKET)
+    scene.weather.windSpeed = std::min(3.0, scene.weather.windSpeed + 0.25);
+if (key == SDLK_G)
+    scene.weather.windAngle += pi / 4;
+```
+
+<VoxelWorkFile project="61" step={2} file="field-controls" />
+
+## Ghép các phần lại
+
+Đứng yên ở bờ suối, hạ gió về 0 bằng phím `[`, sau đó tăng bằng `]`. Thân đứng yên, ngọn đổi dáng; nhấn P rồi đi ngang, bạn vẫn đi được nhưng cơn gió đứng lại. Số lần dựng mesh không được tăng chỉ vì lá đổi chỗ.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_61_work --parallel 1
+.\build-work\Release\project_61_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Lấy vị trí camera làm đầu vào thay cho gốc cây. Đứng im thì có vẻ ổn, nhưng bước ngang khi đang Pause sẽ làm cây đổi dáng.
+
+## Tự kiểm tra kết quả
+
+Theo dõi hai gốc cách nhau dọc hướng gió. Gốc không nhúc nhích, hai ngọn không đồng pha; gió bằng 0 trả cả hai về tư thế ban đầu.
+
+## Bài tập mở rộng
+
+So một cặp cây nằm dọc hướng gió với một cặp nằm ngang hướng gió. Cặp nào có pha giống nhau trong mô hình này?
+
+[Bài 3: Gắn chuyển động vào từng ngọn cỏ và tán lá](/projects/voxel-greedy-meshing/03-neo-la-va-co).

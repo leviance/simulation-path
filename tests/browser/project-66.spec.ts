@@ -1,39 +1,19 @@
 import { expect, test } from "@playwright/test";
-const route = "/projects/widget-tree/08-kiem-chung-va-hoan-thien";
-test("widget tree retains nodes across scene reset and removes the complete group", async ({
+
+test("P66 shows the actual retained desk and its inspector; course links keep their sources", async ({
   page,
 }) => {
-  await page.goto(route);
-  const read = (label: string) =>
-    page
-      .locator(".lab-readout div")
-      .filter({ has: page.getByText(label, { exact: true }) })
-      .locator("dd");
-  await expect(read("Node / số lần dựng cây")).toHaveText("9 / 1");
-  await page.getByRole("button", { name: "Một bước 1/120 s", exact: true }).click();
-  await page.getByRole("button", { name: "Reset cảnh (giữ cây)", exact: true }).click();
-  await expect(read("Node / số lần dựng cây")).toHaveText("9 / 1");
-  await page.getByRole("button", { name: "Xóa nhóm control", exact: true }).click();
-  await expect(read("Node / số lần dựng cây")).toHaveText("3 / 1");
-  await expect(read("Hot / Active / Focus (ID)")).toHaveText("0 / 0 / 0");
-  await page.getByRole("button", { name: "Thêm Label", exact: true }).click();
-  await expect(read("Node / số lần dựng cây")).toHaveText("4 / 1");
-  await page.getByRole("button", { name: "Kiểm cây hiện tại", exact: true }).click();
-  await expect(read("Trạng thái")).toContainText("PASS: 4 node");
-});
-test("widget tree honors reduced motion and releases Tab at Canvas boundaries", async ({
-  page,
-}) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto(route);
-  await expect(page.getByRole("button", { name: "Chạy cảnh", exact: true })).toBeDisabled();
-  const canvas = page.getByRole("application", { name: "Widget Tree Lab", exact: true });
-  await canvas.focus();
-  await canvas.press("Tab");
-  await canvas.press("Tab");
-  await canvas.press("Tab");
-  await canvas.press("Tab");
-  await expect(canvas).not.toBeFocused();
-  await page.getByRole("button", { name: "Một bước 1/120 s", exact: true }).click();
-  await expect(page.locator(".lab-readout")).toContainText("480 / 1 /");
+  await page.goto("/projects/widget-tree");
+  const gallery = page.locator("[data-native-media]");
+  await expect(gallery.locator("img")).toHaveAttribute("src", /p66-desk\.png$/);
+  const inspect = gallery.getByRole("button", { name: "Bật inspector" });
+  await expect(inspect).toBeEnabled();
+  await inspect.focus();
+  await inspect.press("Enter");
+  await expect(gallery.locator("img")).toHaveAttribute("src", /p66-inspect\.png$/);
+  await expect(gallery.locator("img")).toHaveAttribute("alt", /bounds local, bounds world/);
+  await page.goto("/projects/widget-tree/03-cat-theo-khung-cha");
+  await expect(page.locator("[data-native-media] img")).toHaveAttribute("src", /p66-clip\.png$/);
+  const zip = await page.request.get("/downloads/project-66-widget-tree.zip");
+  expect((await zip.body()).subarray(0, 2).toString()).toBe("PK");
 });

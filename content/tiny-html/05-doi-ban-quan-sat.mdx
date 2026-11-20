@@ -1,0 +1,125 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đổi từ bàn điều khiển sang bàn khảo sát
+
+## Vấn đề cần giải quyết
+
+Người quan sát muốn kéo Radius trước rồi mới bấm Pause. Người vận hành lại muốn cả nhóm nút nằm trên cùng. Thay vì bảo họ dùng hai chương trình, cho cùng executable nạp hai tài liệu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Thử nghĩ như đang thay một chiếc bản đồ nhưng vẫn giữ người đang đứng trên đó. Cây giao diện mới có thể cấp lại con số ID cũ cho một widget khác. Giữ focus hay capture theo con số ấy qua reload là sai.
+
+<InteractiveLab demo="tiny-html" mode="html68-5" />
+
+## Viết code từng bước
+
+### Bảng khảo sát
+
+Giữ lại ID của từng control để vẫn tác động đúng mô hình; chỉ thay nơi nó xuất hiện trong file.
+
+{/* asset assets/survey.html */}
+
+```html title="assets/survey.html — Bảng khảo sát"
+<div id="desk" class="sheet survey">
+    <h1 id="title">NEIGHBOR SURVEY</h1>
+    <div id="settings" class="parameters">
+        <label id="radius-value">Survey radius</label>
+        <input id="radius" type="range" min="20" max="140" step="2" value="64" />
+        <button id="observe">Neighbors</button>
+        <label id="separation-value">Separation</label>
+        <input id="separation" type="range" min="0" max="5" step="0.1" value="1.5" />
+    </div>
+    <div id="actions" class="tools">
+        <button id="pause">Pause flight</button>
+        <button id="reset">Reset flock</button>
+    </div>
+    <span id="ticks">Clock</span>
+</div>
+```
+
+### Dựng bên cạnh cây đang dùng
+
+Parse, ánh xạ và đo bản nháp xong mới chuyển nó vào Desk. UI mới không mang active hoặc focus cũ; mô hình đàn chim thì được giữ lại.
+
+{/* snippet include/markup/desk.hpp#replace-page */}
+
+```cpp title="include/markup/desk.hpp — Dựng bên cạnh cây đang dùng"
+inline void install(Desk& desk, std::string_view source) {
+    Page draft = build(parse(source), desk.page.layout.width);
+    bindExisting(draft, source);
+    lab::Ui fresh;
+    lab::ensureLayout(draft.layout, fresh);
+    // Lần đầu đọc value. Từ lần reload sau chỉ ép tham số hiện tại vào miền mới.
+    for (const auto& e : draft.document.elements) {
+        if (!e.range)
+            continue;
+        double* value = nullptr;
+        if (e.id == "radius")
+            value = &desk.model.colony.params.radius;
+        if (e.id == "separation")
+            value = &desk.model.colony.params.separationWeight;
+        if (value) {
+            if (desk.edition == 0)
+                *value = e.range->value;
+            *value = snap(*e.range, *value);
+        }
+    }
+    desk.page = std::move(draft);
+    desk.ui = fresh;
+    desk.observed = 0;
+    ++desk.edition;
+}
+```
+
+### Nối ngược khung trên màn hình về file
+
+Inspector cho biết tag, ID từ file, WidgetId, parent, offset và bounds. Đây là cách kiểm một nhãn thực sự thuộc settings chứ không chỉ tình cờ được vẽ gần nó.
+
+{/* snippet include/markup/paint.hpp#element-inspector */}
+
+```cpp title="include/markup/paint.hpp — Nối ngược khung trên màn hình về file"
+if (d.inspect && !page.handles.empty()) {
+    d.observed %= page.handles.size();
+    const auto& e = page.document.elements[d.observed];
+    const auto id = page.handles[d.observed];
+    const auto item = lab::locate(page.layout.scene.tree, id);
+    bench::box(r, {30, 94, 410, 76}, {29, 52, 57, 255});
+    caption(r, 42, 105, "SOURCE   <" + e.tag + "> #" + e.id + "    Widget " + std::to_string(id), {158, 235, 196, 255});
+    std::string depth = "root";
+    if (e.parent >= 0)
+        depth = "parent #" + page.document.elements[static_cast<std::size_t>(e.parent)].id;
+    caption(r, 42, 126, depth + "   |   byte " + std::to_string(e.offset), {217, 229, 225, 255});
+    if (item) {
+        const auto b = item->bounds;
+        caption(r, 42, 146, "bounds " + decimal(b.x) + ", " + decimal(b.y) + "   " + decimal(b.width) + " x " + decimal(b.height), {249, 205, 119, 255});
+        const SDL_FRect edge{float(b.x), float(b.y), float(b.width), float(b.height)};
+        bench::ink(r, {249, 205, 119, 255});
+        SDL_RenderRect(r, &edge);
+    }
+}
+```
+
+## Ghép các phần lại
+
+Nhấn 1 rồi 2. Ở NEIGHBOR SURVEY, Radius nằm trước các nút. Nhấn I và [ hoặc ] để đi qua element; dùng Tab, không dùng chuột, để tìm slider. Hai đường đi có mục đích khác nhau.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_68_checkpoint_5 --parallel 2
+.\build\Release\project_68_checkpoint_5.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Giữ lại focus cũ rồi nạp file thứ hai. Khi nhấn Space, bạn có thể thao tác một nút không hề chọn. Xóa tham chiếu UI khi thay cây, không reset đàn để che lỗi.
+
+## Tự kiểm tra kết quả
+
+Dùng cùng executable, không build lại. Bán kính bạn vừa chọn còn nguyên nếu nằm trong miền mới. Có thể chỉ ra cả ID trong HTML và bounds trong cửa sổ.
+
+## Bài tập mở rộng
+
+Đổi thứ tự riêng hai button. Dự đoán thứ tự Tab mới mà không cần sửa bất kỳ dòng input C++ nào.
+
+[Bài 6: Phá một thẻ rồi cứu lại phiên làm việc](/projects/tiny-html/06-loi-va-khoi-phuc).

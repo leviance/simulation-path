@@ -1,0 +1,121 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Tự đi mười phút để kiểm một thế giới sống
+
+## Vấn đề cần giải quyết
+
+Đừng kết thúc học phần bằng năm ảnh chụp những nơi đẹp nhất. Hãy xuất phát trên bãi cát, chọn mỏm đá để nhìn một con sóng đi qua rồi quay lưng vào rừng. Chính đoạn đường nối các điểm mốc mới kiểm được việc sinh địa hình, giữ bộ nhớ và di chuyển.
+
+## Hiểu ý tưởng trước khi viết code
+
+Đặt ra hai kiểu quan sát. Đứng yên giúp nhận ra chuyển động thật của nước, mây và ánh sáng. Đứng ở cùng giờ rồi đổi góc nhìn giúp kiểm chiều sâu, tuyết bị cây che và gốc cỏ bám đất. Cả hai đều cần có mốc cố định trong cảnh.
+
+<InteractiveLab demo="voxel-sandbox" mode="voxel64-5" />
+
+## Viết code từng bước
+
+Lần này sản phẩm phải chịu được cả một chuyến đi: trở ngại khi leo dốc, cột nạp muộn hay tuyết bám camera có thể không xuất hiện trong một ảnh đẹp. Ta sẽ vừa tự đi vừa làm cho chuyến khảo sát có thể lặp lại.
+
+### Lập tuyến đi qua những chỗ dễ lộ lỗi
+
+Trong `field-walk.hpp`, `RecordedWalk` đi qua một chuỗi điểm bằng chính `travel` của người chơi; không đặt thẳng tọa độ mắt vào mỗi điểm. Tích quãng đường từ độ dời XZ thật, không từ số lượng phím W đã gửi. Các vị trí nhìn và ngân sách streaming dưới đây là phần được dùng lại: đi qua một mốc chỉ có nghĩa khi chân thực sự tới đó.
+
+{/* snippet include/trail/field-scene.hpp#route-poses */}
+
+```cpp title="include/trail/field-scene.hpp — Ghi vị trí, seed và hướng nhìn để so lại"
+constexpr std::array<int, 5> routes{4, 39, 96, 170, 147};
+int z = routes.at(landmark);
+const Site base = siteAt(0, z, region.seed);
+int x = int(std::floor(base.riverX + 7));
+if (landmark == 3)
+    x = int(std::floor(base.riverX + 18));
+if (landmark == 4) {
+    x = campX(region.seed) + 3;
+    z -= 4;
+}
+const Site at = siteAt(x, z, region.seed);
+camera.eye = {x + 0.5, at.ground + 2.65, z + 0.5};
+camera.yaw = -0.52;
+camera.pitch = -0.07;
+```
+
+{/* snippet include/trail/stream.hpp#stream-budget */}
+
+```cpp title="include/trail/stream.hpp — Đọc chi phí theo công việc thật"
+bool tick(Region& world, Mesher mode) {
+    const bool changed = !wanted.empty() || !world.dirty.empty();
+    for (int n = 0; n < budget && !wanted.empty(); ++n) {
+        const Key next = wanted.front();
+        wanted.pop_front();
+        world.load(next);
+        world.rebuild(next, mode);
+    }
+    world.buildSome(1, mode);
+    return changed;
+}
+```
+
+{/* snippet include/trail/field-walk.hpp#field-sampling */}
+
+```cpp title="include/trail/field-walk.hpp — Giữ đỉnh thời gian vẽ giữa hai mẫu"
+peakRenderMs = std::max(peakRenderMs, drawMs);
+const int mark = int(wall / 15);
+if (mark == sample)
+    return;
+sample = mark;
+```
+
+<VoxelWorkFile project="64" step={5} file="field-walk" />
+
+### Ghi lại thứ đã xảy ra trong khung hình
+
+Trong `field-scene.hpp`, thêm giờ và số hạt còn sống vào `readout`. Trong `window.hpp`, nối `--route-check` với lượt dò ngắn có giới hạn bước và `--survey` với đồng hồ thực. Đo cập nhật, vẽ và đưa ảnh lên renderer ở hai đầu từng việc. Nếu `moved` đứng mà thời gian vẫn tăng, kiểm đường/bậc bị kẹt trước khi đổ lỗi cho tốc độ GPU.
+
+{/* snippet include/trail/field-scene.hpp#walk-readout */}
+
+```cpp title="include/trail/field-scene.hpp — Đọc số hạt còn sống khi đang đi"
+out << " | hour " << int(weather.hour) << " | flakes " << std::count_if(snow.pool.begin(), snow.pool.end(), [](const auto& f) { return f.alive; });
+```
+
+<VoxelWorkFile project="64" step={5} file="field-scene" />
+
+<VoxelWorkFile project="64" step={5} file="window" />
+
+## Ghép các phần lại
+
+Trước hết tự đi từ biển, men sông, qua hẻm tới rừng thông rồi ghé bếp. Ghi seed, cấu hình máy và một mốc nhìn rõ cho từng hiệu ứng; về mốc cũ để kiểm đất không đổi. `--route-check` phát hiện nhanh chỗ kẹt, không thay cho phiên 10–20 phút. Chỉ chạy `--survey 600` khi chủ động dành mười phút để đo; nó không thuộc lệnh build/test thường.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_64_work --parallel 1
+.\build-work\Release\project_64_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Chỉ chụp khi trời quang, hoặc chỉ chạy smoke một frame. Cả hai đều bỏ sót hiện tượng hạt dính camera, rò bộ nhớ qua nhiều lượt hoặc khựng lúc tải cột mới.
+
+## Tự kiểm tra kết quả
+
+Báo riêng ảnh C++, CTest, số đo của phiên chạy dài và thao tác chưa kiểm. Qua được test toán không tự chứng minh chuyến đi hay hoặc đồ họa đủ dễ đọc.
+
+Khi bản của bạn đã đủ các tính năng, chạy bộ kiểm của project trên chính `work/include`. Dùng lại thư mục `build-work` đã cấu hình với `VOXEL_WORKBOOK=ON`; chạy test của bản mẫu trong thư mục khác không kiểm được mã này.
+
+```bash title="Windows / Visual Studio — kiểm bài làm ở cả hai cấu hình"
+cmake --build build-work --config Debug --target project_64_tests --parallel 1
+ctest --test-dir build-work -C Debug --output-on-failure --timeout 30
+cmake --build build-work --config Release --target project_64_tests --parallel 1
+ctest --test-dir build-work -C Release --output-on-failure --timeout 30
+```
+
+Với Ninja/Make, kiểm Release trong `build-work`. Để kiểm Debug thật, cấu hình thêm `cmake -S . -B build-work-debug -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Debug` rồi dùng `build-work-debug` cho hai lệnh Debug. Cả hai đọc cùng một thư mục `work/`.
+
+Muốn so hai thay đổi trên **cùng một tuyến**, đóng cửa sổ vừa mở rồi chạy `.\build-work\Release\project_64_work.exe --survey 600`. Chương trình tự đi, không dịch chuyển tức thời, vẫn vẽ từng khung và tự kết thúc sau mười phút. Trong mỗi dòng `WALK`, `moved` là tổng đường đã đi; `resident` là số chunk còn trong bộ nhớ; `peak_draw_ms` là lần vẽ chậm nhất từ đầu phiên. Nếu `moved` không tăng dù vẫn có khung mới, hãy xem lại bậc đất hoặc cành cây chắn đường trước khi tìm lỗi hiệu năng.
+
+Ở một lượt Release trên Ryzen 5 5600H, tuyến này dài tổng cộng 2.423 block sau sáu vòng. Đó là mốc để nhận ra một nhân vật mắc kẹt, không phải số FPS mà máy nào cũng phải đạt.
+
+## Bài tập mở rộng
+
+Viết nhật ký ngắn: ở đoạn nào bạn biết gió vừa đổi hướng trước khi mở bảng số? Chi tiết nào trong khung hình đã báo điều đó?
+
+[Tải mã hoàn chỉnh của Project 64](/downloads/project-64-voxel-sandbox.zip).

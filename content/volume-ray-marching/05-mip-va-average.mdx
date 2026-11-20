@@ -1,0 +1,141 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đi dọc tia: giữ cực đại hay lấy trung bình?
+
+## Vấn đề cần giải quyết
+
+Chương trình đã đọc được texture 3D, nhưng một midpoint có thể bỏ qua lõi đặc hoặc một lớp mỏng. Bây giờ ta sẽ đi từ entry tới exit, đọc nhiều mẫu rồi gộp chúng. Trước khi thêm màu và opacity, hãy dùng hai phép gộp scalar dễ phân biệt: MIP và average.
+
+Phần giữ lại là camera, ray–box và texture. Phần mới chỉ nằm ở loop cùng state chọn mode. Thử giữ nguyên camera/dataset khi chuyển mode; nếu đồng thời thay dữ liệu thì khó biết khác biệt đến từ đâu.
+
+## Hiểu ý tưởng trước khi viết code
+
+MIP trả lời “mật độ lớn nhất gặp trên tia là bao nhiêu?”. Một lớp mỏng nhưng đậm vẫn có thể sáng rõ. Average trả lời “trên đoạn nằm trong box, mật độ trung bình theo độ dài là bao nhiêu?”. Cùng lớp mỏng ấy bị chia cho toàn độ dài L nên có thể nhạt hơn nhiều.
+
+Ta chia interval thành `count=ceil(L/step)` đoạn, lấy mẫu tại midpoint của mỗi đoạn. Đoạn cuối thường ngắn hơn step. MIP là max của các mẫu; average là `sum(density*ds)/L`, không phải tổng rồi chia count.
+
+Ví dụ slab density 0,65 dày 0,75 trong box dài 2: MIP gần 0,65, average gần 0,24375. Chúng không phải transmittance, không biểu diễn cùng ý nghĩa vật lý với alpha hoặc X-ray ở học phần tiếp theo.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-5" />
+
+## Viết code từng bước
+
+### 1. Viết loop tham chiếu có đủ phần đuôi
+
+`Result` giữ maximum, mean, length và số mẫu thực đã đọc. Hàm CPU dưới đây là nơi dễ kiểm các ca hằng/slab trước khi so với shader. Ngân sách được kiểm trước khi đổi count sang int.
+
+{/* snippet include/reference.hpp#integrate-projection */}
+
+```cpp title="include/reference.hpp — Hai reducer trên cùng dãy đoạn"
+inline Result integrate(const Ray& ray, const Volume& volume, Settings settings, double stepLength, int budget, bool record) {
+    if (!std::isfinite(stepLength) || stepLength <= 0 || budget < 1 || budget > 4096)
+        throw std::invalid_argument("Invalid reference integration budget");
+    Result result;
+    const auto interval = boxInterval(ray);
+    if (!interval)
+        return result;
+    result.length = interval->exit - interval->entry;
+    const double required = std::ceil(result.length / stepLength);
+    if (!std::isfinite(required) || required < 1 || required > budget)
+        throw std::runtime_error("Ray sample budget exceeded; no partial image accepted");
+    const int count = static_cast<int>(required);
+    double weightedSum = 0;
+    double coveredLength = 0;
+
+    for (int i = 0; i < count; ++i) {
+        const double start = interval->entry + i * stepLength;
+        const double ds = std::min(stepLength, interval->exit - start);
+        const double distance = start + 0.5 * ds;
+        const double raw = sampleDensity(volume, rayAt(ray, distance));
+        const double density = classifiedDensity(raw, settings.cutoff);
+        result.maximum = std::max(result.maximum, density);
+        weightedSum += density * ds;
+        coveredLength += ds;
+        ++result.samples;
+        (void)record;
+    }
+    result.mean = weightedSum / result.length;
+    return result;
+}
+```
+
+`coveredLength` cộng từng ds; giá trị này phục vụ inspector ở bài sau. Mẫu nằm ở `start+0.5*ds`, kể cả đoạn cuối, chứ không luôn cộng `0.5*step` rồi vô tình đọc ngoài exit.
+
+Ở checkpoint 5, cutoff vẫn bằng 0 và chưa có nhánh alpha. Reference và shader được viết riêng nhưng có cùng hợp đồng về ray, interval và bước lấy mẫu; đó không thay cho oracle giải tích.
+
+### 2. Đưa phép gộp vào fragment shader
+
+Mỗi fragment tự march ray của nó. Vòng lặp có giới hạn cứng 512; nếu count vượt cap, output diagnostic được đánh dấu thay vì trả một ảnh thiếu phần sau mà không báo.
+
+{/* snippet shaders/volume.frag#projection-modes */}
+
+```glsl title="shaders/volume.frag — MIP hoặc average của toàn đoạn"
+float length = exit - entry;
+int count = int(ceil(length / uStep));
+if (count > 512) {
+    result = vec4(1.0, 0.0, 1.0, -1.0);
+    return;
+}
+float maximum = 0.0;
+float integral = 0.0;
+vec3 color = vec3(0.0);
+float transmittance = 1.0;
+
+for (int i = 0; i < 512; ++i) {
+    if (i >= count) break;
+    float start = entry + float(i) * uStep;
+    float ds = min(uStep, exit - start);
+    vec3 point = uOrigin + direction * (start + 0.5 * ds);
+    float density = classify(densityAt(point));
+    maximum = max(maximum, density);
+    integral += density * ds;
+}
+if (uMode == 0) result = vec4(vec3(maximum), 1.0);
+if (uMode == 1) result = vec4(vec3(integral / length), 1.0);
+```
+
+`uMode=0` chọn MIP, `uMode=1` chọn average. Kết quả scalar được chép vào RGB để present; alpha channel bằng 1 là ô chưa dùng của format, **không được đọc thành T vật lý** cho hai mode này.
+
+### 3. Nối nút mode với uniform
+
+Nút MIP/Average hoặc phím 1/2 cập nhật `state.settings.mode`. `Renderer::render` gửi state ấy qua `uMode`, đồng thời gửi `stepLength` qua `uStep`. Không cần upload lại volume, tạo lại camera hoặc compile shader chỉ để đổi mode.
+
+{/* snippet include/renderer.hpp#projection-uniforms */}
+
+```cpp title="include/renderer.hpp — Gửi đúng mode và step trước khi vẽ"
+gl_.Uniform1i(uniform(gl_, program_, "uMode"), static_cast<int>(settings.mode));
+gl_.Uniform1f(uniform(gl_, program_, "uStep"), static_cast<float>(settings.stepLength));
+```
+
+`uMode` là số nguyên chọn nhánh trong shader; `uStep` là độ dài theo world units, không phải số pixel. Hai giá trị được gửi khi program volume đang được bind bằng `UseProgram`, trước lệnh `DrawArrays`. Bấm nút chỉ đổi state; shader phải nhận state mới ở lần vẽ tiếp theo thì ảnh mới thực sự đổi.
+
+Giữ phần present như một lớp hiển thị. Nó ánh xạ scalar ra ảnh, không được tính lại average từ các byte RGB đã gamma.
+
+## Ghép các phần lại
+
+```powershell
+cmake --build build --config Debug --target project_54_checkpoint_5 --parallel 1
+.\build\Debug\project_54_checkpoint_5.exe
+```
+
+Chọn Slab rồi so MIP/Average. Tiếp đó chọn Constant: mọi ray hit phải trả đúng 0,25 ở cả hai mode, dù đường qua box dài/ngắn khác nhau. Nếu average tối dần ở mép box chỉ vì đường ngắn hơn, kiểm xem bạn đã chia L hay đang hiển thị integral chưa chuẩn hóa.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm chia weighted sum cho count. Giữ Constant, đổi step: độ sáng có còn cố định không?
+2. Dùng `ds=step` cho đoạn cuối và thử step 0,13. Tổng độ dài sẽ vượt interval; đây là lỗi, không phải “sai số tất yếu của tích phân”.
+3. Chỉ lấy `floor(L/step)` đoạn. Quan sát cấu trúc nằm sát mặt thoát bị bỏ qua; khôi phục ceil và phần đuôi trước khi đo convergence.
+
+## Tự kiểm tra kết quả
+
+- [ ] Loop phủ hết interval, tổng ds gần L và không có ds âm/zero.
+- [ ] Constant cho MIP=average=0,25 qua nhiều step, kể cả 0,13.
+- [ ] Slab cho MIP và average khác nhau theo dự đoán, không chỉ đổi tên mode.
+- [ ] Miss không đọc texture; empty không sáng thành một khối đặc.
+- [ ] Không gọi average là mô hình suy giảm tia X.
+
+## Bài tập mở rộng
+
+Tạo hai slab có cùng mật độ nhưng độ dày khác nhau. Giữ camera vuông góc với slab: mode nào giữ độ sáng gần như cũ, mode nào thay đổi? Sau đó xoay camera và giải thích vì sao phải xét toàn đoạn box trong mẫu số average.
+
+[Bài 6](./06-alpha-front-to-back) thêm một câu hỏi khác: lớp phía trước cản đóng góp của lớp phía sau như thế nào?

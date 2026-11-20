@@ -1,0 +1,128 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng rồi chạy Volume Lightbox hoàn chỉnh
+
+## Vấn đề cần giải quyết
+
+Ta đã có viewport 3D, ba mode và số đo hiệu năng. Trước khi gọi project là hoàn chỉnh, cần trả lời ba câu hỏi riêng: thuật toán có đúng không, chương trình có dùng được không, và quy mô nào thật sự đã chạy? Một ảnh đẹp hay một build xanh không trả lời cả ba.
+
+Bài này không thêm một hiệu ứng để lấp chỗ trống. Ta kiểm dữ liệu, đọc raw GPU output, chạy bản ZIP độc lập rồi tự dùng camera/controls. Source hoàn chỉnh của toàn project nằm cuối bài; các file UI/GL scaffold cũng có đầy đủ, không yêu cầu chép từ project khác.
+
+## Hiểu ý tưởng trước khi viết code
+
+Có ba nhóm kiểm số, mỗi nhóm chứng minh một việc:
+
+- **Oracle giải tích/fixture biết trước:** constant/slab, ray–box và trilinear centre/edge. Nó không gọi lại cùng hàm rồi dùng kết quả ấy làm expected.
+- **CPU/GPU cùng step:** cùng ray/preset/settings, so output linear để tìm lỗi shader/binding/sampling. MIP/average so scalar; alpha so C/T, không gán cùng nghĩa vật lý cho cả ba.
+- **CPU fine step:** chỉ ước lượng sai số do lấy mẫu ở những ray đã chọn. Không tự trở thành ground truth hoặc bảo đảm toàn ảnh.
+
+Density là số tổng hợp [0,1], sigma theo world unit tùy chọn; không phải HU, DICOM hoặc CT reconstruction. Project 55 sẽ xây mô hình attenuation/source/detector riêng, không đổi nhãn ảnh alpha hiện tại thành X-ray.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-10" />
+
+## Viết code từng bước
+
+### 1. Giữ check hoạt động trong Release
+
+`assert` có thể biến mất khi bật NDEBUG. Dùng hàm check nhỏ dưới đây cho các fixture cần chạy ở cả Debug/Release; lỗi có lý do và process trả nonzero nếu có failure.
+
+{/* snippet tests/tests.cpp#active-check */}
+
+```cpp title="tests/tests.cpp — Không đếm PASS bằng assert bị tắt"
+void check(bool condition, std::string_view reason) {
+    ++checks;
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << reason << '\n';
+    }
+}
+```
+
+Các phép so số thực kiểm finite trước. Tolerance phải theo đại lượng: một index nguyên kiểm exact; C/T dimensionless của fixture double dùng ngưỡng riêng, không lấy cùng epsilon áp lên mọi thứ.
+
+### 2. Kiểm medium hằng bằng đáp số độc lập
+
+Volume hằng 0,25 và ray xuyên trục dài 2 cho MIP=mean=0,25. Với sigma=2, White và lighting off, T=exp(-1), C=1-T. Vòng dưới kiểm nhiều step, có cả phần đuôi không chia hết.
+
+{/* snippet tests/tests.cpp#constant-oracle */}
+
+```cpp title="tests/tests.cpp — Giải tích phải khớp trước khi tin sương đẹp"
+for (Mode mode : {Mode::Mip, Mode::Average, Mode::Alpha}) {
+    for (double step : {0.008, 0.02, 0.04, 0.13, 0.16}) {
+        Settings settings = white;
+        settings.mode = mode;
+        settings.stepLength = step;
+        const Result result = march(front, constant, settings, true);
+        close(result.maximum, 0.25, 0, "constant MIP");
+        close(result.mean, 0.25, 1e-14, "constant length-weighted average");
+        double covered = 0;
+        for (const Sample& sample : result.profile)
+            covered += sample.ds;
+        close(covered, 2, 1e-13, "partial tail preserves full path length");
+        if (mode == Mode::Alpha) {
+            const double expectedT = std::exp(-2 * 0.25 * 2);
+            close(result.transmittance, expectedT, 1e-13, "constant analytic transmittance");
+            close(result.color.x, 1 - expectedT, 1e-13, "constant premultiplied emission");
+        }
+    }
+}
+```
+
+Fixture slab 128³ dùng density được lưu Float32, rộng 0,75; reference xét cả hai dải trilinear tại biên. Không lấy số 0,65 double làm expected rồi quên rằng source thật đã quantize sang Float32.
+
+Tests còn kiểm camera inside/parallel/miss, empty, sigma zero, layer order, centre/corners, side không hợp lệ, cap trước integer cast và early bound. Đó là các ca có thể phá công thức dù ảnh mẫu vẫn trông dễ chịu.
+
+### 3. Đọc raw GPU, không đọc màu screenshot để đo C/T
+
+`--verify-gpu` dùng target 24×18, volume 128³ thật, sáu preset, hai vị trí camera, ba mode và nhiều step. Đối chiếu một số pixel centre với reference CPU, đảo y đúng một lần ở ranh giới GL/CPU.
+
+{/* snippet include/validation.hpp#gpu-component */}
+
+```cpp title="include/validation.hpp — So đúng component và giữ lỗi hữu hạn"
+const double actual = image[address + component];
+const double error = std::abs(actual - expected[component]);
+if (!std::isfinite(actual) || error > 0.0025)
+    throw std::runtime_error("GPU raw mode result differs from CPU oracle");
+maximumError = std::max(maximumError, error);
+++comparisons;
+```
+
+Tolerance GPU 0,0025 là sai số tuyệt đối trên raw output dimensionless, gồm float shader/hardware interpolation; không phải bitwise comparison. Lượt kiểm có ngân sách trong app và phải được bọc watchdog ngoài process. Một target kiểm nhỏ không thay viewport sử dụng: chạy bình thường vẫn ray march theo drawable.
+
+## Ghép các phần lại
+
+Từ ZIP mới giải nén, không cần Node.js:
+
+```powershell
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --parallel 1
+ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake --build build --config Release --parallel 1
+ctest --test-dir build -C Release --output-on-failure --timeout 20
+.\build\Release\project_54_final.exe
+```
+
+Nếu chỉ muốn chạy sản phẩm cuối, bỏ option BUILD_CHECKPOINTS; target final là mặc định. README giải thích cách bọc `--verify-gpu` bằng watchdog hữu hạn, giới hạn frame/seconds và cách chụp ảnh trước swap. Không dùng một timeout tool làm bảo đảm thay cho process guardian, cũng không tuyên bố nó preempt GPU được.
+
+Bản cuối mặc định **128³ = 2.097.152 Float32 / 8 MiB**. Tab cho viewport toàn cửa sổ; phím 1/2/3 chọn MIP/average/alpha, P đổi dataset, Q đổi step, +/- đổi sigma, [/] đổi cutoff, C/L đổi palette/lighting, I vào/ra khối và F nhìn theo trục Z. R đặt lại view/transfer nhưng giữ dataset/resolution.
+
+## Thử làm sai để hiểu đúng
+
+1. Cố ý đổi một hệ số camera chỉ ở shader rồi chạy GPU oracle. Nếu sửa bằng cách nới tolerance, bạn đang che một lỗi mô hình, không xử lý round-off.
+2. Tạm đưa gamma vào raw output. CPU/GPU C/T phải fail dù screenshot có thể vẫn đẹp. Trả gamma về present pass.
+3. Tải ZIP ra thư mục khác và build. Nếu shader vẫn chỉ tìm được qua đường dẫn source trên máy tác giả, kiểm runtime fallback theo target và assets trong gói.
+
+## Tự kiểm tra kết quả
+
+- [ ] Final là C++ executable tương tác, đọc texture 128³ thật, không vẽ mesh shell hoặc chỉ các lát 2D.
+- [ ] Cả ba mode, camera orbit/inside/zoom, step/transfer, ray inspector và Showcase hoạt động.
+- [ ] Native input, GPU numeric test, pure CTest, benchmark và ảnh chụp được ghi là những bằng chứng khác nhau.
+- [ ] Blur/reset/missed release nhả capture; job đo có hủy và xóa kết quả không còn phù hợp.
+- [ ] ZIP byte-identical với source, đủ README/starter/checkpoint/final/tests/shader, không chứa binary/dependency/build output.
+- [ ] Ảnh đẹp không thay phép kiểm; phép kiểm số không tự chứng nhận UX hoặc hiệu lực y khoa.
+
+## Bài tập mở rộng
+
+Chọn một pixel khó, lưu camera/preset/settings và viết một báo cáo ngắn: ray interval, số sample, scalar projection hoặc C/T, sai khác CPU/GPU, và chi phí khi giảm step. Kèm ảnh C++ thật nhưng giữ số raw riêng; người khác phải tái lập được kết luận từ source và input, không chỉ từ ảnh.
+
+Khi đã hiểu đường đi **scalar → sample → reducer → ảnh**, hãy chuyển sang [Project 55](../xray-detector). Ở đó, hệ số suy giảm, nguồn và detector cần một mô hình riêng; không dùng độ đẹp của sương để suy ra tính đúng của phép đo.

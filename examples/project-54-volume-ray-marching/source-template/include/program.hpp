@@ -4,12 +4,14 @@
 #include <fstream>
 #include <sstream>
 
-namespace fog {
+namespace volume54 {
 // Compile/link failures include the actual shader filename and driver log.
-inline GLuint loadProgram(GlApi& gl, const std::filesystem::path& directory, const char* fragment) {
+inline GLuint loadProgram(GlApi& gl, const std::filesystem::path& directory, const char* fragment, const char* vertex = "fullscreen.vert") {
     const GLuint program = gl.CreateProgram();
+    if (!program)
+        throw std::runtime_error("Could not create GL program");
     try {
-        for (const auto& [type, file] : {std::pair{GL_VERTEX_SHADER, "fullscreen.vert"}, std::pair{GL_FRAGMENT_SHADER, fragment}}) {
+        for (const auto& [type, file] : {std::pair{GL_VERTEX_SHADER, vertex}, std::pair{GL_FRAGMENT_SHADER, fragment}}) {
             std::ifstream input(directory / file);
             if (!input) {
                 throw std::runtime_error(std::string("Missing shader: ") + file);
@@ -19,6 +21,8 @@ inline GLuint loadProgram(GlApi& gl, const std::filesystem::path& directory, con
             const std::string source = buffer.str();
             const char* pointer = source.c_str();
             const GLuint shader = gl.CreateShader(type);
+            if (!shader)
+                throw std::runtime_error("Could not create GL shader");
             gl.ShaderSource(shader, 1, &pointer, nullptr);
             gl.CompileShader(shader);
             GLint success = 0;
@@ -65,6 +69,10 @@ inline std::filesystem::path shaderDirectory() {
     if (!base) {
         throw std::runtime_error("SDL_GetBasePath failed");
     }
+#ifdef COURSE_SHADER_FALLBACK_SUBDIRECTORY
+    return std::filesystem::path(base) / COURSE_SHADER_FALLBACK_SUBDIRECTORY;
+#else
     return std::filesystem::path(base) / "shaders";
+#endif
 }
-} // namespace fog
+} // namespace volume54

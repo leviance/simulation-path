@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { loadProjectCatalog, workspace } from "./project-catalog.mjs";
+import { checkpointSelection } from "./checkpoint-selection.mjs";
 import {
   projectPackageDigest,
   projectPackageFiles,
@@ -19,11 +20,12 @@ function walkFiles(directory, prefix = "") {
   return output.sort((left, right) => left.localeCompare(right));
 }
 
+const catalog = loadProjectCatalog();
+const { projects, scoped } = checkpointSelection(catalog, process.argv.slice(2));
 const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), "simulation-path-packages-"));
 const manifestPath = path.join(workspace, "public", "downloads", "manifest.json");
 const manifest = readPackageManifest(manifestPath);
 const manifestDigests = manifest.projects ?? {};
-const projects = loadProjectCatalog();
 let failures = 0;
 try {
   for (const project of projects) {
@@ -73,7 +75,7 @@ try {
       }
     }
   }
-  const expectedManifestKeys = projects.map((project) => project.sourceDirectory).sort();
+  const expectedManifestKeys = catalog.map((project) => project.sourceDirectory).sort();
   const actualManifestKeys = Object.keys(manifestDigests).sort();
   if (JSON.stringify(actualManifestKeys) !== JSON.stringify(expectedManifestKeys)) {
     failures += 1;
@@ -84,4 +86,8 @@ try {
 }
 
 if (failures > 0) process.exit(1);
-process.stdout.write("All project ZIP files match their source directories.\n");
+process.stdout.write(
+  scoped
+    ? `Project ${projects[0].id}: ZIP file list and bytes match its source directory.\n`
+    : "All project ZIP files match their source directories.\n",
+);

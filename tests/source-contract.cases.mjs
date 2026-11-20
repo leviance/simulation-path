@@ -3,6 +3,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { isCourseTextFile } from "../scripts/course-file-types.mjs";
+import { courseSourceTemplates } from "../scripts/course-source-templates.mjs";
 import { isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
 import {
   workspace,
@@ -73,6 +74,7 @@ test("instructional C++ snippets stay aligned with the checkpoint they teach", a
           projectNumber === 51 ||
           projectNumber === 52 ||
           projectNumber === 53 ||
+          projectNumber === 54 ||
           projectNumber >= 56
           ? isContiguousCodeExcerpt(snippet, source)
           : isTokenSubsequence(snippet, source),
@@ -181,12 +183,11 @@ test("every published project ends with complete runnable source", async () => {
       /href="#ma-hoan-chinh-cua-project"/i,
       `Missing final source table-of-contents link: ${project}`,
     );
-    const sourceDirectory = path.join(workspace, "examples", projectDirectoryBySlug.get(project));
-    const templateFiles = await walkFiles(path.join(sourceDirectory, "source-template"));
+    const descriptor = projectCatalog.find((entry) => entry.slug === project);
     const sourcePaths = [
       "CMakeLists.txt",
-      ...templateFiles.map((file) =>
-        path.relative(path.join(sourceDirectory, "source-template"), file).replaceAll("\\", "/"),
+      ...Array.from(courseSourceTemplates(workspace, descriptor).keys(), (file) =>
+        file.replaceAll("\\", "/"),
       ),
       "tests/tests.cpp",
     ];
@@ -292,11 +293,12 @@ test("C++ examples keep logical statements on one line and scroll horizontally",
 });
 
 test("teaching source favors explicit control flow over compressed expressions", async () => {
-  const templateFiles = (await walkFiles(path.join(workspace, "examples"))).filter(
-    (file) =>
-      /source-template[\\/].*\.(?:cpp|hpp)$/.test(file) &&
-      !file.includes(`${path.sep}_deps${path.sep}`),
-  );
+  const templateFiles = new Set();
+  for (const descriptor of projectCatalog) {
+    for (const { sourcePath } of courseSourceTemplates(workspace, descriptor).values()) {
+      if (/\.(?:cpp|hpp)$/.test(sourcePath)) templateFiles.add(sourcePath);
+    }
+  }
   for (const file of templateFiles) {
     const source = await readFile(file, "utf8");
     assert.doesNotMatch(
@@ -361,17 +363,16 @@ test("C++ lessons use four-space indentation and complete source is documented",
     }
   }
 
-  for (const directory of publishedProjectDirectories) {
+  for (const descriptor of projectCatalog) {
+    const directory = descriptor.sourceDirectory;
     const project = path.join(workspace, "examples", directory);
-    const templateRoot = path.join(project, "source-template");
-    const teachingFiles = (await walkFiles(templateRoot)).filter((file) =>
+    const teachingFiles = [...courseSourceTemplates(workspace, descriptor).keys()].filter((file) =>
       /\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx|inl)$/.test(file),
     );
     const testsSource = await readFile(path.join(project, "tests", "tests.cpp"), "utf8");
     const cmake = await readFile(path.join(project, "CMakeLists.txt"), "utf8");
 
-    for (const file of teachingFiles) {
-      const relative = path.relative(templateRoot, file);
+    for (const relative of teachingFiles) {
       const source = await readFile(path.join(project, "final", relative), "utf8");
       assertFourSpaceIndentation(source, `${directory}/${relative}`);
       assert.match(source, /^\s*\/\/ /m, `${directory}/${relative} needs explanatory comments`);
@@ -466,10 +467,7 @@ test("download packages are present and non-empty ZIP files", async () => {
 test("generated C++ snapshots are clean and progressive", async () => {
   for (const project of projectCatalog) {
     const directory = path.join(workspace, "examples", project.sourceDirectory);
-    const templateRoot = path.join(directory, "source-template");
-    const relativeFiles = (await walkFiles(templateRoot)).map((file) =>
-      path.relative(templateRoot, file),
-    );
+    const relativeFiles = [...courseSourceTemplates(workspace, project).keys()];
     const checkpoints = Array.from(
       { length: project.checkpointCount },
       (_, index) => `checkpoints/${String(index + 1).padStart(2, "0")}`,

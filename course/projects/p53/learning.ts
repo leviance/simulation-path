@@ -2,154 +2,204 @@ import type { ProjectLearningAssets } from "../../learning/types";
 const data = {
   guides: {
     "p53-l01": {
-      focus: "Từ phantom scalar đến ảnh mức xám và streaming texture SDL3.",
-      expected: "Nhìn thấy lát cắt đầu tiên",
-      files: ["include/model.hpp", "include/display.hpp", "include/view.hpp", "src/main.cpp"],
+      focus: "Tự tính scalar của một mặt XY rồi đưa RGBA qua streaming texture SDL3.",
+      expected: "Mở cửa sổ rồi vẽ lát cắt đầu tiên",
+      files: [
+        "include/platform.hpp",
+        "include/field.hpp",
+        "include/slice.hpp",
+        "include/display.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Chạy bộ khung SDL",
-          explanation:
-            "Starter mở window và renderer; Bài 01 thêm texture, không bắt đầu bằng một mảng 3D chưa nhìn được.",
+          title: "Chạy shell trước",
+          explanation: "Platform kiểm từng tài nguyên SDL; destructor dọn cả khi khởi tạo dở dang.",
         },
         {
-          title: "Lấy mẫu một mặt phẳng",
+          title: "Tính một lát sphere",
           explanation:
-            "Giữ z tại một giá trị, đổi pixel centre sang x/y world rồi tính phantom bất đối xứng.",
+            "Mỗi pixel thành một điểm world trên XY; z cố định, x/y đi theo cột/hàng ảnh.",
         },
         {
-          title: "Ghi RGBA theo pitch",
+          title: "Đưa ảnh ra cửa sổ",
           explanation:
-            "Ghi đủ mỗi row vào texture streaming, unlock rồi RenderTexture; CPU giữ bản ảnh riêng.",
+            "colorImage tạo RGBA; upload tôn trọng pitch và drawUi trình bày texture trong vòng lặp.",
         },
       ],
     },
     "p53-l02": {
-      focus: "Khối 64³/128³ thật, tâm mẫu, spacing và địa chỉ x nhanh nhất.",
-      expected: "Lưu cả khối, không chỉ tính một ảnh",
-      files: ["include/volume.hpp", "include/model.hpp", "src/main.cpp"],
+      focus: "Tạo mảng Float32 3D, định nghĩa tâm mẫu và điền năm dataset tổng hợp.",
+      expected: "Lưu cả khối thay vì tính riêng từng ảnh",
+      files: ["include/grid.hpp", "include/volume.hpp", "include/field.hpp", "include/state.hpp"],
       steps: [
         {
-          title: "Cấp phát volume thật và giữ nguyên extent",
+          title: "Đặt quy ước world",
           explanation:
-            "Bắt đầu 64³ (2 MiB), cuối mở 128³ (16 MiB); spacing dương hữu hạn và extent giữ nguyên.",
+            "Origin ở mặt dưới, tâm voxel cộng nửa spacing; kích thước world không phụ thuộc N.",
         },
         {
-          title: "Đổi index sang world centre",
-          explanation:
-            "Gốc world ở giữa box; tâm mẫu là lower+(index+0.5)*spacing. Đừng coi tâm voxel là góc ô.",
+          title: "Đếm và cấp phát an toàn",
+          explanation: "Kiểm ba kích thước trước khi nhân; x là chỉ số thay đổi nhanh nhất.",
         },
         {
-          title: "Lấy nearest từ dữ liệu thật",
-          explanation:
-            "Phantom được lấy mẫu một lần; ảnh sau đó đọc volume. Ramp kiểm hướng và stride độc lập.",
+          title: "Tạo dataset thật",
+          explanation: "buildVolume điền mọi voxel; load chuẩn bị thành công rồi mới thay state.",
         },
       ],
     },
     "p53-l03": {
-      focus: "XY/XZ/YZ, trục giữ cố định và tỉ lệ hình theo physical spacing.",
-      expected: "Ba mặt cắt của cùng một khối",
-      files: ["include/model.hpp", "include/display.hpp", "include/layout.hpp", "src/main.cpp"],
+      focus: "Dùng một bảng trục cho XY/XZ/YZ và giữ aspect của ảnh theo mm.",
+      expected: "Nhìn một điểm từ ba hướng",
+      files: ["include/sampling.hpp", "include/slice.hpp", "include/layout.hpp", "include/ui.hpp"],
       steps: [
         {
-          title: "Đặt tên các trục trong mỗi view",
+          title: "Đọc từ volume",
           explanation:
-            "XY giữ z, XZ giữ y, YZ giữ x; quy ước toán rõ ràng, không gọi là radiology convention.",
+            "Nearest đổi world về chỉ số, kiểm outside trước khi kẹp trong vùng nửa voxel biên.",
         },
         {
-          title: "Dùng ba thanh cắt độc lập",
+          title: "Dựng ba ảnh",
           explanation:
-            "XY/XZ/YZ lần lượt giữ z/y/x; khối cắt mở dùng lại ba ảnh ấy, không tạo volume khác hoặc đo bằng mesh vỏ.",
+            "axesFor chỉ rõ trục ngang, dọc và giữ cố định; row ảnh đi ngược chiều world dọc.",
         },
         {
-          title: "Fit ảnh bằng physical extent",
+          title: "Giữ đúng tỉ lệ",
           explanation:
-            "Kích thước thật là count*spacing; ảnh dùng cùng scale hai chiều và để viền thừa không bị méo.",
+            "sliceRect fit physical extent vào panel; vòng tròn không bị méo thành ellipse vì spacing.",
         },
       ],
     },
     "p53-l04": {
-      focus: "Tách scalar, window/level, brightness và byte màu.",
-      expected: "Làm rõ chi tiết mà không sửa dữ liệu",
-      files: ["include/display.hpp", "src/main.cpp"],
+      focus: "Tính tám đóng góp ở một điểm và hiểu rõ chính sách tại biên.",
+      expected: "Đi giữa các tâm voxel bằng trilinear",
+      files: ["include/sampling.hpp", "include/ui.hpp", "tests/tests.cpp"],
       steps: [
         {
-          title: "Chọn một cửa sổ scalar",
-          explanation: "Level là tâm, width là khoảng giá trị; giá trị ngoài cửa sổ bị clamp.",
+          title: "Đọc nearest trước",
+          explanation: "Tại tâm phải đúng giá trị đã lưu; tie chọn chỉ số lớn hơn.",
         },
         {
-          title: "Đổi scalar thành mức xám",
+          title: "Tính tám trọng số",
           explanation:
-            "Brightness nằm trong [0,1], quantize thành 0..255 sau sampling; không nội suy byte màu thay scalar.",
+            "Phần lẻ của q quyết định tích ba trọng số; các trường hợp singleton/biên có trọng số zero hợp lệ.",
         },
         {
-          title: "Đối chiếu inspector",
+          title: "Kiểm một đáp số biết trước",
           explanation:
-            "Inspector luôn hiện scalar gốc; W/S/A/D chỉ đổi display mapping, histogram không thay.",
+            "Fixture x+10y+100z cho đáp số 50.5 tại (1,0,3); bảng inspector cộng đúng tám đóng góp.",
         },
       ],
     },
     "p53-l05": {
-      focus: "Tâm mẫu, tám voxel, bảy lerp và cách xử lý nửa voxel sát mép.",
-      expected: "Đi giữa hai lát bằng trilinear",
-      files: ["include/sampling.hpp", "include/display.hpp", "src/main.cpp"],
+      focus: "Tách scalar khỏi window/level, palette và histogram.",
+      expected: "Làm rõ chi tiết mà không sửa dữ liệu",
+      files: ["include/display.hpp", "include/analysis.hpp", "include/state.hpp", "include/ui.hpp"],
       steps: [
         {
-          title: "Tìm hai centre quanh mỗi tọa độ",
-          explanation: "Chặn ngoài physical box trước khi clamp grid coordinate về vùng centre.",
+          title: "Ánh xạ khoảng scalar",
+          explanation:
+            "Level là tâm, width là độ rộng; kết quả bị kẹp trong [0,1] chỉ ở đường hiển thị.",
         },
         {
-          title: "Nội suy bốn cạnh x, hai cạnh y rồi một cạnh z",
-          explanation:
-            "Bảy lerp dùng tám voxel; bảng trọng số minh họa cùng phép tính và tổng trọng số bằng một.",
+          title: "Đếm dữ liệu gốc",
+          explanation: "Histogram có 64 bin và phải đếm đủ N³; trục cao log không đổi số voxel.",
         },
         {
-          title: "So nearest và trilinear",
+          title: "Đổi ảnh, không đổi volume",
           explanation:
-            "L bật sampling; PageUp/Down dời 0.1 voxel; cùng world point có thể cho hai scalar khác nhau.",
+            "RGBA có thể được tính lại mà không fill volume hoặc làm thay đổi giá trị đo.",
         },
       ],
     },
     "p53-l06": {
-      focus: "Crosshair đồng bộ, pointer input, keyboard và quét có thể dừng.",
-      expected: "Chọn một điểm, hiểu cả ba mặt cắt",
-      files: ["include/layout.hpp", "include/input.hpp", "include/view.hpp", "src/main.cpp"],
+      focus: "Nối renderer/camera được cung cấp với ảnh lát cắt hiện có.",
+      expected: "Đặt ba lát cắt trở lại trong khối 3D",
+      files: [
+        "include/camera.hpp",
+        "include/context-mesh.hpp",
+        "include/raster.hpp",
+        "include/state.hpp",
+        "include/ui.hpp",
+      ],
       steps: [
         {
-          title: "Dùng một cursor cho cả ba view",
+          title: "Nhận biết scaffold",
           explanation:
-            "Một Point world là state duy nhất, mỗi view giữ một thành phần làm cut coordinate.",
+            "Vỏ iso 0.12/stride 2 chỉ định hướng; giải thích phần cung cấp sẵn, không giấu thuật toán đo trong renderer.",
         },
         {
-          title: "Đổi pixel trong ảnh sang world",
-          explanation:
-            "Chỉ pick fitted image, giữ trục cut; kéo vùng khối thì orbit camera. Ctrl+mũi tên không dời probe.",
+          title: "Cắt một góc",
+          explanation: "Vỏ được clip theo probe; ba cap dùng cùng scalar image với các ảnh phẳng.",
         },
         {
-          title: "Cho quét chạy có giới hạn",
+          title: "Giữ phép đo độc lập camera",
           explanation:
-            "Mở paused, scan tối đa 4 voxel/s và dt clamp 0.1; tới lát cuối dừng, blur/reset hủy drag.",
+            "Camera basis chỉ đi vào projection/rasterizer, không đi vào sampler hoặc probe.",
         },
       ],
     },
     "p53-l07": {
-      focus: "Phím V, affine-field oracle, CTest Debug/Release và source tải về.",
-      expected: "Chứng minh trình xem đang đọc đúng dữ liệu",
-      files: ["include/diagnostics.hpp", "tests/tests.cpp", "src/main.cpp"],
+      focus: "Nối pointer/phím vào một probe world và nhả capture đúng vòng đời.",
+      expected: "Chọn một điểm, cập nhật cả ba view",
+      files: ["include/layout.hpp", "include/input.hpp", "include/ui.hpp"],
       steps: [
         {
-          title: "Kiểm shape và index độc lập",
-          explanation:
-            "Dataset không cubic bắt lỗi tráo trục; test centre, corner và biên ngoài riêng.",
+          title: "Bỏ vùng letterbox",
+          explanation: "Đổi event sang logical rồi chỉ pick bên trong actual image rectangle.",
         },
         {
-          title: "Dùng affine field làm oracle",
+          title: "Chọn hai tọa độ",
           explanation:
-            "Trilinear phải tái tạo trường tuyến tính ở miền centre; không dùng lại phantom sampler làm expected.",
+            "Giữ trục cố định của view đang chọn; hai tọa độ mới tự dời crosshair ở hai view còn lại.",
         },
         {
-          title: "Bàn giao bản chạy độc lập",
+          title: "Tách loại thao tác",
           explanation:
-            "V audit hữu hạn; CTest không window, không assert bị Release bỏ; kiểm desktop riêng theo README.",
+            "Drag scene đổi camera; drag ảnh đổi probe; blur/reset/preset hủy kéo và dừng quét.",
+        },
+      ],
+    },
+    "p53-l08": {
+      focus: "Đặt giới hạn thời gian quét và cache theo đúng nguồn dữ liệu phụ thuộc.",
+      expected: "Quét lát liên tục mà không tính lại mọi thứ",
+      files: ["include/state.hpp", "include/platform.hpp", "include/input.hpp", "src/main.cpp"],
+      steps: [
+        {
+          title: "Quét theo thời gian",
+          explanation:
+            "12 mm/s, chặn dt của animation ở 0.05 s, tới biên thì dừng; Pause không khóa camera.",
+        },
+        {
+          title: "Tách raw và RGBA",
+          explanation:
+            "Raw chỉ phụ thuộc dataset, tọa độ cắt và sampler; đổi window không resample volume.",
+        },
+        {
+          title: "Chỉ upload phần thay đổi",
+          explanation:
+            "Streaming texture chỉ được ghi khi ảnh đổi; nạp dataset dùng trạng thái tạm trước khi commit.",
+        },
+      ],
+    },
+    "p53-l09": {
+      focus: "Đối chiếu fixture và app thật, build Debug/Release rồi kiểm source tải về.",
+      expected: "Kiểm chứng rồi chạy toàn bộ project",
+      files: ["include/analysis.hpp", "tests/tests.cpp", "src/main.cpp"],
+      steps: [
+        {
+          title: "Kiểm độc lập",
+          explanation: "Đáp số fixture/affine không lấy từ chính hàm nội suy đang kiểm.",
+        },
+        {
+          title: "Kiểm bản cuối",
+          explanation:
+            "N³, histogram, đối xứng và display không sửa data; CTest vẫn chạy trong Release.",
+        },
+        {
+          title: "Tách bằng chứng",
+          explanation:
+            "Audit toán, smoke có điểm dừng và chuột/phím thật là ba việc khác nhau; mở final từ ZIP độc lập.",
         },
       ],
     },
@@ -157,61 +207,61 @@ const data = {
   references: {
     "p53-l01": [
       {
-        label: "SDL_LockTexture và pitch",
+        label: "SDL_LockTexture: streaming pixels và pitch",
         href: "https://wiki.libsdl.org/SDL3/SDL_LockTexture",
         kind: "SDL API",
       },
     ],
     "p53-l02": [
       {
-        label: "Voxel centre và physical spacing",
+        label: "Tâm voxel và physical spacing",
         href: "/glossary#volume-voxel-centre",
         kind: "Thuật ngữ",
       },
     ],
     "p53-l03": [
       {
-        label: "Voxel centre và physical spacing",
-        href: "/glossary#volume-voxel-centre",
+        label: "Ba mặt cắt vuông góc",
+        href: "/glossary#volume-orthogonal-slices",
         kind: "Thuật ngữ",
       },
     ],
     "p53-l04": [
-      {
-        label: "Voxel centre và physical spacing",
-        href: "/glossary#volume-voxel-centre",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Window/level",
-        href: "/glossary#volume-window-level",
-        kind: "Thuật ngữ",
-      },
+      { label: "Trilinear và tám trọng số", href: "/glossary#volume-trilinear", kind: "Thuật ngữ" },
     ],
     "p53-l05": [
       {
-        label: "Voxel centre và physical spacing",
-        href: "/glossary#volume-voxel-centre",
-        kind: "Thuật ngữ",
-      },
-      {
-        label: "Trilinear sampling",
-        href: "/glossary#volume-trilinear",
+        label: "Window/level của scalar",
+        href: "/glossary#volume-window-level",
         kind: "Thuật ngữ",
       },
     ],
     "p53-l06": [
       {
-        label: "Voxel centre và physical spacing",
-        href: "/glossary#volume-voxel-centre",
+        label: "Vỏ tham chiếu và phép đo từ volume",
+        href: "/glossary#volume-context-surface",
         kind: "Thuật ngữ",
       },
     ],
     "p53-l07": [
       {
-        label: "Voxel centre và physical spacing",
-        href: "/glossary#volume-voxel-centre",
-        kind: "Thuật ngữ",
+        label: "SDL_ConvertEventToRenderCoordinates",
+        href: "https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates",
+        kind: "SDL API",
+      },
+    ],
+    "p53-l08": [
+      {
+        label: "Streaming texture: ghi khi dữ liệu thay đổi",
+        href: "https://wiki.libsdl.org/SDL3/SDL_LockTexture",
+        kind: "SDL API",
+      },
+    ],
+    "p53-l09": [
+      {
+        label: "SDL_RenderReadPixels: ảnh chương trình thật",
+        href: "https://wiki.libsdl.org/SDL3/SDL_RenderReadPixels",
+        kind: "SDL API",
       },
     ],
   },

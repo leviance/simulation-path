@@ -1,64 +1,61 @@
-# Project 58 — Khối đất 16×16×16
+# Project 58 — Bờ suối đầu tiên
 
-Xây một voxel chunk từ dữ liệu block, không chỉ vẽ một cube lớn rồi gọi đó là thế giới voxel. Bạn đi từ cube chạy được đến mảng 4096 Block ID, mesh sáu mặt cho mỗi ô đặc, đất bậc thang, camera trực giao và bảng lớp cắt.
+Hãy tìm một chỗ có cát, đất và cỏ trên cùng một bờ rồi bước tới gốc cây. Khi xoay người, bạn đang nhìn cùng 4.096 ô từ một vị trí khác, không xoay một mô hình quanh tâm. Đây là mảnh đầu của tuyến khám phá thế giới voxel bằng C++20/SDL3; không cần Minecraft, mod, texture tải ngoài hay công cụ xây nhà.
 
-## Thử sức trước khi đọc lời giải
+## Thử trước khi đọc
 
-Tự làm bản nhỏ trong 2–3 giờ: hiển thị một chunk 16³, xoay/zoom được, đọc từng lớp và đối chiếu tọa độ với dữ liệu. Chưa cần texture, noise hoặc tối ưu mặt khuất. Một block phải sinh 12 triangles; hai block kề nhau vẫn 24. Sau đó so với từng checkpoint để tìm chỗ mình hiểu khác.
+Từ một window chạy được, hãy thử tự vẽ một viên đá, đưa nó vào mảng 16³, rồi lấp thành hai bờ đất có một dòng nước liền giữa chúng. Cây phải mọc trên mặt đất, góc nhìn có phối cảnh. Tự dự đoán số tam giác của một, hai và 4.096 block trước khi bật F1. Thời gian học tham khảo 8–11 giờ, chưa tính cài đặt.
 
-Prerequisites: Project 01–05 (SDL/framebuffer/input), 10–17 (3D, rasterizer, Z-buffer); Project 53 giúp đọc dữ liệu theo lớp. Thời gian dự kiến 12–16 giờ, tùy mức quen với rasterizer CPU.
+## Học bằng bản C++ của mình
 
-## Bảy bước học
+Bộ khung có cửa sổ, framebuffer, raster, camera cơ bản và atlas. Bạn tự tạo mesh đầu tiên, đưa block vào cột, xây bờ suối và điều khiển mắt.
 
-| Checkpoint | Kết quả |
-| --- | --- |
-| starter | Window/renderer/texture, event loop, clear nền |
-| 01 | Một cube có sáu quad, 12 triangles; framebuffer lên texture |
-| 02 | Block ID, layout x/z/y, một Stone tại (7,7,7), bảng y=7 |
-| 03 | Mesh từ mọi block đặc; full=4096 block/49152 triangles |
-| 04 | Preset single/full/steps/empty, vật liệu Grass/Dirt/Stone |
-| 05 | Orbit, zoom có giới hạn, pause và thí nghiệm tắt depth |
-| 06 | Cắt mesh ở y<=slice và đọc ô bảng x/z, không sửa dữ liệu |
-| 07/final | Pure audit, CTest và bộ source hoàn chỉnh |
-
-`source-template/` là nguồn chuẩn trong repository. `starter/`, `checkpoints/`, `final/` và CMake được sinh bằng `npm run generate:course` tại gốc website. ZIP đã chứa đầy đủ snapshot và build độc lập, không cần Node hoặc server để chạy C++.
-
-## Build/run/test
-
-```bash
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 20
-```
-
-Windows/Visual Studio 2022: chạy `build/Debug/project_58_final.exe`. Final là target mặc định. BUILD_CHECKPOINTS thêm starter và project_58_checkpoint_1…7. Single-config generator dùng CMAKE_BUILD_TYPE và executable trực tiếp trong build. SDL3 3.4.8 được FetchContent bằng checksum; luôn link SDL3::SDL3. Không cần assets, SDL_ttf hoặc OpenGL.
-
-Hidden smoke có giới hạn, không chạy benchmark hoặc auto rotation:
+Giải nén ZIP vào thư mục riêng. Ngay cạnh `CMakeLists.txt`, chạy:
 
 ```powershell
-$smoke = Start-Process -FilePath ".\build\Debug\project_58_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
-if (-not $smoke.WaitForExit(30000)) {
-    $smoke.Kill()
-    throw "Smoke quá 30 giây."
-}
-if ($smoke.ExitCode -ne 0) { throw "Smoke thất bại." }
+cmake -S . -B build-work -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_58_work --parallel 1
+.\build-work\Release\project_58_work.exe
 ```
 
-## Điều khiển final
+CMake chỉ tạo `work/` từ `starter/` khi thư mục này chưa tồn tại. Sửa `work/include/trail/` xuyên suốt các bài, rồi build lại **cùng target**. Với Ninja/Make, mở `./build-work/project_58_work`. Các mục **Vị trí sửa và mã cần viết** trong bài cho biết chỗ chèn, đoạn cần thay và đoạn mới. Những dòng `// [snippet …]` là chú thích của sách, không phải lệnh C++.
 
-P đổi preset, R reset, drag/arrow xoay, +/− zoom, Space chạy/dừng xoay, D bật/tắt depth, PageUp/PageDown đổi lớp y, click/drag bảng chọn ô, V chạy pure audit, Escape thoát. Focus loss dừng và nhả capture. Native debug text dùng ASCII; bài học và Canvas bằng tiếng Việt.
+Chỉ sau bài cuối mới build `project_58_tests` trong `build-work` rồi chạy `ctest --test-dir build-work -C Release --output-on-failure --timeout 30`. Ở cấu hình này tests đọc **work/include**, không đọc `final/`. Đừng lấy một lần chạy checkpoint hoặc CTest của bản mẫu làm kết quả bài làm.
 
-## Các quy ước cần giữ
+## Chạy bản mẫu để đối chiếu
 
-- y lên; ô nguyên 0..15; mỗi block cạnh một unit, chunk trải [0,16] trên mỗi trục.
-- Air=0, Grass=1, Dirt=2, Stone=3; index=x+16*(z+16*y). ID không phải màu/vertex index.
-- CPU trực giao 320×240; depth lớn hơn gần hơn, clear -infinity. Barycentric tại tâm pixel; không back-face hoặc neighbor-face culling.
-- N block đặc sinh 6N quad/12N triangles/36N lượt vertex. Full=49152 triangles; steps height=4+x/4 có 1408 block/16896 triangles; empty=0.
-- Slice chỉ cắt mesh, không sửa Chunk; bảng đọc y=slice, mesh giữ y<=slice. Chọn bảng không phải ray picking.
-- Chỉ raster khi dirty; tối đa 4096 block, 49152 triangles, 76800 pixel. Không xem thời gian một lượt là benchmark GPU.
+```powershell
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_58_final --parallel 1
+.\build\Release\project_58_final.exe
+```
 
-Pure tests kiểm index/bounds, normals, counts, slice bất biến, camera và depth độc lập draw order. CTest không mở SDL. Kiểm desktop riêng: preset, resize/high-DPI/letterbox, drag/keyboard, focus, pause/reset và chọn mép bảng.
+Dùng CMake 3.24+, C++20 và SDL 3.4.8 đã khóa trong CMakeLists. Windows mặc định build bằng Visual Studio 2022; với generator single-config, thêm `-DCMAKE_BUILD_TYPE=Release` lúc cấu hình và chạy `./build/project_58_final`. Mọi snapshot trong ZIP đều đủ header, không có đường dẫn ngược về repository.
 
-Project 59 tiếp tục bằng loại mặt tiếp giáp, Project 60 mới ray phá/đặt block. Các phần đó chưa nằm trong source này.
+| Bài | Thay đổi nhìn thấy |
+| --- | --- |
+| 1 | Bầu trời trống có thêm một viên đá với 6 mặt. |
+| 2 | Viên đá được đọc từ ô (7,7,7) chứ không còn là hình vẽ rời. |
+| 3 | Khối 16³ đặc giữ đủ 49.152 tam giác, kể cả bên trong. |
+| 4 | Bờ cát, dòng nước tĩnh và cây làm mốc thay cho khối đặc. |
+| 5 | Tự đi lại bằng WASD và nhìn bằng chuột hoặc phím. |
+| 6 | H mở bảng lớp; PageUp/PageDown đổi y mà không khoét đất. |
+| 7 | V kiểm các fixture; final ghép tất cả bước trên. |
+
+## Điều khiển và kiểm chứng
+
+- Nhấn vào viewport để bắt chuột. WASD di chuyển, Q/E hạ/nâng, mũi tên nhìn; Escape trả chuột, Escape lần nữa đóng cửa sổ. R trở lại vị trí ban đầu. Đây là camera tự do trong một section, chưa phải nhân vật có trọng lực.
+- 1 bờ suối, 2 viên đá, 3 toàn đặc, 4 toàn Air. F1 xem bộ đếm, H xem lớp, V kiểm hình học. Tắt các lớp phụ để quan sát cảnh sạch.
+- Đi sát bờ, quay lại; bộ đếm mesh không đổi. Họa tiết pixel tự thiết kế lặp theo từng block. Nước ở đây đứng yên; dòng và sóng được học riêng tại Project 63.
+- Chạy cả Debug và Release. Smoke chỉ kiểm ứng dụng mở và xuất một khung hình, không thay kiểm chuột/phím.
+
+```powershell
+cmake --build build --config Debug --target project_58_tests --parallel 1
+ctest --test-dir build -C Debug --output-on-failure --timeout 15
+cmake --build build --config Release --target project_58_tests --parallel 1
+ctest --test-dir build -C Release --output-on-failure --timeout 15
+.\build\Release\project_58_final.exe --smoke
+.\build\Release\project_58_final.exe --capture streambank.png
+```
+
+Source: `src/main.cpp` mở vòng lặp SDL. `include/trail/blocks.hpp` giữ địa chỉ; `bank.hpp` tạo cảnh; `surface.hpp` dựng mesh; `camera.hpp`, `raster.hpp` và `materials.hpp` đưa thế giới lên ảnh. Xem `tests/tests.cpp` để đối chiếu tọa độ âm, mesh chưa tối ưu và near plane.

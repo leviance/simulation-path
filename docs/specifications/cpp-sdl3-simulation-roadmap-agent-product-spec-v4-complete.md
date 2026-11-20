@@ -227,14 +227,14 @@ AI Agent tự thiết kế curriculum để đưa người học từ kiến th�
 55. **Máy X-ray ảo: tia xuyên các lớp vật liệu và tạo ảnh detector** — Synthetic phantom air/soft/dense tạo ảnh grayscale detector.
 56. **Máy CT đồ chơi: quay nguồn quanh vật thể và dựng sinogram** — Phantom→projections→sinogram→reconstruction toy.
 57. **Mưa photon ngẫu nhiên: Monte Carlo hấp thụ, tán xạ và thoát** — Heatmap/histogram absorb/scatter/escape có uncertainty.
-58. **Khối đất 16×16×16: dựng voxel chunk đầu tiên** — Một chunk voxel có camera và block types/colors.
-59. **Ẩn các mặt nằm trong đất: giảm mạnh số tam giác voxel** — Toggle naive/visible-face cho thấy triangle count giảm.
-60. **Chọn, phá và đặt block bằng tia từ camera** — Highlight, left-remove, right-add kiểu Minecraft.
-61. **Gộp tường voxel thành mảng lớn: Greedy Meshing** — Triangle count giảm mạnh ở vùng phẳng.
-62. **Thế giới “vô tận”: tải và gỡ chunk khi người chơi di chuyển** — Đi liên tục, chunks xuất hiện trước và giải phóng sau.
-63. **Đồi núi tự sinh: tạo terrain procedural không seam giữa chunks** — Terrain có đồi/thung lũng, deterministic, liền biên.
-64. **Minecraft-like sandbox tối giản của riêng bạn** — Một voxel sandbox chơi được 10–20 phút với debug stats.
-65. **Bảng điều khiển cho Simulation: Pause, Reset, Checkbox và Slider tự vẽ bằng C++** — Một panel tương tác có Label, Button, Checkbox và Slider; ví dụ slider thay gravity/temperature, Pause dừng simulation và Reset khởi tạo lại trạng thái.
+58. **Bờ suối đầu tiên: bước vào một chunk voxel 16×16×16** — Một mảnh đất có cỏ, đá, cát và thân cây với họa tiết pixel tự thiết kế; nhìn từ tầm mắt người đi bộ.
+59. **Vách đá bên suối: bỏ những mặt bị đất che kín** — Đổi cách dựng cùng một vách đá, đếm các mặt biến mất mà không làm thủng bờ suối.
+60. **Ống ngắm địa hình: đọc cảnh vật bằng một tia nhìn** — Nhìn vào cảnh để đọc vật liệu, tọa độ và khoảng cách; mẫu dò không làm thay đổi thế giới.
+61. **Rừng đón gió: gộp mặt đất, giữ gốc cây và cỏ đứng yên** — Greedy meshing giảm hình học tĩnh; một cơn gió chung đi qua ngọn cỏ và từng tán cây.
+62. **Theo con đường xa: tải chunk theo bước chân dưới tầng mây trôi** — Đi hàng trăm block qua vùng được nạp và gỡ; mây vẫn trôi liên tục khi camera qua biên.
+63. **Từ núi tuyết ra đại dương: sinh địa hình, dòng sông và sóng biển** — Theo một con sông từ hẻm núi qua rừng, bãi cát đến vùng nước mở có sóng nhìn được từ bờ.
+64. **Một ngày trong thế giới voxel: đi qua rừng, bão tuyết và bờ biển** — Đi bộ trong một thế giới do C++/SDL3 dựng; nhìn tuyết rơi theo gió, mây trôi, sóng chạy và ánh sáng đổi theo Mặt Trời.
+65. **Bảng điều khiển cho Simulation: Pause, Reset, Checkbox và Slider tự vẽ bằng C++** — Điều khiển đàn Boids của Project 28: chỉnh bán kính tìm hàng xóm, lực tách đàn và bật lớp quan sát của một con chim.
 66. **Cây giao diện sống qua nhiều frame: Panel chứa Button, Slider và Label** — Một cây UI được giữ qua nhiều frame; Panel sở hữu các control, phép vẽ và hit-test dùng chung hình học, thêm/xóa nhánh không làm hỏng input.
 67. **Bố cục hộp tự động: xếp control từ trên xuống mà không ghi tọa độ tay** — Một engine box layout một cột tự tính kích thước và vị trí control từ margin, border, padding, gap; hỗ trợ Panel lồng nhau và resize.
 68. **Đọc `panel.html` và biến nó thành cây UI** — Load và reload file panel.html thật; tokenizer/parser tạo cây UI nhiều cấp rồi dùng engine của Project 66–67 để vẽ và tương tác.
@@ -269,7 +269,7 @@ Project 01–72 vẫn thuộc lộ trình chính; Project 73–78 vẫn tùy ch�
 | Toán cho đồ họa 3D và giả lập — 41–45 | Cần vector/camera/graphics, dùng lại compute/scan từ 37–39 khi cần; không bắt học vật lý nguyên tử, MD hoặc vải 40. 41 tạo mesh từ công thức; 42 morph particle qua sampling/ánh xạ/nội suy; 43 khám phá fractal; 44 nặn scalar field và trích mesh; 45 dùng field orbital được cung cấp để dựng Atomic Playground. Toán mới được giải thích tại thay đổi nhìn thấy trong app, mỗi gói chạy độc lập. |
 | Trường và chất lưu — 46–51 | 46 là cellular automata độc lập. 47–49 đi theo dữ liệu trên lưới; 50–51 đi theo hạt. SPH cần integration và tìm hàng xóm; không bắt hoàn thành các công cụ 41–45. Trước 51 phải mở rộng grid, kernel và đơn vị sang 3D. |
 | Ray và tạo ảnh — 52–57 | 52 cần vector/camera; 53 cần mảng 3D và nội suy; 54 thêm graphics GPU. 55–56 nối tích phân theo tia với detector/reconstruction; 57 thêm xác suất. Không bắt học chất lưu trước. |
-| Voxel — 58–64 | Cần mesh, graphics GPU và camera; học phần ray cần thiết trước 60. Không yêu cầu SPH, Atomic Playground hoặc CT. Dùng một voxel application xuyên suốt bảy mốc. |
+| Cảnh quan voxel — 58–64 | Dùng mesh, camera, ray, cấu trúc không gian, sampling và hạt để dựng một thế giới C++/SDL3 có thể đi bộ khám phá. Gió, nước, mây, tuyết và ánh sáng có chuyển động đọc được. Không cần Minecraft, SPH hoặc CT. |
 | UI/runtime — 65–72 | Cần input, cách vẽ và một simulation chạy được, có thể chọn 02 hoặc 22. Phát triển cùng control panel qua tree, layout, markup, style, binding và script. |
 | Cầu nối — 73–78 | Học xen kẽ theo Mục 3.3. Không biến project tùy chọn thành prerequisite bắt buộc mà không cung cấp đường học thay thế. |
 
@@ -287,7 +287,7 @@ Các yêu cầu dưới đây xác định bối cảnh sử dụng và phần �
 - **41–45:** mỗi project là một công cụ đồ họa tương tác có câu hỏi gợi tò mò. 41 biến công thức thành mesh có thể chỉnh/xuất; 42 lấy mẫu mesh và biến hình triệu hạt; 43 dùng phép lặp/DE để khám phá fractal 3D; 44 chỉnh trường số bằng cọ rồi trích bề mặt; 45 dùng density orbital được cung cấp để dựng cloud triệu điểm và công cụ đo/quan sát. Chia sẻ scaffold/primitive có giải thích, không chia một bài vật lý thành năm project. Bắt đầu từ kết quả nhìn/thao tác được, dùng lỗi hình và chi phí để dẫn vào toán/code, không kết thúc ở bảng công thức hoặc benchmark trống.
 - **46–51:** cát/nước cellular ở 46 không phải solver chất lưu. 47 đặt câu hỏi nguồn nhiệt/điều kiện biên; 48 dùng tracer để thấy tác dụng của trường; 49 là công cụ khói Eulerian; 50 mở cách biểu diễn Lagrangian bằng SPH; 51 mở rộng SPH sang 3D/GPU. Không gọi mô hình sau là bản chính xác hơn của mô hình trước chỉ vì trông đẹp hơn.
 - **52–57:** 52 là công cụ hình học dùng lại cho picking; 53–56 dùng chung phantom và các phép quan sát khi hợp lý. Slice của volume, volume compositing, attenuation X-ray và reconstruction CT là bốn công việc khác nhau. 57 là nhánh lấy mẫu ngẫu nhiên, có uncertainty; không gọi kết quả là công cụ chẩn đoán hoặc mô phỏng lâm sàng đã được kiểm định.
-- **58–64:** phát triển một voxel world: chunk → visible faces → edit → greedy mesh → streaming → terrain → sandbox. Cung cấp dataset nhiều chunk đủ rõ trước khi dạy procedural terrain; không giấu terrain generator chưa học trong streaming. 62 có thể dùng job queue có ngân sách mỗi frame; thread pool 75 là mở rộng, không phải prerequisite ngầm.
+- **58–64:** một chuyến đi xuyên bảy mốc: bờ suối → bỏ mặt khuất → ống ngắm chỉ đọc → greedy mesh và gió trong rừng → streaming dưới mây trôi → địa hình theo seed cùng nước sông và sóng biển → đi bộ giữa thời tiết, ánh sáng và tuyết. 62 dùng họ chunk mẫu trước khi dạy bộ sinh ở 63; job queue có ngân sách mỗi frame là đủ, không bắt học thread pool 75.
 - **65–72:** cùng control panel cho simulation thật. 65 là điều khiển trực tiếp; 66 là ownership/input; 67 là measure/arrange; 68 là markup; 69 là cascade/style; 70 là flex layout; 71 là binding; 72 là runtime script. Giữ riêng 66/67 và 69/70. Mỗi mốc phải cho thấy một thay đổi sử dụng được, không chỉ một cây parse hoặc bảng thuộc tính.
 - **73–78:** là công cụ bổ trợ có sản phẩm riêng. Không ép mọi bài cầu nối thành một game; kết quả quan trọng là dự đoán được hành vi, quan sát dữ liệu và kiểm chứng đúng khái niệm.
 
@@ -4272,505 +4272,83 @@ Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bà
 ---
 
 
-# PHẦN XI — VOXEL WORLD 3D KIỂU MINECRAFT
+# PHẦN XI — KHÁM PHÁ THẾ GIỚI VOXEL
 
-## Project 58 — Khối đất 16×16×16: dựng voxel chunk đầu tiên
+Sản phẩm xuyên suốt là **một thế giới 3D chạy độc lập bằng C++20/SDL3**, mang phong cách khối vuông và họa tiết pixel do người học tự thiết kế. Không cần cài Minecraft, xuất world cho Java/Bedrock, dùng game engine hoặc tải bộ asset của trò chơi. Bảy mốc làm giàu cùng một thế giới; mỗi ZIP vẫn tự chạy. Canvas chỉ tách một ý để thử.
 
-**Mức tham vọng trực quan:** 3D World / playable showcase
+**Chuyến đi làm chuẩn.** Trên seed mẫu, từ bãi cát người đi bộ thấy sóng ngoài khơi. Đi ngược sông, họ gặp rừng lá rộng, đồi đá và một hẻm sâu dẫn lên rừng thông phủ tuyết. Có chỗ dừng nhìn mây, ngọn cỏ hoặc lửa trại. Các điểm đến nằm trên cùng bản đồ, có lối đi liền mạch; đổi preset hay dịch chuyển tức thời không thay cho chuyến đi. Giữ góc nhìn thứ nhất, WASD và mouse-look; có trọng lực/va chạm khi đi bộ ở bản cuối. Fly chỉ là công cụ khảo sát.
 
-### Đề bài / mục tiêu sản phẩm
+**Tương tác với đất không phải mục tiêu.** Không có đặt/phá block, đào đất, chặt cây, bàn chế tạo, inventory, undo/redo công trình hoặc lưu các thay đổi của block, kể cả như một bước bắt buộc trong bài thực hành. Thay vào đó người học di chuyển, quan sát, đọc vật liệu và khoảng cách, so sánh thuật toán, dừng thời gian và đổi giờ/gió để kiểm tra hình ảnh. Đọc bản đồ không được làm nó thay đổi.
 
-Lưu chunk 3D và sinh mesh cho block.
+**Cảnh động có nơi chốn và một đồng hồ chung.** Dòng sông có hướng chảy; đại dương có đỉnh và hõm sóng thật trên bề mặt. Một trường gió trong tọa độ world tác động tới cỏ, tán lá và tuyết với mức đáp ứng khác nhau. Mây ở cao trôi chậm; Mặt Trời chuyển động kéo theo hướng chiếu sáng và màu trời. Pause giữ thời gian cảnh, không khóa camera. Tắt debug vẫn phải nhìn ra từng hiện tượng. Không đòi SPH đại dương, động lực học khí quyển, solver cho từng lá hay chiếu sáng toàn cục; nếu cách làm vượt quá mục tiêu dạy học thì nêu biến thể đơn giản và giới hạn của nó.
 
-### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
+### Chuẩn chung cho bảy mốc
 
-Một chunk voxel có camera và block types/colors.
+- C++/SDL3 là sản phẩm chính, viewport phối cảnh chiếm phần lớn cửa sổ. Chế độ quan sát sạch tách khỏi lớp chẩn đoán; chất liệu đọc được từ gần, hình khối và đường chân trời đọc được từ xa.
+- Mỗi bài bắt đầu từ bản chạy được của bài trước: dự đoán điều sắp thấy, thay đổi mã, thử làm sai, rồi đối chiếu với một kết quả quan sát được và một phép đo. Không ép số bài giống nhau.
+- Tách dữ liệu block, mesh đã dựng và trạng thái biến thiên theo thời gian. Gió, sóng và việc quay đầu nhìn không được bắt dựng lại toàn bộ địa hình ở mỗi khung hình. Tách chi phí sinh chunk, dựng mesh, cập nhật hiệu ứng và vẽ khi đo.
+- Giữ seed, vị trí và góc nhìn khi so A/B. Có phép kiểm release/debug, timeout hữu hạn; ghi cấu hình, tải thật và giới hạn máy, không cam kết một FPS chung. Ảnh chụp không chứng minh được chuyển động.
 
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+## Project 58 — Bờ suối đầu tiên: bước vào một chunk voxel 16×16×16
 
-### Phạm vi chức năng tối thiểu bắt buộc
+**Sản phẩm.** Đứng trên bờ một con suối nhỏ, nhìn xuống thấy hạt đá và bờ cát, ngẩng lên thấy mặt cỏ khác mặt đất ở sườn bậc. Đây mới là một mảnh của bản đồ; chưa gọi nó là địa hình vô tận.
 
-- **Một viewport 3D perspective chiếm phần chính cửa sổ.**
-- Chunk thật lưu tối thiểu 16×16×16 voxel.
-- Mesh các block trong không gian 3D với camera có depth.
-- Scene phải là nền móng của một thế giới mà người chơi sẽ đi vào, không phải biểu đồ/minimap.
+**Người học tự xây.** Đi từ cửa sổ chạy được và một viên đá tới mảng 16³ = 4.096 ô, loại Air và các vật liệu, sáu mặt/cube, texture pixel và camera phối cảnh. Một block là một đơn vị world; nêu rõ trục đứng, tọa độ ô nửa mở và chính sách biên. Mắt có vị trí riêng, không xoay cả khối đất thay cho người quan sát. Mặt nước có thể còn tĩnh ở mốc này.
 
-### Quy mô / độ phức tạp tối thiểu
+**Nghiệm thu.** Cảnh có cao/thấp, đất và khoảng không. Đi gần một block thấy nó lớn dần; quay đầu không làm đổi dữ liệu hay dựng lại mesh. Chunk rỗng không có mặt, một block có 6 quad/12 tam giác, hai block chạm nhau vẫn có 24 tam giác. Khối đặc có 49.152 tam giác ở bản chưa tối ưu. Kiểm đủ 4.096 index, sáu biên và quy tắc từ tọa độ âm sang chunk/local. Bảng lớp cắt là công cụ phụ, không thay viewport.
 
-- Chunk storage tối thiểu 16³ = 4096 cells; nhiều block solid/air tạo được cấu trúc địa hình nhỏ.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+## Project 59 — Vách đá bên suối: bỏ những mặt bị đất che kín
 
-### Tương tác bắt buộc
+**Sản phẩm.** Từ một chỗ đứng trên bờ suối, chuyển giữa hai cách vẽ vách đá. Vách không đổi hình hay màu, nhưng số tam giác giảm rõ. Đi vòng ra sau hoặc nhìn vào một hốc đá để tìm chỗ thuật toán có thể bỏ nhầm mặt.
 
-- Camera 3D có mouse look/orbit ở giai đoạn đầu; nên ưu tiên FPS/free camera để chuẩn bị Project 60–64.
+**Người học tự xây.** Chỉ phát sinh mặt cần thấy theo cặp vật liệu ở hai ô kề nhau. Tách quy tắc với Air, hai block đặc và đường tiếp giáp với nước khỏi back-face culling của renderer. Công bố cách xử lý chunk hàng xóm chưa có dữ liệu; khi nó sẵn sàng, dựng lại hai mép liên quan chứ không dựng lại cả cảnh.
 
-### Mức đồ họa / trình bày tối thiểu
+**Nghiệm thu.** A/B trên cùng dữ liệu, camera và ánh sáng; khối 16³ đặc cô lập từ 49.152 còn 3.072 tam giác; kiểm thêm hốc rỗng, hai chunk sát nhau và một mép nước. Đối chiếu tập mặt theo ô/hướng/vật liệu với bộ đếm độc lập. Một mặt mất hoặc thừa ở đường nối là lỗi dù tổng triangle gần đúng.
 
-- Đây phải là một **thế giới 3D thực sự**, viewport chiếm phần lớn cửa sổ, camera/player nằm trong thế giới và có thể di chuyển qua không gian.
-- Terrain/chunks phải có depth, màu/material phân biệt, fog/sky/background hoặc depth cue tương đương để thế giới có cảm giác không gian; không yêu cầu photorealistic nhưng không được giống minimap/debug grid.
-- Ở các project cuối nhánh, cần có 'playable/showcase mode' sạch: HUD gọn, camera first-person/free, world trải rộng hơn viewport, chuyển chunk/terrain mượt ở mức hợp lý.
-- Debug chunk bounds, meshing, triangle count và ray hit là overlay có thể bật/tắt, không phải giao diện duy nhất.
-- Chunk phải được nhìn trong một **viewport 3D perspective lớn**, không phải minimap. Camera nên free/FPS để chuẩn bị cho thế giới thật.
-- Chunk phải có địa hình nhỏ đủ cao/thấp/air/solid để nhìn như một phần world, không phải khối 16³ đặc.
+## Project 60 — Ống ngắm địa hình: đọc cảnh vật bằng một tia nhìn
 
-### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
+**Sản phẩm.** Từ tầm mắt người đứng trên bờ, nhìn vào gỗ, đá hoặc bờ cát để đọc tên vật liệu, tọa độ ô và khoảng cách đến mặt. Ngẩng lên trời thì ống ngắm báo không gặp gì. Có thể tắt hoàn toàn ống ngắm để tiếp tục đi.
 
-- Chunk storage
-- Naive mesher
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
+**Người học tự xây.** Tạo tia từ vị trí mắt qua tâm ngắm phối cảnh. Cắt tia với miền có dữ liệu, sau đó dùng 3D DDA đi lần lượt qua các ô. Hiện mặt đầu tiên gặp, normal và đoạn đường đã xét khi bật chẩn đoán. Quy định rõ có lấy mặt nước hay nhìn xuyên nước, xử lý chunk chưa sẵn sàng mà không nhìn xuyên dữ liệu chưa biết. Không có lệnh sửa block hoặc ô xem trước để đặt vật liệu.
 
-### Không được coi là hoàn thành nếu
+**Nghiệm thu.** WASD/mouse-look di chuyển được vài chục block trong khu mẫu. So kết quả gần nhất với ray/AABB từng ô trên cảnh nhỏ: hit, miss, sát biên âm, thành phần hướng bằng 0, cạnh/góc, mắt trong ô và giới hạn tầm nhìn. Đổi góc nhìn làm đổi kết quả khi cần; ngắm nhiều lần không đổi hash dữ liệu, số mặt hoặc số lần dựng mesh.
 
-- **Một minimap 2D/isometric chứa vài chục ô vuông/cube.**
-- Một ảnh/render tĩnh chỉ xoay object như model viewer.
-- Một cube duy nhất được subdivide bằng texture nhưng không có voxel storage 3D.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+## Project 61 — Rừng đón gió: gộp mặt đất, giữ gốc cây và cỏ đứng yên
 
-### Acceptance Criteria
+**Sản phẩm.** Từ bìa rừng, bật lưới tam giác để thấy cả vạt đất phẳng được vẽ bằng ít mặt hơn mà hoa văn vẫn lặp theo từng block. Tắt lưới để nhìn cơn gió đi qua bãi cỏ, rồi chạm tới tán cây phía sau.
 
-- Fixture empty/solid/single block kiểm indexing và mesh; tọa độ âm/biên chunk có quy tắc ánh xạ rõ.
-- Camera/model/world conventions nối với các bài trước; đủ 16³ cells thật và scene có solid/air, không thay bằng list cube rời không có chunk storage.
-- Indexing đúng biên.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
+**Người học tự xây.** Dựng mask theo mặt/hướng/vật liệu; gộp các ô tương thích thành hình chữ nhật. Giữ tỉ lệ UV và đường phân vật liệu. Không gộp nhầm hình học tĩnh với phần lá sẽ uốn. Gió lấy mẫu theo vị trí world và thời gian cảnh; gốc cỏ hoặc gốc thân có trọng số 0, ngọn và đầu cành có trọng số lớn hơn. Cho chỉnh hướng, cường độ và dừng thời gian để soi một thân cây từ nhiều phía.
 
-### Quyền tự quyết của AI Agent khi xây giáo trình
+**Nghiệm thu.** Bung các quad ra tập mặt đơn vị để đối chiếu với Project 59 trên tường phẳng, hai vật liệu, checkerboard, khoang rỗng và mép chunk; khối đặc đồng chất còn 6 quad. So meshing/upload/draw trên cùng cảnh có hàng nghìn block. Theo dõi một gốc và một ngọn tại hai thời điểm: gốc bất động, ngọn đổi vị trí khi có gió; hai vị trí cách nhau dọc hướng gió không lắc đồng pha như hai tấm bìa. Gió bằng 0 thì hết uốn; không tái dựng mesh đất theo từng nhịp gió.
 
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+## Project 62 — Theo con đường xa: tải chunk theo bước chân dưới tầng mây trôi
 
----
+**Sản phẩm.** Đi vài trăm block theo lối men sông mà không chuyển màn hình. Nhìn một cụm mây trôi phía trên ngọn cây: đứng yên nó vẫn đi; quay đầu rồi nhìn lại, nó không bám vào màn hình và không nhảy khi bước qua biên chunk.
 
-## Project 59 — Ẩn các mặt nằm trong đất: giảm mạnh số tam giác voxel
+**Người học tự xây.** Ghép các mẫu địa hình biết trước quanh người quan sát; chưa dùng bộ sinh procedural của 63 như một hộp đen. Tách tọa độ world/chunk/local, cả phần âm; ưu tiên chunk ở gần, xếp hàng nạp/dựng theo ngân sách mỗi frame, có vùng đệm trước khi gỡ. Lớp mây dùng tọa độ trên một tầng trời, dịch theo thời gian và gió tầng cao; qua biên chunk không đặt lại đồng hồ.
 
-**Mức tham vọng trực quan:** 3D World / playable showcase
+**Nghiệm thu.** Ít nhất 5×5 cột chunk hoặc ngân sách tương đương đang hoạt động; đi qua gốc âm, đi xa, quay về và đổi hướng lúc còn job chờ. Kết quả cũ không làm sống lại chunk đã huỷ; không tích luỹ buffer qua nhiều vòng. Ghi số resident/queued/ready/unloaded thật và chi phí theo frame. Chụp tại cùng camera hai thời điểm để thấy mây dịch; dừng giờ và quay camera để phân biệt chuyển động của mây với chuyển động của mắt.
 
-### Đề bài / mục tiêu sản phẩm
+## Project 63 — Từ núi tuyết ra đại dương: sinh địa hình, dòng sông và sóng biển
 
-Chỉ sinh face nếu neighbor là air/outside.
+**Sản phẩm.** Cùng một seed, đi qua rừng thông tuyết, hẻm đá sâu, thung lũng, rừng lá rộng, bãi cát rồi ra biển. Sông thấp dần về cửa biển; đứng yên bên một tảng đá thấy vệt nước đi xuôi dòng, còn ở ngoài khơi nhìn được đỉnh sóng truyền ngang. Họa tiết cỏ, gỗ, đá, cát và tuyết là tài sản tự thiết kế.
 
-### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
+**Người học tự xây.** Lấy mẫu độ cao, nhiệt độ/độ ẩm hoặc tiêu chí vùng tương đương trong tọa độ world; nhiều section 16³ xếp theo chiều cao thay vì nhốt núi trong 16 block. Đặt cây theo neo ổn định từ seed để tán không bị cụt hay nhân đôi ở đường nối; phân biệt hình dáng cây lá rộng và cây thông. Máng sông có hướng dòng, đường bờ và vùng biển mở. Dịch chi tiết nước sông theo hướng tiếp tuyến và thời gian. Với biển, dùng một vài sóng có hướng trên **mặt lưới nước riêng**: độ cao và pháp tuyến cùng xuất phát từ hàm sóng. Không cuộn một ảnh xanh rồi gọi đó là đỉnh sóng.
 
-Toggle naive/visible-face cho thấy triangle count giảm.
+**Nghiệm thu.** Trên seed chuẩn, các vùng nối nhau và có đường đi thực tế; đi qua hàng chục chunk, đổi thứ tự nạp hay quay lại vẫn thấy cùng địa hình/cây. Kiểm lấy mẫu cùng tọa độ tại hai mép, kể cả tọa độ âm. Với camera đứng yên và một mốc bờ cố định, đo hai điểm theo dòng sông và hai pha ở biển. Giá trị ở hai chunk sát nhau trùng tại cùng vị trí/thời điểm; Pause giữ nguyên mặt nước, sóng không làm thay đổi block. Chỉ sản phẩm có đủ cả sông lẫn mặt biển chuyển động mới đạt mốc này.
 
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+## Project 64 — Một ngày trong thế giới voxel: đi qua rừng, bão tuyết và bờ biển
 
-### Phạm vi chức năng tối thiểu bắt buộc
+**Sản phẩm.** Một chuyến đi bộ 10–20 phút trong thế giới voxel tự xây. Đứng trên bãi cát nhìn một con sóng chạy vào bờ, rồi đi ngược dòng sông qua rừng và hẻm núi cho tới nơi tuyết rơi giữa những cây thông. Một đốm lửa trại ở chỗ nghỉ làm mốc trong ánh chiều. Dù buông chuột và đứng yên, người xem vẫn thấy cảnh vật chuyển động.
 
-- Cùng chunk 3D Project 58.
-- Mesher chỉ tạo face tiếp giáp air.
-- Có số liệu triangle/face count trước và sau.
+**Người học tự xây.** Ghép di chuyển nhìn từ mắt người, trọng lực và va chạm với địa hình, streaming, ống ngắm chỉ đọc, nước và gió từ các mốc trước. Tuyết dùng pool hạt hữu hạn trong vùng quanh người xem nhưng vị trí hạt là world-space: bông cũ không dính theo camera; gió ngang và trọng lực tác động đúng hướng, ra khỏi vùng tuyết thì ngừng phát. Lửa/than sáng trong phạm vi bếp, tia lửa tàn theo tuổi, không lan cháy rừng. Một đồng hồ cảnh điều khiển sóng, gió, tuyết, mây và chu kỳ Mặt Trời. Từ cùng hướng Mặt Trời tính vị trí trên trời, độ sáng/màu trời và mặt hướng sáng của vách đá; kéo giờ sáng/trưa/chiều hay Pause để so sánh. Không chỉ dịch một hình tròn trên nền trời bất biến.
 
-### Quy mô / độ phức tạp tối thiểu
+**Nghiệm thu bắt buộc.**
 
-- Chunk tối thiểu 16³ với solid regions đủ lớn để thấy giảm mesh.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
-
-### Tương tác bắt buộc
-
-- Camera 3D di chuyển quanh/qua chunk; toggle naive vs culled.
-
-### Mức đồ họa / trình bày tối thiểu
-
-- Đây phải là một **thế giới 3D thực sự**, viewport chiếm phần lớn cửa sổ, camera/player nằm trong thế giới và có thể di chuyển qua không gian.
-- Terrain/chunks phải có depth, màu/material phân biệt, fog/sky/background hoặc depth cue tương đương để thế giới có cảm giác không gian; không yêu cầu photorealistic nhưng không được giống minimap/debug grid.
-- Ở các project cuối nhánh, cần có 'playable/showcase mode' sạch: HUD gọn, camera first-person/free, world trải rộng hơn viewport, chuyển chunk/terrain mượt ở mức hợp lý.
-- Debug chunk bounds, meshing, triangle count và ray hit là overlay có thể bật/tắt, không phải giao diện duy nhất.
-- Toggle naive/culled phải cho phép nhìn cùng một chunk/world region; UI hiển thị triangle count trước/sau.
-- Kết quả hình ảnh phải giống nhau về bề mặt nhìn thấy dù mesh bên trong khác.
-
-### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
-
-- Visible-face mesher
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
-
-### Không được coi là hoàn thành nếu
-
-- Chỉ ẩn face bằng back-face culling GPU.
-- Không kiểm tra neighbor voxel khi generate mesh.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
-
-### Acceptance Criteria
-
-- Fixture solid chunk, cavity và hai chunk kề nhau kiểm đúng tập mặt theo occupancy; GPU back-face culling không thay visible-face meshing.
-- Không có lỗ hoặc mặt trùng tại biên chunk khi neighbor có/không có dữ liệu theo chính sách công bố.
-- Outer surface không lỗ.
-- Internal faces biến mất.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
-
-### Quyền tự quyết của AI Agent khi xây giáo trình
-
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
-
----
-
-## Project 60 — Chọn, phá và đặt block bằng tia từ camera
-
-**Mức tham vọng trực quan:** 3D World / playable showcase
-
-### Đề bài / mục tiêu sản phẩm
-
-Bắn ray qua crosshair và traverse voxel grid để chọn block.
-
-### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
-
-Highlight, left-remove, right-add kiểu Minecraft.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
-
-### Phạm vi chức năng tối thiểu bắt buộc
-
-- Người dùng **đứng/di chuyển trong scene 3D** và nhìn từ camera.
-- Crosshair/ray từ camera chọn block trong voxel grid.
-- Left remove/right add block và remesh chunk.
-
-### Quy mô / độ phức tạp tối thiểu
-
-- World/chunk phải đủ lớn để user có thể tiến/lùi vài chục block.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
-
-### Tương tác bắt buộc
-
-- WASD + mouse look; click phá/đặt.
-
-### Mức đồ họa / trình bày tối thiểu
-
-- Đây phải là một **thế giới 3D thực sự**, viewport chiếm phần lớn cửa sổ, camera/player nằm trong thế giới và có thể di chuyển qua không gian.
-- Terrain/chunks phải có depth, màu/material phân biệt, fog/sky/background hoặc depth cue tương đương để thế giới có cảm giác không gian; không yêu cầu photorealistic nhưng không được giống minimap/debug grid.
-- Ở các project cuối nhánh, cần có 'playable/showcase mode' sạch: HUD gọn, camera first-person/free, world trải rộng hơn viewport, chuyển chunk/terrain mượt ở mức hợp lý.
-- Debug chunk bounds, meshing, triangle count và ray hit là overlay có thể bật/tắt, không phải giao diện duy nhất.
-- Camera first-person/free phải đặt người dùng **trong** world/chunk; crosshair hoặc selection outline phải rõ.
-- Phá/đặt block phải cập nhật mesh ngay để người dùng cảm nhận interaction kiểu voxel sandbox.
-
-### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
-
-- Voxel ray traversal
-- Block editing
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
-
-### Không được coi là hoàn thành nếu
-
-- Orbit một mô hình chunk bên ngoài như 3D editor đơn giản.
-- Click trực tiếp lên minimap 2D để sửa block.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
-
-### Acceptance Criteria
-
-- Grid traversal kiểm ray trên mặt/cạnh/góc, hướng có thành phần 0, tọa độ âm, origin trong block và giới hạn reach.
-- Phá đúng first solid hit, đặt ở ô kề đúng normal; cập nhật mesh chunk lân cận khi sửa biên, không đặt block xuyên player nếu policy cấm.
-- Không skip block theo ray.
-- Place cell đúng mặt hit.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
-
-### Quyền tự quyết của AI Agent khi xây giáo trình
-
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
-
----
-
-## Project 61 — Gộp tường voxel thành mảng lớn: Greedy Meshing
-
-**Mức tham vọng trực quan:** 3D World / playable showcase
-
-### Đề bài / mục tiêu sản phẩm
-
-Gộp các face coplanar cùng material thành quad lớn.
-
-### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
-
-Triangle count giảm mạnh ở vùng phẳng.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
-
-### Phạm vi chức năng tối thiểu bắt buộc
-
-- Voxel terrain 3D thật.
-- Greedy meshing gộp coplanar faces.
-- Visual equivalence với visible-face mesher.
-
-### Quy mô / độ phức tạp tối thiểu
-
-- Benchmark trên dense chunk/chunks với hàng nghìn blocks.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
-
-### Tương tác bắt buộc
-
-- Camera 3D; toggle mesher/debug wireframe.
-
-### Mức đồ họa / trình bày tối thiểu
-
-- Đây phải là một **thế giới 3D thực sự**, viewport chiếm phần lớn cửa sổ, camera/player nằm trong thế giới và có thể di chuyển qua không gian.
-- Terrain/chunks phải có depth, màu/material phân biệt, fog/sky/background hoặc depth cue tương đương để thế giới có cảm giác không gian; không yêu cầu photorealistic nhưng không được giống minimap/debug grid.
-- Ở các project cuối nhánh, cần có 'playable/showcase mode' sạch: HUD gọn, camera first-person/free, world trải rộng hơn viewport, chuyển chunk/terrain mượt ở mức hợp lý.
-- Debug chunk bounds, meshing, triangle count và ray hit là overlay có thể bật/tắt, không phải giao diện duy nhất.
-- Greedy meshing phải được trình diễn trên địa hình/structures đủ lớn để thấy các mặt lớn được gộp, không chỉ test 2–3 blocks.
-- Có overlay triangle/quad count và toggle so sánh với visible-face mesher.
-
-### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
-
-- Greedy mesher
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
-
-### Không được coi là hoàn thành nếu
-
-- Chỉ merge draw calls nhưng vẫn giữ mọi small quad.
-- Tối ưu trên một vài block demo không có terrain surface.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
-
-### Acceptance Criteria
-
-- Greedy mesh khớp tập mặt và vật liệu của visible-face reference trên fixture phẳng, checkerboard, cavity và cạnh chunk.
-- Chỉ gộp mặt có thuộc tính tương thích; benchmark tách meshing time, upload và draw, không đánh đổi mất hình học để giảm triangle.
-- Geometry tương đương visible-face test chunks.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
-
-### Quyền tự quyết của AI Agent khi xây giáo trình
-
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
-
----
-
-## Project 62 — Thế giới “vô tận”: tải và gỡ chunk khi người chơi di chuyển
-
-**Mức tham vọng trực quan:** 3D World / playable showcase
-
-### Đề bài / mục tiêu sản phẩm
-
-Quản lý chunk quanh camera; generate/load/unload theo khoảng cách.
-
-### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
-
-Đi liên tục, chunks xuất hiện trước và giải phóng sau.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
-
-### Phạm vi chức năng tối thiểu bắt buộc
-
-- **Một thế giới 3D gồm nhiều chunk quanh người chơi, lớn hơn phạm vi nhìn của một chunk.**
-- Chunk được tạo/load khi player tiến tới và unload khi đi xa.
-- Player/camera di chuyển liên tục qua biên chunk mà không chuyển sang màn hình khác.
-- Debug overlay hiển thị chunk coordinate/state.
-
-### Quy mô / độ phức tạp tối thiểu
-
-- Giữ ít nhất vùng 5×5 hoặc 7×7 chunks quanh player (hoặc budget tương đương); world coordinates phải liên tục.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
-
-### Tương tác bắt buộc
-
-- **WASD + mouse-look theo góc nhìn người chơi trong thế giới 3D.**
-- Có thể đi ít nhất hàng trăm block theo một hướng để quan sát streaming.
-
-### Mức đồ họa / trình bày tối thiểu
-
-- Đây phải là một **thế giới 3D thực sự**, viewport chiếm phần lớn cửa sổ, camera/player nằm trong thế giới và có thể di chuyển qua không gian.
-- Terrain/chunks phải có depth, màu/material phân biệt, fog/sky/background hoặc depth cue tương đương để thế giới có cảm giác không gian; không yêu cầu photorealistic nhưng không được giống minimap/debug grid.
-- Ở các project cuối nhánh, cần có 'playable/showcase mode' sạch: HUD gọn, camera first-person/free, world trải rộng hơn viewport, chuyển chunk/terrain mượt ở mức hợp lý.
-- Debug chunk bounds, meshing, triangle count và ray hit là overlay có thể bật/tắt, không phải giao diện duy nhất.
-- Người chơi phải đi liên tục qua nhiều chunk trong một thế giới 3D; terrain/chunk xuất hiện trước hướng di chuyển và biến mất phía xa mà không đổi scene.
-- Active region phải ít nhất khoảng 5×5 chunks hoặc budget tương đương; viewport phải nhìn thấy nhiều chunks cùng lúc.
-- Debug chunk borders/status chỉ là overlay; showcase mode phải nhìn như một world 3D liên tục.
-
-### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
-
-- Chunk manager
-- Simple job queue
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
-
-### Không được coi là hoàn thành nếu
-
-- **Một bản đồ 2D/minimap vài chục block.**
-- Một chunk duy nhất được xoay bằng chuột.
-- Nhiều chunks nhưng tất cả hard-code sẵn và không load/unload theo player.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
-
-### Acceptance Criteria
-
-- Job lifecycle có loaded/queued/building/ready/unload policy; kết quả job cũ không làm sống lại chunk đã hủy hoặc thay mesh của phiên chỉnh sửa mới.
-- Di chuyển qua biên/teleport và quay lại giữ active region theo budget; số chunk/buffer không tăng vô hạn sau nhiều vòng.
-- Nếu chưa đa luồng, job queue theo frame vẫn đáp ứng streaming; nếu dùng worker thì kiểm ownership/teardown và giữ SDL/render ở thread thích hợp.
-- Không race/crash khi di chuyển nhanh.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
-
-### Quyền tự quyết của AI Agent khi xây giáo trình
-
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
-
----
-
-## Project 63 — Đồi núi tự sinh: tạo terrain procedural không seam giữa chunks
-
-**Mức tham vọng trực quan:** 3D World / playable showcase
-
-### Đề bài / mục tiêu sản phẩm
-
-Sinh heightmap/noise theo world coordinates và seed.
-
-### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
-
-Terrain có đồi/thung lũng, deterministic, liền biên.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
-
-### Phạm vi chức năng tối thiểu bắt buộc
-
-- **Terrain 3D procedural sinh từ world coordinates/seed trên nhiều chunk.**
-- Đồi, thung lũng hoặc độ cao thay đổi liên tục.
-- Không có seam tại biên chunk.
-- Player có thể đi xuyên địa hình bằng camera first-person/free camera.
-
-### Quy mô / độ phức tạp tối thiểu
-
-- Ít nhất hàng chục chunks được sinh khi di chuyển; địa hình phải trải rộng vượt viewport hiện tại.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
-
-### Tương tác bắt buộc
-
-- WASD + mouse look; seed/regenerate control; optional fly mode để quan sát.
-
-### Mức đồ họa / trình bày tối thiểu
-
-- Đây phải là một **thế giới 3D thực sự**, viewport chiếm phần lớn cửa sổ, camera/player nằm trong thế giới và có thể di chuyển qua không gian.
-- Terrain/chunks phải có depth, màu/material phân biệt, fog/sky/background hoặc depth cue tương đương để thế giới có cảm giác không gian; không yêu cầu photorealistic nhưng không được giống minimap/debug grid.
-- Ở các project cuối nhánh, cần có 'playable/showcase mode' sạch: HUD gọn, camera first-person/free, world trải rộng hơn viewport, chuyển chunk/terrain mượt ở mức hợp lý.
-- Debug chunk bounds, meshing, triangle count và ray hit là overlay có thể bật/tắt, không phải giao diện duy nhất.
-- Terrain procedural phải tạo được đường chân trời, đồi/thung lũng hoặc biến thiên độ cao đủ lớn để người chơi có cảm giác đang khám phá địa hình.
-- Ít nhất hàng chục chunks phải được sinh khi người chơi di chuyển; cùng seed tái tạo cùng world.
-- Không chấp nhận terrain phẳng có noise rất nhỏ khó nhìn thấy.
-
-### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
-
-- Toy noise
-- Terrain generator
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
-
-### Không được coi là hoàn thành nếu
-
-- Một heightmap 2D được hiển thị như minimap.
-- Một terrain mesh duy nhất không chia chunk.
-- Các chunk lặp giống nhau hoặc có seam rõ.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
-
-### Acceptance Criteria
-
-- Sampling dùng world coordinates và seed; kiểm cùng biên từ hai chunk và cùng chunk sinh ở thứ tự khác nhau, không reset noise ở mỗi local origin.
-- Đi qua hàng chục chunk cho terrain liên tục, không lặp cùng một tile bằng dịch chuyển; cache/generation budget có giới hạn.
-- Same seed→same terrain.
-- Chunk boundaries liền.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
-
-### Quyền tự quyết của AI Agent khi xây giáo trình
-
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
-
----
-
-## Project 64 — Minecraft-like sandbox tối giản của riêng bạn
-
-**Mức tham vọng trực quan:** 3D World / playable showcase
-
-### Đề bài / mục tiêu sản phẩm
-
-Tích hợp camera, terrain, block edit, collision, streaming và save/load.
-
-### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
-
-Một voxel sandbox chơi được 10–20 phút với debug stats.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
-
-### Phạm vi chức năng tối thiểu bắt buộc
-
-- **Một chương trình sandbox 3D góc nhìn người chơi, không phải model viewer.**
-- **Thế giới voxel procedural nhiều chunk mở rộng khi người chơi di chuyển.**
-- Terrain có mặt đất/đồi hoặc cấu trúc tự sinh từ seed.
-- Player có gravity/collision cơ bản và có thể đi/nhảy hoặc fly debug.
-- Có phá/đặt block bằng ray từ camera.
-- Chunk streaming + meshing + save/load thay đổi tối thiểu.
-- HUD/debug hiển thị FPS, vị trí player, chunk, triangle count.
-
-### Quy mô / độ phức tạp tối thiểu
-
-- Ở vị trí bất kỳ phải nhìn thấy một thế giới 3D rộng hơn một chunk; player đi qua nhiều chunk (ví dụ >100 blocks) trong cùng phiên chạy; tối thiểu 5×5 chunks active quanh player hoặc cấu hình tương đương.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
-
-### Tương tác bắt buộc
-
-- **WASD + mouse-look là bắt buộc.**
-- Jump/fly debug; left/right click edit block; reset/reload world.
-
-### Mức đồ họa / trình bày tối thiểu
-
-- Đây phải là một **thế giới 3D thực sự**, viewport chiếm phần lớn cửa sổ, camera/player nằm trong thế giới và có thể di chuyển qua không gian.
-- Terrain/chunks phải có depth, màu/material phân biệt, fog/sky/background hoặc depth cue tương đương để thế giới có cảm giác không gian; không yêu cầu photorealistic nhưng không được giống minimap/debug grid.
-- Ở các project cuối nhánh, cần có 'playable/showcase mode' sạch: HUD gọn, camera first-person/free, world trải rộng hơn viewport, chuyển chunk/terrain mượt ở mức hợp lý.
-- Debug chunk bounds, meshing, triangle count và ray hit là overlay có thể bật/tắt, không phải giao diện duy nhất.
-- Bản cuối phải có cảm giác như một **voxel exploration sandbox**: góc nhìn first-person/free, world procedural trải rộng, địa hình có chiều cao, sky/background/fog hoặc depth cue, block materials phân biệt.
-- Người dùng phải có thể đi ít nhất hàng trăm block, vượt qua nhiều chunk, phá/đặt block và quay lại thấy thay đổi được lưu.
-- Showcase mode phải sạch và đủ đẹp để quay video demo; debug stats/chunk bounds là toggle riêng.
-- Một scene vài chục cube, một chunk cố định hoặc orbit camera quanh model **không bao giờ** thỏa project này.
-
-### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
-
-- Voxel collision
-- Small save format
-- Integration
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
-
-### Không được coi là hoàn thành nếu
-
-- **Một mini map 2D hoặc isometric.**
-- **Một scene chỉ vài chục cube và orbit camera quanh chúng.**
-- Một chunk cố định 16³ không thể đi xa.
-- Terrain chỉ là ảnh/heightmap không có block 3D.
-- Không có first-person/free movement xuyên thế giới.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
-
-### Acceptance Criteria
-
-- Chu trình edit → đi đủ xa để unload → quay lại → thoát → chạy lại giữ đúng thay đổi theo seed/world ID; kiểm biên chunk và tọa độ âm.
-- Save/load có version, báo lỗi file hỏng và không ghi đè dữ liệu tốt khi ghi thất bại; tách terrain gốc với delta chỉnh sửa.
-- Chơi 10–20 phút theo checklist: di chuyển/nhảy, collision, edit, streaming, reset/load; ghi memory/resources và lỗi quan sát, không dùng smoke vài giây thay phiên kiểm này.
-- Chơi ổn không leak/crash rõ.
-- World edits lưu/tải.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
-
-### Quyền tự quyết của AI Agent khi xây giáo trình
-
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+- Đi bộ hàng trăm block (kiểm cả tọa độ âm) và qua đủ các điểm trên tuyến chuẩn. Không đi xuyên nền/vách, không mắc ở đường nối. Vẫn có ít nhất 5×5 cột chunk hoặc ngân sách tương đương quanh người quan sát. Có thể quay lại cùng seed và điểm mốc; nếu lưu chuyến đi thì lưu seed/vị trí/giờ, không có nhật ký sửa block.
+- So lúc lặng gió và có gió: gốc đứng yên, tán/cỏ nghiêng và bông tuyết trôi cùng chiều gió đã chọn. Tuyết rơi phía trước **và** sau các vật cản đúng theo độ sâu; số hạt sống không vượt dung lượng pool. Tắt/bật mây, đổi giờ và quan sát vách đá từ cùng camera để kiểm hướng sáng.
+- Ở bờ sông và bờ biển, giữ camera cố định rồi đổi thời gian: vệt sông đi về hạ lưu, mặt biển nổi/hạ và ánh sáng trên sóng đổi theo normal. Gió, nước, mây, lửa và tuyết hoạt động đồng thời theo vùng trong chế độ quan sát sạch; không thay bằng video, một ảnh nền hoặc màn hình chọn demo.
+- Trong một phiên thực 10–20 phút, thử dừng giờ trong khi tiếp tục quay đầu, đi xa rồi quay lại, qua biên nhiều lần, đổi thời tiết và giờ. Ghi số chunk/hạt, bộ nhớ, thời gian sinh–dựng–cập nhật–vẽ và máy/cấu hình đo. Một smoke vài giây, một ảnh đẹp hay chỉ test hàm số không thay phiên này. Báo riêng những bước chưa nghiệm thu.
 
 ---
 
@@ -4778,6 +4356,10 @@ Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bà
 # PHẦN XII — TỰ XÂY UI CHO CÁC SIMULATOR
 
 ## Project 65 — Bảng điều khiển cho Simulation: Pause, Reset, Checkbox và Slider tự vẽ bằng C++
+
+**Sản phẩm xuyên suốt Project 65–72: bàn quan sát đàn chim.** Dùng lại Boids và spatial grid của Project 28; không viết tám trình mô phỏng mới. Chọn một con chim, dừng đàn, kéo bán kính: vòng quan sát và số hàng xóm phải đổi ngay nhưng chim không dịch chuyển. Chỉnh trọng số separation rồi cho chạy mới thấy quỹ đạo đổi. Tắt lớp quan sát chỉ tắt phần vẽ, không tắt truy vấn của solver. Reset đưa đàn về cùng preset và seed.
+
+Mỗi project vẫn có executable và ZIP tự đủ. Người học lần lượt thay cách **xây bảng điều khiển**, từ các control vẽ tay, cây widget, box layout, file HTML, stylesheet và TinyFlex đến event và script. Sang Project 72, cùng một nút có thể đổi hành vi sau khi sửa script, không cần biên dịch lại. Giữ solver ở C++ và dùng quy mô đủ đọc được đàn; benchmark 10.000 cá thể đã thuộc Project 28. Trên web, ảnh hoặc video từ bản native dùng để xem thành phẩm; sơ đồ tương tác chỉ minh họa thuật toán có ích cho bài.
 
 **Mức tham vọng trực quan:** Application UI / polished integration
 
@@ -4787,7 +4369,7 @@ Xây một control panel thực sự nằm trong cùng cửa sổ SDL3 với sim
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-Một panel tương tác có Label, Button, Checkbox và Slider; ví dụ slider thay gravity/temperature, Pause dừng simulation và Reset khởi tạo lại trạng thái.
+Một panel có Label, Pause/Resume, Reset, checkbox bật vùng quan sát, slider bán kính và slider lực tách đàn. Tất cả tác động đến cùng một đàn chim trong viewport bên cạnh.
 
 Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
 
@@ -4921,7 +4503,7 @@ Dùng lại cây UI của Project 66 và thay các tọa độ đặt tay bằng
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-Một sidebar chứa tiêu đề, nhóm Pause/Reset/Gravity và phần thông tin. Thay padding, gap, chiều rộng Panel hoặc ẩn một Button khiến những control phía sau tự dịch theo. Panel con tự cao vừa nội dung, còn control vượt khung bị clip đúng.
+Một sidebar chứa tiêu đề, nhóm Pause/Reset, hai slider của đàn chim và phần thông tin. Thay padding, gap, chiều rộng Panel hoặc ẩn một Button khiến những control phía sau tự dịch theo. Panel con tự cao vừa nội dung, còn control vượt khung bị clip đúng.
 
 Bản hoàn thành phải là một ứng dụng C++/SDL3 tương tác chạy được; Canvas, ảnh chụp, code snippet và console output chỉ bổ trợ, không thay thế sản phẩm native.
 
@@ -5688,62 +5270,15 @@ Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bà
 
 ---
 
-# PHỤ LỤC A — VÍ DỤ CÁCH ĐỌC SPEC ĐÚNG: VOXEL/MINECRAFT-LIKE
+# PHỤ LỤC A — MỘT CHUYẾN ĐI KIỂM CHỨNG THẾ GIỚI VOXEL
 
-Khi Agent đọc:
+Ở Project 64, mở ứng dụng C++/SDL3, chọn seed mẫu rồi **đứng yên** trên bãi cát. Chọn một tảng đá làm mốc: đỉnh sóng phải đi qua nó, trong khi bờ đá không xê dịch. Đi tới cửa sông: những đốm sáng hoặc bọt nhỏ trôi về phía biển, không theo hướng quay của camera. Trời có mây trôi ngay cả khi không chạm chuột.
 
-> **Project 64 — Minecraft-like sandbox tối giản của riêng bạn**
+Đi bộ ngược dòng. Đến bìa rừng, xem gió đi qua đầu cỏ và tán lá; thân cây vẫn bám đất. Lên tiếp qua vách đá và hẻm sâu tới rừng thông: tuyết rơi trong không gian, bị vách đá che, đổi độ xiên theo gió. Ở chỗ dừng có bếp lửa nhỏ; lửa không phá rừng. Tăng giờ từ sáng sang chiều, nhìn cả Mặt Trời và phía được chiếu sáng của cùng một thân cây. Tạm dừng giờ rồi đi vòng ra sau cây: cảnh đứng lại nhưng vẫn có chiều sâu.
 
-Agent phải hình dung output cuối gần với:
+Đi qua nhiều biên chunk, vượt hàng trăm block và trở lại một điểm đã quan sát. So tọa độ, cây và nền đất theo seed; giờ và thời tiết có thể đã đổi. Bật lớp chẩn đoán để đọc chunk, mặt thực sự vẽ, hạt đang sống và thời gian các bước. Tắt nó đi, cảnh quan vẫn phải kể được toàn bộ câu chuyện trên.
 
-```text
-┌───────────────────────────────────────────────────────────────┐
-│ FPS 83   XYZ 142, 37, -218   Chunk 8,-14   Triangles 182k   │
-│                                                               │
-│                trời / đường chân trời                         │
-│          /\               ______                              │
-│      ___/  \____      ___/      \___                          │
-│ ____/           \____/              \_____                    │
-│        terrain voxel 3D procedural                             │
-│                                                               │
-│                    + crosshair                                 │
-│                                                               │
-│     người chơi đang đứng BÊN TRONG thế giới                   │
-│     WASD + mouse-look, gravity/jump                            │
-│     click phá/đặt block                                       │
-│                                                               │
-└───────────────────────────────────────────────────────────────┘
-```
-
-Khi đi tiếp 100–300 block:
-
-```text
-player moves
-    ↓
-cross chunk boundary
-    ↓
-new chunks generated/loaded ahead
-    ↓
-old chunks unloaded behind
-    ↓
-terrain continues with no visible seam
-```
-
-**Không được diễn giải specification thành:**
-
-```text
-[ ][ ][ ][ ]
-[ ][ ][ ][ ]   ← minimap
-[ ][ ][ ][ ]
-
-hoặc
-
-       cube cube cube
-          \ | /
-        orbit camera
-```
-
-Hai output trên có thể là **bước thử nghiệm sớm**, nhưng không phải sản phẩm cuối của Project 64.
+Một bản đồ nhìn từ trên, một khối đất chỉ xoay được, bông tuyết dán lên màn hình hoặc một ảnh biển cuộn đều **không** phải sản phẩm cuối. Không có bước “xây công trình rồi lưu block đã sửa”; đối tượng kiểm là chuyến đi và thế giới đang chuyển động.
 
 ---
 

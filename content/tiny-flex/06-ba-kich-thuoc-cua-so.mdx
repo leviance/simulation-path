@@ -1,0 +1,82 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Thử cùng một bảng ở ba độ rộng
+
+## Vấn đề cần giải quyết
+
+Nếu chỉ nhìn cửa sổ mặc định, bạn khó nhận ra layout đang dùng các vị trí cố định. Thử ba độ rộng và áp cùng một phép đo: thanh Radius ở vị trí mới có còn trả 80 px khi bấm đúng giữa không?
+
+## Hiểu ý tưởng trước khi viết code
+
+Kiểm hình bằng con số và kiểm tương tác bằng hành động độc lập. Cửa sổ hẹp được phép cắt phần tràn theo quy ước đã công bố; nó không được phép cho phần vô hình bắt đầu nhận click.
+
+<InteractiveLab demo="tiny-flex" mode="flex70-6" />
+
+## Viết code từng bước
+
+### Dùng một lượt đo và một lượt đặt
+
+Khi dirty, đo kích thước tự nhiên từ con lên cha, đặt khung từ cha xuống và đối chiếu lại focus. Một nghìn frame sạch không cần lặp lại công việc này.
+
+{/* snippet include/flex/layout.hpp#reflow */}
+
+```cpp title="include/flex/layout.hpp — Dùng một lượt đo và một lượt đặt"
+inline void reflow(Desk& d, const FlexMap& optionsById) {
+    auto& state = d.page.layout;
+    if (!state.dirty)
+        return;
+    if (optionsById.empty()) {
+        lab::ensureLayout(state, d.ui);
+        return;
+    }
+    auto& root = *state.scene.tree.root;
+    state.sizes.clear();
+    const auto size = intrinsic(root, state.scene.styles, optionsById, state.sizes);
+    placeFlex(root, {936 - state.width, 24, state.width, size.height}, state.scene.styles, optionsById, state.sizes);
+    ++state.passes;
+    state.dirty = false;
+    lab::reconcile(state.scene.tree, d.ui);
+}
+```
+
+### Đặt đáp số trước khi hỏi layout
+
+Đoạn fixture kiểm hàng rỗng, một nút, khoảng dư và thiếu chỗ. Phần còn lại của tests đổi cả row/column, bốn justify, bốn align và chạy lại với file CSS thật.
+
+{/* snippet tests/tests.cpp#golden */}
+
+```cpp title="tests/tests.cpp — Đặt đáp số trước khi hỏi layout"
+const Item fixed{40, 10, 0, 0, 0, 0, 0}, growing{20, 15, 2, 0, 0, 0, 0};
+check(line(o, 100, 50, 8, {}).empty(), "empty row");
+o.justify = Justify::Between;
+const auto single = line(o, 100, 50, 8, {fixed});
+check(single[0].x == 0 && single[0].width == 40, "single space-between starts at zero");
+auto pair = line(o, 100, 50, 8, {fixed, growing});
+check(pair[0].x == 0 && pair[1].x == 48 && pair[1].width == 52, "100 minus bases 60 and gap 8 leaves 32");
+pair = line(o, 38, 50, 8, {fixed, growing});
+check(pair[0].width == 40 && pair[1].x == 48 && pair[1].width == 20, "deficit clips; does not shrink");
+```
+
+## Ghép các phần lại
+
+Trong final, 6 cho 420, 5 cho 320, 4 cho 220. Bật X xem trục và phần nhìn thấy, tắt để dùng bàn như một công cụ bình thường. Kéo giữa Radius sau mỗi lần đổi width, sau đó chạy CTest với timeout 20 giây.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_70_final --parallel 2
+.\build\Release\project_70_final.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Nếu giới hạn kích thước *bounds* bằng clip.width cho tiện, cú kéo giữa thanh sẽ cho giá trị khác. Đọc lại phần phân biệt bounds và clip ở Project 67.
+
+## Tự kiểm tra kết quả
+
+Width hẹp cắt bớt Links; quay lại width rộng vẫn có cùng node, không có Rect âm. Hai stylesheet thay row/column thật, tương tác chuột và Tab tiếp tục đúng.
+
+## Bài tập mở rộng
+
+Đặt thêm một nút có basis 200px vào toolbar hẹp. Ghi rõ phần nào nên clip và có nên cho Tab vào một node đã bị cắt hoàn toàn.
+
+[Tải toàn bộ mã nguồn C++ và các file thực hành](/downloads/project-70-tiny-flex.zip) · [Trở lại lộ trình](/roadmap#project-70).

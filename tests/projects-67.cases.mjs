@@ -57,31 +57,28 @@ test("Project67 teaches box-model contracts, independent fixtures and bounded ve
       )
     ).join("\n");
   for (const pattern of [
-    /SDL_CreateWindow/,
-    /SDL_RenderFillRect/,
-    /BoxStyle/,
+    /Boids/,
     /cursorY/,
     /656,96/,
-    /252/,
-    /520/,
+    /352/,
+    /300/,
+    /620/,
     /158/,
-    /margin collapsing/,
     /NDEBUG/,
-    /WaitForExit\(10000\)/,
     /Project 68/,
-    /Sắp ra mắt/,
+    /workbench\/retained-input\.hpp#drag/,
   ])
     assert.match(text, pattern);
-  const lab = await readFile(path.join(workspace, "components/labs/box-layout-lab.tsx"), "utf8");
-  for (const pattern of [
-    /cancelAnimationFrame/,
-    /visibilitychange/,
-    /usePauseOnReducedMotion\(stop\)/,
-    /setPointerCapture/,
-    /releasePointerCapture/,
-    /onPointerCancel/,
-    /onLostPointerCapture/,
-    /disabled=\{reduced\}/,
+  assert.equal((text.match(/\{\/\* snippet /g) ?? []).length, 18);
+  const suite = await readFile(path.join(directory, "tests/tests.cpp"), "utf8");
+  for (const phrase of [
+    "reflow also moves the slider hit area",
+    "1000 frames retain layout",
+    "fixed bounds are not clip bounds",
   ])
-    assert.match(lab, pattern);
+    assert.ok(suite.includes(phrase));
+  const lab = await readFile(path.join(workspace, "course/projects/p67/lab.ts"), "utf8");
+  for (const take of ["desk", "boxes", "hidden", "overflow"])
+    assert.ok(lab.includes("p67-" + take + ".png"));
+  assert.doesNotMatch(text, /trọng lực|bóng rơi/i);
 });

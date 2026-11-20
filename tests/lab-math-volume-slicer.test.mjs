@@ -1,425 +1,264 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as s from "../lib/labs/volume-slicer.ts";
-import { createScanClock } from "../lib/labs/volume-slicer/scan-clock.ts";
+import * as c from "../lib/labs/volume-slicer/camera.ts";
 import {
-  defaultSliceCamera,
-  sliceCameraBasis,
-  projectSlicePoint,
-} from "../lib/labs/volume-slicer/camera.ts";
-import { keepOutsideCorner } from "../lib/labs/volume-slicer/cutaway-clip.ts";
-import { extractSurface, maxSurfaceTriangles } from "../lib/labs/volume-slicer/surface.ts";
-import { renderCutaway } from "../lib/labs/volume-slicer/cutaway-render.ts";
-const near = (a, b, t = 1e-12) =>
-  assert.ok(Number.isFinite(a) && Math.abs(a - b) <= t, `${a} != ${b}`);
-const grid = { count: [4, 3, 5], spacing: [0.2, 0.3, 0.4] };
-
-test("Presentation camera is orthonormal, z-up and independent of the measured world point", () => {
-  const point = [0.23, -0.41, 0.67];
-  const saved = [...point];
-  for (const yaw of [-2, 0, 0.72, 2]) {
-    const camera = { ...defaultSliceCamera, yaw };
-    const b = sliceCameraBasis(camera);
-    for (const v of [b.forward, b.right, b.up]) near(Math.hypot(...v), 1);
-    near(
-      b.forward.reduce((sum, v, i) => sum + v * b.up[i], 0),
-      0,
-    );
-    near(
-      b.right.reduce((sum, v, i) => sum + v * b.up[i], 0),
-      0,
-    );
-    const origin = projectSlicePoint(camera, [0, 0, 0], { x: 10, y: 20, width: 600, height: 500 });
-    near(origin.x, 310);
-    near(origin.y, 270);
-    const up = projectSlicePoint(camera, [0, 0, 1], { x: 10, y: 20, width: 600, height: 500 });
-    assert.ok(up.y < origin.y);
-    projectSlicePoint(camera, point, { x: 10, y: 20, width: 600, height: 500 });
-  }
-  assert.deepEqual(point, saved);
-});
-
-test("Cutaway clipping removes the known corner area without changing source vertices", () => {
-  const triangle = [
-    [-1, -1, 1],
-    [1, -1, 1],
-    [-1, 1, 1],
-  ].map((p) => ({ p, n: [0, 0, 1] }));
-  const saved = structuredClone(triangle);
-  const pieces = keepOutsideCorner(triangle, [0, 0, 0]);
-  const area = pieces.reduce(
-    (sum, [a, b, c]) =>
-      sum +
-      Math.abs((b.p[0] - a.p[0]) * (c.p[1] - a.p[1]) - (b.p[1] - a.p[1]) * (c.p[0] - a.p[0])) / 2,
-    0,
-  );
-  near(area, 1.5);
-  for (const piece of pieces)
-    for (const { p } of piece) assert.ok(!(p[0] > 1e-10 && p[1] < -1e-10 && p[2] > 1e-10));
-  assert.deepEqual(triangle, saved);
-  const removed = [
-    [0.2, -0.2, 0.5],
-    [0.8, -0.2, 0.5],
-    [0.2, -0.8, 0.5],
-  ].map((p) => ({ p, n: [0, 0, 1] }));
-  assert.equal(keepOutsideCorner(removed, [0, 0, 0]).length, 0);
-});
-
-test("All five context meshes are bounded; cut caps reuse scalar images and never mutate the volume", () => {
-  for (const preset of s.presets) {
-    const volume = new s.Volume(s.makeGrid(64));
-    s.fillVolume(volume, preset);
-    const saved = new Float64Array(volume.values);
-    const mesh = extractSurface(volume);
-    assert.ok(mesh.length > 0 && mesh.length < maxSurfaceTriangles, preset);
-    for (const tri of mesh)
-      for (const { p, n } of tri) {
-        assert.ok(
-          p.every(
-            (v, a) =>
-              Number.isFinite(v) &&
-              v >= s.lower(volume.grid, a) - 1e-10 &&
-              v <= -s.lower(volume.grid, a) + 1e-10,
-          ),
-        );
-        near(Math.hypot(...n), 1, 1e-10);
-      }
-    const raw = [0, 1, 2].map((v) => s.sampleImage(volume, v, [0, 0, 0], true, 7, 32));
-    const images = raw.map((values) => s.colorImage(values, { level: 0.5, width: 1 }, 7, true));
-    const whole = renderCutaway(
-      volume,
-      mesh,
-      [0, 0, 0],
-      defaultSliceCamera,
-      false,
-      180,
-      170,
-      raw,
-      images,
-      false,
-    );
-    const cut = renderCutaway(
-      volume,
-      mesh,
-      [0, 0, 0],
-      defaultSliceCamera,
-      true,
-      180,
-      170,
-      raw,
-      images,
-      false,
-    );
-    assert.equal(cut.length, 180 * 170 * 4);
-    assert.notDeepEqual(whole, cut, preset + " really changes visible geometry");
-    assert.deepEqual(volume.values, saved);
-    for (let i = 3; i < cut.length; i += 4) assert.equal(cut[i], 255);
-    assert.throws(
-      () =>
-        renderCutaway(
-          volume,
-          mesh,
-          [0, 0, 0],
-          defaultSliceCamera,
-          true,
-          1001,
-          170,
-          raw,
-          images,
-          false,
-        ),
-      RangeError,
-    );
-  }
-});
-
-test("Known 3x2x4 fixture checks eight corners, nearest tie and all six outside faces", () => {
-  const volume = new s.Volume({ count: [3, 2, 4], spacing: [1, 2, 3] });
+  meshSlabs,
+  clipPolygon,
+  maxContextTriangles,
+} from "../lib/labs/volume-slicer/context-mesh.ts";
+import { renderContext } from "../lib/labs/volume-slicer/context-render.ts";
+import { createDataset } from "../lib/labs/volume-slicer/dataset.ts";
+const near = (a, b, epsilon = 1e-10) =>
+  assert.ok(Number.isFinite(a) && Math.abs(a - b) <= epsilon, `${a} != ${b}`);
+function fixture() {
+  const grid = { size: [3, 2, 4], origin: [-1, -2, -3], spacing: [2, 4, 6] };
+  const volume = new s.Volume(grid);
   for (let z = 0; z < 4; z++)
     for (let y = 0; y < 2; y++)
-      for (let x = 0; x < 3; x++) volume.values[volume.index(x, y, z)] = 100 * z + 10 * y + x;
-  assert.equal(volume.index(2, 1, 3), 23);
-  assert.equal(volume.voxel(2, 1, 3), 312);
-  const centre = [0, 1, 2].map((a) => s.worldCoordinate(volume.grid, a, 0.5));
-  near(s.sampleLinear(volume, centre), 55.5);
-  near(s.sampleNearest(volume, centre), 111);
-  const offCentre = [0.25, 0.5, 0.75].map((fraction, a) =>
-    s.worldCoordinate(volume.grid, a, fraction),
-  );
-  near(s.sampleLinear(volume, offCentre), 80.25);
-  const low = [0, 1, 2].map((a) => s.lower(volume.grid, a));
-  const high = low.map((v) => -v);
-  near(s.sampleNearest(volume, low), 0);
-  near(s.sampleLinear(volume, high), 312);
-  for (let axis = 0; axis < 3; axis++) {
-    for (const side of [-1, 1]) {
-      const p = side === -1 ? [...low] : [...high];
-      p[axis] += side * 1e-6;
-      assert.equal(s.sampleNearest(volume, p), null);
-      assert.equal(s.sampleLinear(volume, p), null);
-    }
+      for (let x = 0; x < 3; x++) volume.set(x, y, z, x + 10 * y + 100 * z);
+  return volume;
+}
+test("P53 stores x-fastest 3D samples with anisotropic centre-to-world mapping", () => {
+  const volume = fixture();
+  assert.equal(volume.values.length, 24);
+  for (let z = 0; z < 4; z++)
+    for (let y = 0; y < 2; y++)
+      for (let x = 0; x < 3; x++) {
+        assert.equal(volume.index(x, y, z), x + 3 * y + 6 * z);
+        const point = s.centre(volume.grid, x, y, z);
+        assert.deepEqual(point, [2 * x, 4 * y, 6 * z]);
+        assert.equal(s.sampleNearest(volume, point), x + 10 * y + 100 * z);
+        assert.equal(s.sampleLinear(volume, point), x + 10 * y + 100 * z);
+      }
+  assert.throws(() => volume.at(3, 0, 0));
+  assert.throws(() => volume.at(0, -1, 0));
+  assert.throws(() => volume.at(0, 0, 4));
+  assert.throws(() => volume.at(0.5, 0, 0));
+});
+test("P53 independent half-cell and affine oracles agree with all eight inspector contributions", () => {
+  const volume = fixture();
+  near(s.sampleLinear(volume, [1, 0, 3]), 50.5);
+  assert.equal(s.sampleNearest(volume, [1, 0, 3]), 101); // ties go to higher indices
+  for (let trial = 0; trial < 80; trial++) {
+    const x = (trial % 13) / 7,
+      y = (trial % 9) / 9,
+      z = (trial % 17) / 6;
+    const p = s.centre(volume.grid, x, y, z);
+    const stencil = s.linearStencil(volume, p);
+    assert.equal(stencil.length, 8);
+    near(
+      stencil.reduce((sum, c) => sum + c.weight, 0),
+      1,
+      1e-14,
+    );
+    assert.ok(stencil.every((c) => c.weight >= 0 && c.weight <= 1));
+    const expected = x + 10 * y + 100 * z;
+    near(s.sampleLinear(volume, p), expected);
+    near(
+      stencil.reduce((sum, c) => sum + c.weight * c.value, 0),
+      expected,
+    );
   }
 });
-
-test("64^3 and 128^3 are real allocations; sphere reflection, histogram and fixed extent agree", () => {
+test("P53 includes all physical faces, clamps half-voxels and rejects outside/nonfinite queries", () => {
+  const volume = fixture();
+  for (let axis = 0; axis < 3; axis++) {
+    const point = [0, 0, 0];
+    point[axis] = volume.grid.origin[axis];
+    assert.notEqual(s.sampleLinear(volume, point), undefined);
+    point[axis] -= 1e-8;
+    assert.equal(s.sampleLinear(volume, point), undefined);
+    point[axis] = volume.grid.origin[axis] + s.extent(volume.grid)[axis];
+    assert.notEqual(s.sampleNearest(volume, point), undefined);
+    point[axis] += 1e-8;
+    assert.equal(s.sampleNearest(volume, point), undefined);
+  }
+  assert.equal(s.sampleLinear(volume, [NaN, 0, 0]), undefined);
+  assert.equal(s.sampleNearest(volume, [0, Infinity, 0]), undefined);
+  const singleton = new s.Volume({ size: [1, 1, 1], origin: [0, 0, 0], spacing: [2, 3, 4] });
+  singleton.set(0, 0, 0, 0.375);
+  near(s.sampleLinear(singleton, [0, 0, 0]), 0.375, 0);
+  near(s.sampleLinear(singleton, [2, 3, 4]), 0.375, 0);
+});
+test("P53 guards real allocation, finite geometry and mutable-data audits", () => {
+  for (const side of [0, -1, 129, 1.5, Infinity]) assert.throws(() => s.makeGrid(side));
+  assert.throws(() => new s.Volume({ size: [3, 2, 4], origin: [0, 0, 0], spacing: [1, 0, 1] }));
+  assert.throws(() => new s.Volume({ size: [3, 2, 4], origin: [0, 0, 0], spacing: [1e308, 1, 1] }));
+  const volume = fixture();
+  assert.throws(() => volume.set(0, 0, 0, Infinity));
+  assert.throws(() => {
+    volume.grid.spacing[0] = 0;
+  });
+  volume.values[0] = NaN;
+  assert.throws(() => s.audit(volume));
+});
+test("P53 XY/XZ/YZ orientation preserves the fixed axis and upward world direction", () => {
+  const volume = fixture(),
+    probe = [1, 2, 3];
+  for (let view = 0; view < 3; view++) {
+    const a = s.axesFor(view),
+      p = s.slicePoint(volume, view, 0.25, 0.75, probe);
+    near(p[a.fixed], probe[a.fixed], 0);
+    near(
+      p[a.horizontal],
+      volume.grid.origin[a.horizontal] + 0.25 * s.extent(volume.grid)[a.horizontal],
+      0,
+    );
+    near(
+      p[a.vertical],
+      volume.grid.origin[a.vertical] + 0.75 * s.extent(volume.grid)[a.vertical],
+      0,
+    );
+  }
+});
+test("P53 actual 64^3 and 128^3 allocations preserve physical extent, histogram counts and sphere symmetry", () => {
   for (const side of [64, 128]) {
-    const volume = new s.Volume(s.makeGrid(side));
+    const volume = s.buildVolume("sphere", side),
+      stats = s.measure(volume);
     assert.equal(volume.values.length, side ** 3);
-    near(-2 * s.lower(volume.grid, 0), 3.2);
-    near(-2 * s.lower(volume.grid, 1), 3.84);
-    near(-2 * s.lower(volume.grid, 2), 4.8);
-    s.fillVolume(volume, "sphere");
-    let symmetric = true;
-    for (let z = 0; z < side; z++)
-      for (let y = 0; y < side; y++)
-        for (let x = 0; x < side; x++) {
-          const value = volume.voxel(x, y, z);
-          symmetric &&=
-            value === volume.voxel(side - 1 - x, y, z) &&
-            value === volume.voxel(x, side - 1 - y, z) &&
-            value === volume.voxel(x, y, side - 1 - z);
-        }
-    assert.equal(symmetric, true);
-    const stats = s.histogram(volume);
+    assert.equal(volume.values.byteLength, side ** 3 * 4);
+    assert.deepEqual(s.extent(volume.grid), [160, 192, 224]);
     assert.equal(
       stats.bins.reduce((a, b) => a + b, 0),
       side ** 3,
     );
-    assert.equal(stats.minimum, 0);
-    assert.equal(stats.maximum, 1);
+    for (let z = 0; z < side; z += 7)
+      for (let y = 0; y < side; y += 7)
+        for (let x = 0; x < side; x += 7) {
+          const value = volume.at(x, y, z);
+          assert.equal(value, volume.at(side - 1 - x, y, z));
+          assert.equal(value, volume.at(x, side - 1 - y, z));
+          assert.equal(value, volume.at(x, y, side - 1 - z));
+        }
+    const image = s.sampleSlice(volume, 0, [0, 0, 0], true, 64);
+    for (let y = 0; y < 64; y++)
+      for (let x = 0; x < 32; x++) near(image[x + y * 64], image[63 - x + y * 64], 1e-6);
+    assert.deepEqual(s.audit(volume).failures, 0);
   }
 });
-
-test("Analytic fields have independent expected values and display stages preserve cached scalars", () => {
-  near(s.fieldValue([0.85, 0, 0], "gaussian"), Math.exp(-1));
-  assert.equal(s.fieldValue([0, 0, -1], "layers"), 0.15);
-  assert.equal(s.fieldValue([0, 0, 0], "layers"), 0.5);
-  assert.equal(s.fieldValue([0, 0, 1], "layers"), 0.85);
-  const volume = new s.Volume(grid);
-  s.fillVolume(volume, "layers");
-  const raw = s.sampleImage(volume, 1, [0, 0, 0], true, 7, 16);
-  const copy = new Float64Array(raw),
-    values = new Float64Array(volume.values);
-  const gray = s.colorImage(raw, { level: 0.5, width: 1 }, 7);
-  const color = s.colorImage(raw, { level: 0.7, width: 0.4 }, 7, true);
-  assert.notDeepEqual(gray, color);
-  assert.deepEqual(raw, copy);
-  assert.deepEqual(volume.values, values);
-  assert.throws(() => s.makeGrid(32), RangeError);
-  volume.values[0] = NaN;
-  assert.throws(() => s.histogram(volume), RangeError);
+test("P53 window and palette transform display only; malformed data cannot become an image", () => {
+  const volume = fixture(),
+    before = volume.values.slice();
+  const image = s.sampleSlice(volume, 0, [0, 0, 0], false, 16);
+  near(s.windowValue(0.5, { level: 0.5, width: 0.5 }), 0.5, 0);
+  const colors = s.colorImage(image, { level: 0.4, width: 0.7 }, true);
+  assert.equal(colors.length, 16 * 16 * 4);
+  assert.deepEqual(before, volume.values);
+  assert.throws(() => s.windowValue(0.5, { level: 0.5, width: 0 }));
+  assert.throws(() => s.colorImage(Float32Array.of(NaN), { level: 0.5, width: 1 }, true));
+  assert.throws(() => s.sampleSlice(volume, 0, [0, 0, 0], true, 1e7));
+  for (const preset of s.presets) assert.ok(Number.isFinite(s.fieldValue(preset, [0, 0, 0])));
 });
 
-test("Trilinear inspector has eight independent contributions and reproduces 0.525", () => {
-  const volume = new s.Volume({ count: [2, 2, 2], spacing: [1, 1, 1] });
-  volume.values.set([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]);
-  const point = [-0.25, 0, 0.25];
-  const trace = s.linearStencil(volume, point);
-  assert.equal(trace.corners.length, 8);
-  near(
-    trace.corners.reduce((sum, c) => sum + c.weight, 0),
-    1,
+test("P53 camera ray/projection round trip is independent of the measured world point", () => {
+  const point = [5, 12, -7];
+  for (const yaw of [-0.8, 0.4, 1.7]) {
+    const camera = { ...c.defaultCamera, yaw },
+      frame = c.cameraFrame(camera, 640, 480),
+      pixel = c.project(frame, point);
+    const restored = c.add(frame.eye, c.mul(c.cameraRay(frame, pixel.x, pixel.y), pixel.depth));
+    for (let axis = 0; axis < 3; axis++) near(restored[axis], point[axis]);
+    assert.deepEqual(point, [5, 12, -7]);
+  }
+  assert.throws(() => c.cameraFrame({ ...c.defaultCamera, yaw: NaN }, 640, 480));
+  assert.throws(() => c.cameraFrame(c.defaultCamera, 0, 480));
+  assert.equal(c.project(c.cameraFrame(c.defaultCamera, 640, 480), [NaN, 0, 0]), undefined);
+});
+test("P53 clipping preserves the selected half-space and known half-triangle area", () => {
+  const triangle = [
+    { point: [-1, 0, 0], normal: [0, 0, 1] },
+    { point: [1, 0, 0], normal: [0, 0, 1] },
+    { point: [0, 2, 0], normal: [0, 0, 1] },
+  ];
+  const polygon = clipPolygon(triangle, 0, 0, true);
+  assert.ok(polygon.length >= 3);
+  let area = 0;
+  for (const vertex of polygon) {
+    assert.ok(vertex.point[0] <= 1e-12);
+    near(Math.hypot(...vertex.normal), 1);
+  }
+  for (let i = 1; i + 1 < polygon.length; i++)
+    area +=
+      Math.hypot(
+        ...c.cross(
+          c.sub(polygon[i].point, polygon[0].point),
+          c.sub(polygon[i + 1].point, polygon[0].point),
+        ),
+      ) * 0.5;
+  near(area, 1);
+});
+test("P53 context uses measured volume without mutating it and produces a nonempty depth-tested specimen", () => {
+  const volume = s.buildVolume("gaussian", 16),
+    original = volume.values.slice();
+  const generator = meshSlabs(volume);
+  let step = generator.next();
+  while (!step.done) step = generator.next();
+  const mesh = step.value;
+  assert.ok(mesh.triangles > 0 && mesh.triangles < maxContextTriangles);
+  assert.equal(mesh.vertices.length, mesh.triangles * 18);
+  assert.ok(mesh.vertices.every(Number.isFinite));
+  for (let offset = 0; offset < mesh.vertices.length; offset += 6)
+    near(Math.hypot(...mesh.vertices.subarray(offset + 3, offset + 6)), 1, 2e-6);
+  const slices = [0, 1, 2].map((view) => s.sampleSlice(volume, view, [0, 0, 0], true));
+  const image = renderContext(
+    mesh,
+    volume,
+    [0, 0, 0],
+    slices,
+    s.defaultWindow,
+    true,
+    c.defaultCamera,
+    true,
+    96,
+    96,
   );
-  near(trace.value, 0.525);
-  near(trace.value, s.sampleLinear(volume, point));
-  near(trace.corners[0].weight, 0.09375);
-  near(trace.corners[6].contribution, 0.196875);
-  assert.equal(s.linearStencil(volume, [-2, 0, 0]), null);
-});
-
-test("Slice refresh throttling preserves elapsed time at different frame rates", () => {
-  for (const fps of [30, 59, 60, 61, 144]) {
-    const update = createScanClock(0);
-    let distance = 0;
-    for (let frame = 1; frame <= fps * 10; frame++) distance += 4 * update((frame * 1000) / fps);
-    // At most one normal refresh interval is pending at the measurement endpoint.
-    assert.ok(Math.abs(distance - 40) <= 4 * (0.1 + 1 / fps) + 1e-10, `${fps}: ${distance}`);
-  }
-  const update = createScanClock(0);
-  near(update(10000), 0.1);
-  near(createScanClock(10000)(10000), 0);
-});
-test("Volume shape, row-major address and allocation bounds are explicit", () => {
-  const v = new s.Volume(grid);
-  assert.equal(v.values.length, 60);
-  assert.equal(v.index(3, 2, 4), 59);
-  assert.equal(v.index(0, 1, 0), 4);
-  assert.equal(v.index(0, 0, 1), 12);
-  for (const bad of [
-    [-1, 0, 0],
-    [4, 0, 0],
-    [0, 3, 0],
-    [0, 0, 5],
-    [0.5, 0, 0],
-  ])
-    assert.throws(() => v.voxel(...bad), RangeError);
-  for (const count of [
-    [0, 2, 2],
-    [129, 2, 2],
-    [NaN, 2, 2],
-    [1.5, 2, 2],
-  ])
-    assert.throws(() => new s.Volume({ count, spacing: [1, 1, 1] }), RangeError);
-  for (const spacing of [
-    [0, 1, 1],
-    [-1, 1, 1],
-    [NaN, 1, 1],
-    [Infinity, 1, 1],
-  ])
-    assert.throws(() => new s.Volume({ count: [2, 2, 2], spacing }), RangeError);
-  assert.equal(new s.Volume().values.byteLength, 2 * 1024 * 1024);
-});
-test("Volume world/grid centre round trips include anisotropic spacing", () => {
-  for (let a = 0; a < 3; a++)
-    for (const i of [0, 0.5, 1, 2])
-      near(s.gridCoordinate(grid, a, s.worldCoordinate(grid, a, i)), i);
-  assert.deepEqual(s.axesFor(0), { horizontal: 0, vertical: 1, cut: 2 });
-  assert.deepEqual(s.axesFor(1), { horizontal: 0, vertical: 2, cut: 1 });
-  assert.deepEqual(s.axesFor(2), { horizontal: 1, vertical: 2, cut: 0 });
-});
-test("Volume nearest and trilinear reproduce centre and affine oracle independently", () => {
-  const v = new s.Volume(grid);
-  for (let z = 0; z < 5; z++)
-    for (let y = 0; y < 3; y++)
-      for (let x = 0; x < 4; x++) {
-        const p = [
-          s.worldCoordinate(grid, 0, x),
-          s.worldCoordinate(grid, 1, y),
-          s.worldCoordinate(grid, 2, z),
-        ];
-        v.values[v.index(x, y, z)] = s.affine(p);
-        near(s.sampleNearest(v, p), s.affine(p));
-        near(s.sampleLinear(v, p), s.affine(p));
-      }
-  for (let i = 0; i < 20; i++) {
-    const p = [
-      s.worldCoordinate(grid, 0, 0.1 + i * 0.14),
-      s.worldCoordinate(grid, 1, 0.1 + i * 0.09),
-      s.worldCoordinate(grid, 2, 0.1 + i * 0.19),
-    ];
-    near(s.sampleLinear(v, p), s.affine(p));
-  }
-});
-test("Volume boundary replication, outside rejection and singleton policy stay distinct", () => {
-  const v = new s.Volume(grid);
-  s.fillOrientation(v);
-  const low = [0, 1, 2].map((a) => s.lower(grid, a));
-  near(s.sampleNearest(v, low), v.voxel(0, 0, 0));
-  near(s.sampleLinear(v, low), v.voxel(0, 0, 0));
-  for (const p of [
-    [low[0] - 0.001, 0, 0],
-    [0, 0, 2],
-    [NaN, 0, 0],
-  ]) {
-    assert.equal(s.sampleNearest(v, p), null);
-    assert.equal(s.sampleLinear(v, p), null);
-  }
-  const one = new s.Volume({ count: [1, 1, 1], spacing: [0.1, 0.2, 0.3] });
-  one.values[0] = 0.7;
-  near(s.sampleLinear(one, [0, 0, 0]), 0.7);
-  s.fillOrientation(one);
-  assert.equal(one.values[0], 0);
-  v.values.fill(0.37);
-  near(s.sampleLinear(v, [0.1, 0.2, 0.3]), 0.37);
-});
-test("Volume planes, physical aspect and pixel/world selection agree", () => {
-  const area = { x: 20, y: 40, width: 300, height: 120 };
-  for (let bits = 0; bits < 8; bits++) {
-    const corner = [0, 1, 2].map((a) => (bits & (1 << a) ? -1 : 1) * s.lower(grid, a));
-    const p = s.locatorPoint(grid, corner, area);
-    assert.ok(
-      p.x >= area.x && p.x <= area.x + area.width && p.y >= area.y && p.y <= area.y + area.height,
-    );
-  }
-  const cursor = s.initialPoint(grid);
-  for (let view = 0; view < 3; view++) {
-    const a = s.axesFor(view),
-      p = s.slicePoint(grid, view, cursor, 0.25, 0.75);
-    near(p[a.cut], cursor[a.cut]);
-    near(p[a.horizontal], s.lower(grid, a.horizontal) / 2);
-    near(p[a.vertical], s.lower(grid, a.vertical) / 2);
-    const rect = s.fitSlice(grid, view, { x: 20, y: 30, width: 300, height: 220 });
-    near(
-      rect.width / rect.height,
-      (grid.count[a.horizontal] * grid.spacing[a.horizontal]) /
-        (grid.count[a.vertical] * grid.spacing[a.vertical]),
-    );
-    const selected = s.pickSlice(
-      grid,
-      view,
-      cursor,
-      rect,
-      rect.x + 0.25 * rect.width,
-      rect.y + 0.75 * rect.height,
-    );
-    for (let axis = 0; axis < 3; axis++) near(selected[axis], p[axis]);
-    assert.equal(s.pickSlice(grid, view, cursor, rect, rect.x - 1, rect.y), null);
-  }
-});
-test("Volume window/level maps brightness without changing scalar or RGBA layout", () => {
-  assert.equal(s.windowValue(0.1, { level: 0.5, width: 0.4 }), 0);
-  near(s.windowValue(0.5, { level: 0.5, width: 0.4 }), 0.5);
-  assert.equal(s.windowValue(0.9, { level: 0.5, width: 0.4 }), 1);
-  for (const width of [0, -1, NaN, Infinity])
-    assert.throws(() => s.windowValue(0.5, { level: 0.5, width }), RangeError);
-  const v = new s.Volume(grid);
-  s.fillPhantom(v);
-  const original = new Float64Array(v.values),
-    image = s.makeImage(v, 0, s.initialPoint(grid), { level: 0.4, width: 0.3 }, true, 7, 16);
-  assert.deepEqual(v.values, original);
-  for (let i = 0; i < image.length; i += 4) {
-    assert.equal(image[i], image[i + 1]);
-    assert.equal(image[i], image[i + 2]);
-    assert.equal(image[i + 3], 255);
-  }
-  assert.throws(
-    () => s.makeImage(v, 0, [0, 0, 0], { level: 0.5, width: 1 }, false, 7, 1024),
-    RangeError,
+  const empty = renderContext(
+    { vertices: new Float32Array(), triangles: 0 },
+    volume,
+    [0, 0, 0],
+    slices,
+    s.defaultWindow,
+    true,
+    c.defaultCamera,
+    false,
+    96,
+    96,
+  );
+  let different = 0;
+  for (let i = 0; i < image.length; i++) if (image[i] !== empty[i]) different++;
+  assert.ok(different > 500);
+  assert.deepEqual(volume.values, original);
+  assert.throws(() =>
+    renderContext(
+      { vertices: new Float32Array(9), triangles: 0.5 },
+      volume,
+      [0, 0, 0],
+      slices,
+      s.defaultWindow,
+      true,
+      c.defaultCamera,
+      true,
+      96,
+      96,
+    ),
   );
 });
-test("Volume phantom sampling is deterministic and audit detects corrupted values", () => {
-  const a = new s.Volume(grid),
-    b = new s.Volume(grid);
-  s.fillPhantom(a);
-  s.fillPhantom(b);
-  assert.deepEqual(a.values, b.values);
-  const report = s.auditVolume(a);
-  assert.equal(report.failures, 0);
-  assert.ok(report.residual < 1e-12);
-  assert.equal(report.checks, a.values.length + 33);
-  assert.ok(report.minimum >= 0 && report.maximum <= 1);
-  a.values[0] = -0.1;
-  assert.ok(s.auditVolume(a).failures > 0);
-  a.values[0] = NaN;
-  assert.ok(s.auditVolume(a).failures > 0);
-});
-
-test("Volume audit rejects inconsistent storage and a mutated invalid grid", () => {
-  const volume = new s.Volume(grid);
-  volume.values = new Float64Array(0);
-  assert.ok(
-    s.auditVolume(volume).failures > 0,
-    "empty storage must not pass an affine-only oracle",
+test("P53 async dataset jobs support cancellation and cannot return a partial result", async () => {
+  const cancelled = new AbortController();
+  await assert.rejects(
+    createDataset("specimen", 128, true, cancelled.signal, () => cancelled.abort()),
+    { name: "AbortError" },
   );
-  volume.values = new Float64Array(59);
-  assert.ok(s.auditVolume(volume).failures > 0, "truncated storage");
-  volume.values = new Float64Array(61);
-  assert.ok(s.auditVolume(volume).failures > 0, "oversized storage");
-  volume.values = new Float64Array(60);
-  volume.grid.spacing[1] = NaN;
-  assert.ok(s.auditVolume(volume).failures > 0, "invalid grid after construction");
-});
-
-test("Volume bounded color mapping rejects invalid scalars and oversized images", () => {
-  for (const value of [NaN, Infinity, -Infinity])
-    assert.throws(() => s.colorValue(value, true), RangeError);
-  for (const count of [0, 256 * 256 + 1])
-    assert.throws(
-      () => s.colorImage(new Float64Array(count), { level: 0.5, width: 1 }, 7),
-      RangeError,
-    );
-  assert.throws(
-    () => s.colorImage(new Float64Array([NaN]), { level: 0.5, width: 1 }, 1),
-    RangeError,
+  const completed = await createDataset(
+    "gaussian",
+    16,
+    true,
+    new AbortController().signal,
+    () => {},
   );
+  assert.equal(completed.volume.values.length, 16 ** 3);
+  assert.equal(completed.statistics.count, 16 ** 3);
+  assert.ok(completed.mesh.triangles > 0);
+  assert.equal(completed.preset, "gaussian");
 });

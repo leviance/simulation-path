@@ -1,64 +1,50 @@
 import { expect, test } from "@playwright/test";
-const route = "/projects/voxel-ray-editor/09-kiem-chung-va-hoan-thien";
-
-test("DDA pause and repeated keys retain playback and page scroll state", async ({ page }) => {
-  await page.goto("/projects/voxel-ray-editor/04-di-qua-tung-o");
-  await page.getByLabel("Khối mẫu ray editor", { exact: true }).selectOption("5");
-  const lab = page.getByLabel("Voxel Ray Editor Lab", { exact: true });
-  await lab.press("Space");
-  await page.getByRole("button", { name: "Tạm dừng", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Chạy DDA", exact: true })).toBeVisible();
-  await lab.focus();
-  const prevented = await lab.evaluate((element) => {
-    const event = new KeyboardEvent("keydown", {
-      key: " ",
-      repeat: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    element.dispatchEvent(event);
-    return event.defaultPrevented;
-  });
-  expect(prevented).toBe(true);
-});
-test("Voxel editor stages mutation controls and edits one block at a time", async ({ page }) => {
-  await page.goto("/projects/voxel-ray-editor/01-tam-ngam-tren-khoi-dat");
-  await expect(page.getByRole("button", { name: "Phá block đang ngắm", exact: true })).toHaveCount(
-    0,
-  );
+const route = "/projects/voxel-ray-editor/03-doc-khong-sua";
+test("Project 60: final Canvas, keyboard navigation and project-specific observations", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(route);
+  const canvas = page.getByLabel("Thực địa voxel 60", { exact: true });
+  await expect(canvas).toBeVisible();
   const read = (label: string) =>
     page
       .locator(".lab-readout div")
       .filter({ has: page.getByText(label, { exact: true }) })
-      .locator("dd");
-  await expect(read("Hit đầu tiên")).not.toHaveText("MISS");
-  const before = await read("Block / triangles").textContent();
-  expect(before).toContain("1408 / ");
-  const counts = await read("Rebuild / raster / pick").textContent();
-  await page.getByLabel("Pixel x", { exact: true }).fill("161");
-  const afterAim = await read("Rebuild / raster / pick").textContent();
-  expect(afterAim?.split(" / ").slice(0, 2)).toEqual(counts?.split(" / ").slice(0, 2));
-  await page.getByRole("button", { name: "Phá block đang ngắm", exact: true }).click();
-  await expect(read("Block / triangles")).toContainText("1407 / ");
-  await page.getByRole("button", { name: "Đặt lại", exact: true }).click();
-  await expect(read("Block / triangles")).toContainText("1408 / ");
-  await page.getByRole("button", { name: "Đặt block ở ô xanh", exact: true }).click();
-  await expect(read("Block / triangles")).toContainText("1409 / ");
-  await page.getByRole("button", { name: "Đặt lại", exact: true }).click();
-  await page.getByLabel("Tầm với", { exact: true }).fill("1");
-  await expect(read("Hit đầu tiên")).toHaveText("MISS");
-  await expect(
-    page.getByRole("button", { name: "Đặt block ở ô xanh", exact: true }),
-  ).toBeDisabled();
+      .locator("dd")
+      .first();
+  const hold = page.getByRole("button", { name: "Giữ phép đo" });
+  await hold.click();
+  const old = await read("Ống ngắm").innerText();
+  await canvas.press("ArrowDown");
+  await canvas.press("w");
+  await expect(read("Ống ngắm")).toHaveText(old);
+  await expect(hold).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Hiện ống ngắm" }).click();
+  await expect(read("Ống ngắm")).toHaveText("Đã tắt");
+  await canvas.focus();
+  await canvas.press("r");
+  await expect(page.getByRole("button", { name: "Đặt lại", exact: true }).first()).toBeVisible();
+  const box = await canvas.boundingBox();
+  if (!box) throw Error("no canvas size");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 25, box.y + box.height / 2 + 8, { steps: 3 });
+  await page.mouse.up();
+  expect(errors).toEqual([]);
 });
-test("Voxel editor reduced motion still allows manual DDA inspection", async ({ page }) => {
+test("Project 60: early lesson, reduced motion, download and published source", async ({
+  page,
+}) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/projects/voxel-ray-editor/01-tia-tu-tam-mat");
+  await expect(page.getByLabel("Thực địa voxel 60", { exact: true })).toBeVisible();
   await page.goto(route);
-  await expect(page.getByRole("button", { name: "Chạy DDA", exact: true })).toBeDisabled();
-  await page.getByRole("button", { name: "Một ô tiếp theo", exact: true }).click();
-  await expect(page.locator(".lab-readout")).toContainText("2/");
-  await expect(page.getByRole("region", { name: "Trạng thái từng trục DDA" })).toContainText(
-    "tDelta",
-  );
+  const canvas = page.getByLabel("Thực địa voxel 60", { exact: true });
+  await expect(canvas).toBeVisible();
+
+  const zip = await page.request.get("/downloads/project-60-voxel-ray-editor.zip");
+  expect(zip.status()).toBe(200);
+  expect((await zip.body()).subarray(0, 2).toString()).toBe("PK");
 });

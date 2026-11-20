@@ -29,8 +29,8 @@ const partDescriptions: Record<string, string> = {
     "Đi từ cellular automata và phương trình nhiệt đến vector field, Stable Fluids và SPH trên cả CPU lẫn GPU.",
   "RAY, VOLUME VÀ GIẢ LẬP X-RAY":
     "Theo dõi một tia qua hình học và dữ liệu thể tích, sau đó dùng cùng ý tưởng để dựng ảnh X-ray, sinogram và mô phỏng Monte Carlo.",
-  "VOXEL WORLD KIỂU MINECRAFT":
-    "Xây thế giới theo chunk, loại mặt bị che, chọn block bằng ray, gộp mesh và tải terrain quanh người chơi.",
+  "KHÁM PHÁ THẾ GIỚI VOXEL":
+    "Đi bộ từ bờ biển tới rừng thông phủ tuyết trong thế giới C++/SDL3 tự xây. Chunk, ray và greedy mesh nhường chỗ trên màn hình cho cảnh quan: gió lay lá, mây trôi, nước chảy và ánh chiều đổi hướng.",
   "TỰ XÂY UI CHO CÁC SIMULATOR":
     "Tạo bộ điều khiển cho mô phỏng, rồi từng bước phát triển cây UI, layout, style, event binding và ngôn ngữ script nhỏ.",
   "CÁC PROJECT CẦU NỐI TÙY CHỌN":

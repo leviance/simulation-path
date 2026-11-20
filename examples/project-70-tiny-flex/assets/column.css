@@ -1,0 +1,8 @@
+.sheet { display: flex; flex-direction: column; padding: 10px; gap: 3px; background: #244147; }
+h1 { background: #244147; color: #B6F1DD; border: 0px; }
+.group { display: flex; flex-direction: column; padding: 5px; gap: 2px; background: #315656; }
+#tools { justify-content: center; align-items: end; height: 136px; }
+button { background: #395B6D; color: #E9F3EC; width: 134px; flex-basis: 29px; margin: 1px; }
+#pause { background: #2B7663; }
+label { color: #D0EDDD; border: 0px; }
+input { color: #94E0C4; border-color: #637F81; }

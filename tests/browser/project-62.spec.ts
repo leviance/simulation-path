@@ -1,52 +1,49 @@
 import { expect, test } from "@playwright/test";
-const final = "/projects/voxel-chunk-streaming/10-kiem-chung-va-hoan-thien";
-test("Streaming supports signed preset, bounded manual jobs and radius changes", async ({
+const route = "/projects/voxel-chunk-streaming/04-di-xa-va-quay-lai";
+test("Project 62: final Canvas, keyboard navigation and project-specific observations", async ({
   page,
 }) => {
-  await page.goto(final);
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(route);
+  const canvas = page.getByLabel("Thực địa voxel 62", { exact: true });
+  await expect(canvas).toBeVisible();
   const read = (label: string) =>
     page
       .locator(".lab-readout div")
       .filter({ has: page.getByText(label, { exact: true }) })
-      .locator("dd");
-  await expect(read("Resident / cao nhất")).toHaveText("1 / 1");
-  await expect(read("Jobs đang chờ")).toHaveText("8");
-  await page.getByRole("button", { name: "Một tick", exact: true }).click();
-  await expect(read("Batch trước: jobs / budget")).toHaveText("2 / 2");
-  await page.getByLabel("Jobs mỗi tick", { exact: true }).selectOption("1");
-  await page.getByRole("button", { name: "Kiểm giới hạn hiện tại", exact: true }).click();
-  await expect(read("Sanity hiện tại")).toContainText("PASS");
-  await page.getByLabel("Vị trí mẫu streaming", { exact: true }).selectOption("1");
-  await expect(page.getByLabel("Jobs mỗi tick", { exact: true })).toHaveValue("1");
-  await expect(read("Chunk / local X/Z")).toHaveText("(-1,-1) / (15.50,15.50)");
-  await page.getByLabel("Bán kính tải", { exact: true }).selectOption("2");
-  await page.getByRole("button", { name: "Một tick", exact: true }).click();
-  await expect(read("Batch trước: jobs / budget")).toHaveText("1 / 1");
-  await page.getByRole("button", { name: "Đặt lại", exact: true }).click();
-  await expect(read("Jobs đang chờ")).toHaveText("8");
+      .locator("dd")
+      .first();
+  await page.getByRole("button", { name: "Sang chunk âm X" }).click();
+  await expect(read("Chunk tâm")).toHaveText("-1, 0");
+  await page.getByLabel("Ngân sách").selectOption("2");
+  for (let i = 0; i < 13; i++) await page.getByRole("button", { name: "Tiến một nhịp" }).click();
+  await expect(read("Đã nạp")).toHaveText("25");
+  await expect(read("Chờ nạp")).toHaveText("0");
+  await canvas.focus();
+  await canvas.press("r");
+  await expect(page.getByRole("button", { name: "Đặt lại", exact: true }).first()).toBeVisible();
+  const box = await canvas.boundingBox();
+  if (!box) throw Error("no canvas size");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 25, box.y + box.height / 2 + 8, { steps: 3 });
+  await page.mouse.up();
+  expect(errors).toEqual([]);
 });
-test("Streaming preserves pause, repeated Space prevention and reduced-motion manual work", async ({
+test("Project 62: early lesson, reduced motion, download and published source", async ({
   page,
 }) => {
-  await page.goto(final);
-  const canvas = page.getByLabel("Chunk Streaming Lab", { exact: true });
-  await canvas.press("Space");
-  await page.getByRole("button", { name: "Tạm dừng", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Chạy streaming", exact: true })).toBeVisible();
-  expect(
-    await canvas.evaluate((element) => {
-      const event = new KeyboardEvent("keydown", {
-        key: " ",
-        repeat: true,
-        bubbles: true,
-        cancelable: true,
-      });
-      element.dispatchEvent(event);
-      return event.defaultPrevented;
-    }),
-  ).toBe(true);
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await expect(page.getByRole("button", { name: "Chạy streaming", exact: true })).toBeDisabled();
-  await page.getByRole("button", { name: "Một tick", exact: true }).click();
-  await expect(page.locator(".lab-readout")).toContainText("2 / 2");
+  await page.goto("/projects/voxel-chunk-streaming/01-nap-quanh-mat");
+  await expect(page.getByLabel("Thực địa voxel 62", { exact: true })).toBeVisible();
+  await page.goto(route);
+  const canvas = page.getByLabel("Thực địa voxel 62", { exact: true });
+  await expect(canvas).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Cho thời gian chạy", exact: true }),
+  ).toBeDisabled();
+  const zip = await page.request.get("/downloads/project-62-voxel-chunk-streaming.zip");
+  expect(zip.status()).toBe(200);
+  expect((await zip.body()).subarray(0, 2).toString()).toBe("PK");
 });

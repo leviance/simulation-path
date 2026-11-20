@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isContiguousCodeExcerpt, markedCodeExcerpt } from "../scripts/code-snippets.mjs";
+import {
+  isContiguousCodeExcerpt,
+  markedCodeExcerpt,
+  markedSnippetBlockPattern,
+} from "../scripts/code-snippets.mjs";
 
 test("strict code excerpts preserve return values, operators and token boundaries", () => {
   assert.equal(isContiguousCodeExcerpt("return;", "return trace;"), false);
@@ -37,4 +41,38 @@ test("marked excerpts bind an unambiguous checkpoint range and remove nested mar
   );
   assert.throws(() => markedCodeExcerpt(source, "../outer"));
   assert.throws(() => markedCodeExcerpt("// [snippet blank]\n\n// [/snippet blank]", "blank"));
+});
+
+test("snippet sync handles empty fences without consuming the following heading or shell block", () => {
+  for (const newline of ["\n", "\r\n"]) {
+    for (const body of ["", "old();" + newline]) {
+      const block =
+        [
+          "{/* snippet include/model.hpp#example */}",
+          "",
+          '```cpp title="include/model.hpp — Example"',
+        ].join(newline) +
+        newline +
+        body +
+        "```";
+      const rest = [
+        "",
+        "",
+        "## Ghép các phần lại",
+        "",
+        "Giữ nguyên phần giải thích.",
+        "",
+        "```powershell",
+        "cmake --build build",
+        "```",
+        "",
+      ].join(newline);
+      const document = block + rest;
+      const matches = [...document.matchAll(markedSnippetBlockPattern())];
+      assert.equal(matches.length, 1);
+      assert.equal(matches[0][0], block, "only the annotated fence may be replaced");
+      const updated = document.replace(markedSnippetBlockPattern(), "updated source fence");
+      assert.equal(updated, "updated source fence" + rest);
+    }
+  }
 });

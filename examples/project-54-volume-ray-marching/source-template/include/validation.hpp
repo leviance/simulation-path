@@ -2,61 +2,68 @@
 #include "renderer.hpp"
 #include <iostream>
 
-namespace fog {
-#if LAB_CHECKPOINT >= 9
-// Read only a 16x12 target. Compare linear C/T, not the gamma-encoded screen image.
-inline void verifyGpu(GlApi& gl, Renderer& renderer) {
-    const auto started = SDL_GetTicks();
+namespace volume54 {
+#if LAB_CHECKPOINT >= 10
+// The small oracle target is for correctness only; it is not the final viewport.
+// [snippet verify-gpu]
+inline void verifyGpu(Renderer& renderer) {
+    const Uint64 started = SDL_GetTicks();
+    renderer.resize(24, 18);
     double maximumError = 0;
-    int comparisons = 0;
-    Volume volume;
-
-    // Each dataset is uploaded once; verify only a few pixel centres per view.
-    for (int preset = 0; preset < 3; ++preset) {
-        fillVolume(volume, preset);
-        renderer.upload(gl, volume);
+    std::size_t comparisons = 0;
+    for (Preset preset : {Preset::Cloud, Preset::Cores, Preset::Slab, Preset::Constant, Preset::Ramp, Preset::Empty}) {
+        const Volume volume = buildVolume(preset, 128);
+        renderer.upload(volume);
         for (bool inside : {false, true}) {
             Camera camera;
             camera.inside = inside;
-            // Small, explicit cases cover each shader option without growing the target.
-            const std::array cases{
-                Settings{2, 0.04, true, false},
-                Settings{2, 0.17, true, false},
-                Settings{0, 0.17, false, false},
-                Settings{2, 0.17, false, false},
-                Settings{8, 0.04, true, true},
-                Settings{8, 0.17, false, true}};
-            for (const auto settings : cases) {
-                renderer.render(gl, camera, settings);
-                gl.BindFramebuffer(GL_FRAMEBUFFER, renderer.framebuffer);
-                for (const auto& pixel : {std::array{7, 5}, std::array{0, 0}, std::array{15, 11}, std::array{12, 8}}) {
-                    float actual[4]{};
-                    gl.ReadPixels(pixel[0], pixel[1], 1, 1, GL_RGBA, GL_FLOAT, actual);
-
-                    // GL y increases upwards, whereas cameraRay accepts top-down v.
-                    const auto ray = cameraRay(camera, (pixel[0] + 0.5) / renderer.width, 1 - (pixel[1] + 0.5) / renderer.height, static_cast<double>(renderer.width) / renderer.height);
-                    const auto expected = march(ray, volume, settings);
-                    const std::array<double, 4> reference{expected.color[0], expected.color[1], expected.color[2], expected.transmittance};
-                    for (int component = 0; component < 4; ++component) {
-                        const double error = std::abs(actual[component] - reference[component]);
-                        if (!std::isfinite(actual[component]) || error > 0.0025) {
-                            throw std::runtime_error("GPU C/T differs from CPU oracle");
+            for (Mode mode : {Mode::Mip, Mode::Average, Mode::Alpha}) {
+                for (double step : {0.02, 0.13}) {
+                    Settings settings;
+                    settings.mode = mode;
+                    settings.stepLength = step;
+                    renderer.render(camera, settings);
+                    const auto image = renderer.read();
+                    for (const auto& pixel : {std::array{12, 9}, std::array{0, 0}, std::array{23, 17}, std::array{8, 11}, std::array{16, 6}}) {
+                        const Ray ray = cameraRay(camera, (pixel[0] + 0.5) / 24, 1 - (pixel[1] + 0.5) / 18, 24.0 / 18);
+                        const auto expected = rawOutput(march(ray, volume, settings), mode);
+                        const std::size_t address = static_cast<std::size_t>(pixel[0] + pixel[1] * 24) * 4;
+                        for (int component = 0; component < 4; ++component) {
+                            // [snippet gpu-component]
+                            const double actual = image[address + component];
+                            const double error = std::abs(actual - expected[component]);
+                            if (!std::isfinite(actual) || error > 0.0025)
+                                throw std::runtime_error("GPU raw mode result differs from CPU oracle");
+                            maximumError = std::max(maximumError, error);
+                            ++comparisons;
+                            // [/snippet gpu-component]
                         }
-                        maximumError = std::max(maximumError, error);
-                        ++comparisons;
                     }
-                    if (SDL_GetTicks() - started > 10000) {
-                        throw std::runtime_error("GPU verify total timeout");
-                    }
+                    if (SDL_GetTicks() - started > 20000)
+                        throw std::runtime_error("GPU correctness budget exceeded 20 seconds");
                 }
-                gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
             }
         }
     }
-    if (gl.GetError() != GL_NO_ERROR) {
-        throw std::runtime_error("GPU verify GL error");
+    // Transparent extinction, classification, palette and alpha-only early termination.
+    const Volume constant = buildVolume(Preset::Constant, 128);
+    renderer.upload(constant);
+    for (const Settings settings : {Settings{Mode::Alpha, 0.13, 0, 0, 2, false}, Settings{Mode::Alpha, 0.008, 12, 0, 1, true}, Settings{Mode::Average, 0.13, 6, 0.2, 0, true}}) {
+        renderer.render({}, settings);
+        const auto image = renderer.read();
+        const Ray ray = cameraRay({}, 12.5 / 24, 1 - 9.5 / 18, 24.0 / 18);
+        const auto expected = rawOutput(march(ray, constant, settings), settings.mode);
+        for (int component = 0; component < 4; ++component) {
+            const double error = std::abs(image[(12 + 9 * 24) * 4 + component] - expected[component]);
+            if (!std::isfinite(error) || error > 0.0025)
+                throw std::runtime_error("GPU option correctness failed");
+            maximumError = std::max(maximumError, error);
+            ++comparisons;
+        }
     }
-    std::cout << "GPU verify PASS components=" << comparisons << " maximum error=" << maximumError << '\n';
+    std::cout << "GPU VERIFY PASS: N=128^3, comparisons=" << comparisons << " maxRawError=" << maximumError << " seconds=" << (SDL_GetTicks() - started) / 1000.0 << '\n';
 }
+
+// [/snippet verify-gpu]
 #endif
-} // namespace fog
+} // namespace volume54

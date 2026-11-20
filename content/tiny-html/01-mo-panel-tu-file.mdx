@@ -1,0 +1,108 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đổi một file thay vì biên dịch lại cả bàn điều khiển
+
+## Vấn đề cần giải quyết
+
+Hãy thử chuyển hai thanh kéo lên trước nút Pause. Trong Project 67, bạn phải sửa C++ rồi build lại. Ở bài này ta tách bản mô tả khỏi ứng dụng. Mốc đầu chỉ đọc file; đừng chờ các nút đổi chỗ cho tới khi bạn nối xong cây ở bài 4.
+
+## Hiểu ý tưởng trước khi viết code
+
+Bắt đầu từ bàn Boids đang chạy. Hãy xem file là một chuỗi byte có giới hạn, không phải một cây UI có sẵn. Đường dẫn trong máy người viết giáo trình không được theo vào ZIP.
+
+<InteractiveLab demo="tiny-html" mode="html68-1" />
+
+## Viết code từng bước
+
+### Bảng đầu tiên
+
+Đọc từ ngoài vào trong: div ngoài là cả bảng; bên dưới h1 có hai div để gom nút và thanh kéo. Bạn chỉ cần sửa nhóm đầu để thử bài này.
+
+{/* asset assets/panel.html */}
+
+```html title="assets/panel.html — Bảng đầu tiên"
+<div id="desk" class="sheet">
+    <h1 id="title">FLIGHT CONTROL</h1>
+    <div id="actions" class="tools">
+        <button id="pause">Pause flight</button>
+        <button id="reset">Reset flock</button>
+        <button id="observe">Show neighbors</button>
+    </div>
+    <div id="settings" class="parameters">
+        <label id="radius-value">Radius</label>
+        <input id="radius" type="range" min="20" max="140" step="2" value="64" />
+        <label id="separation-value">Separation</label>
+        <input id="separation" type="range" min="0" max="5" step="0.1" value="1.5" />
+    </div>
+    <span id="ticks">Clock</span>
+</div>
+```
+
+### Đọc đủ byte trước khi phân tích
+
+Mở ở cuối để biết kích thước. Chặn file lớn hơn 16 KiB trước khi cấp bộ nhớ rồi mới quay về đầu để đọc. File không tồn tại và file rỗng là hai trường hợp khác nhau.
+
+{/* snippet include/markup/source.hpp#read-file */}
+
+```cpp title="include/markup/source.hpp — Đọc đủ byte trước khi phân tích"
+inline std::string readFile(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input)
+        throw Error("1:1 cannot open " + path.filename().string());
+    const std::streamoff length = input.tellg();
+    if (length < 0 || length > static_cast<std::streamoff>(maxBytes))
+        throw Error("1:1 file exceeds 16 KiB");
+    std::string bytes(static_cast<std::size_t>(length), '\0');
+    input.seekg(0);
+    if (!input.read(bytes.data(), length))
+        throw Error("1:1 incomplete file");
+    return bytes;
+}
+```
+
+### Nối phím F5 với thao tác đọc
+
+Ở snapshot này reload chỉ kiểm UTF-8, báo tên và số byte. Chạy executable với `--assets assets` từ thư mục dự án để sửa đúng bản đang mở.
+
+{/* snippet include/markup/desk.hpp#reload */}
+
+```cpp title="include/markup/desk.hpp — Nối phím F5 với thao tác đọc"
+inline bool reload(Desk& d, const std::filesystem::path& path) {
+    try {
+        const auto source = readFile(path);
+        checkUtf8(source);
+        d.status = std::to_string(source.size()) + " bytes; original layout still active";
+        d.name = path.filename().string();
+        d.error = false;
+        return true;
+    } catch (const std::exception& e) {
+        d.error = true;
+        d.status = path.filename().string() + ":" + e.what();
+        return false;
+    }
+}
+```
+
+## Ghép các phần lại
+
+Trong bản C++, bấm Pause, mở `assets/panel.html` bằng editor, thêm một dòng trắng rồi F5. Số byte thay đổi; đàn và các nút cũ vẫn ở nguyên. Đây là bằng chứng nhỏ nhưng cần trước khi viết parser.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_68_checkpoint_1 --parallel 2
+.\build\Release\project_68_checkpoint_1.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Đổi tên file đang đọc. Nếu app vẫn báo thành công, có thể bạn đang sửa `assets` cạnh source trong khi nó đọc bản cạnh executable. Thử lại với `--assets assets`.
+
+## Tự kiểm tra kết quả
+
+Bỏ qua mạng và thư mục cài đặt: ZIP giải nén nơi khác vẫn chạy. File sai đường dẫn có thông báo và người dùng vẫn đóng được cửa sổ.
+
+## Bài tập mở rộng
+
+Tạo một file dài 16.385 byte và dự đoán hàm nào từ chối nó trước.
+
+[Bài 2: Tách thẻ, chữ và thuộc tính có dấu nháy](/projects/tiny-html/02-token-va-thuoc-tinh).

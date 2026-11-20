@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -65,6 +66,7 @@ test("scoped checkpoint generation preserves other projects, check is read-only,
       "generate-checkpoints.mjs",
       "project-catalog.mjs",
       "course-cmake.mjs",
+      "course-source-templates.mjs",
       "generated-files.mjs",
       "course-file-types.mjs",
       "checkpoint-selection.mjs",
@@ -276,5 +278,20 @@ test("scoped checkpoint generation preserves other projects, check is read-only,
   } finally {
     assert.ok(root.startsWith(prefix), "cleanup must stay inside the owned temporary fixture");
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("exclusive voxel course library subtree resolves only prerequisites into each independent ZIP", async () => {
+  const { courseSourceTemplates } = await import("../scripts/course-source-templates.mjs");
+  const repo = fileURLToPath(new URL("../", import.meta.url));
+  const catalog = JSON.parse(readFileSync(path.join(repo, "course/projects.json"), "utf8"));
+  const normalized = (parts) =>
+    Array.from(parts, ([name, t]) => [name.split(path.sep).join("/"), t]);
+  for (const row of catalog.filter((p) => p.sourceSeries === "voxel-expedition")) {
+    const files = new Map(normalized(courseSourceTemplates(repo, row)));
+    assert.equal(files.get("src/main.cpp").checkpointBase, 0);
+    assert.equal(files.get("include/trail/camera.hpp").checkpointBase, Number(row.id) * 100);
+    assert.equal(files.has("include/trail/wind.hpp"), Number(row.id) >= 61);
+    assert.equal(files.has("include/trail/field-walk.hpp"), Number(row.id) >= 64);
   }
 });

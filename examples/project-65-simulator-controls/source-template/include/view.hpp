@@ -1,111 +1,97 @@
 #pragma once
-
 #ifndef LAB_CHECKPOINT
 #define LAB_CHECKPOINT 7
 #endif
-
 #include "controls.hpp"
-#include <SDL3/SDL.h>
-#include <cstdio>
+#include "workbench/viewport.hpp"
 
 namespace lab {
-
-// Helpers chỉ chuyển dữ liệu hình học sang lời gọi SDL, không sửa Model/Ui.
-inline void fill(SDL_Renderer* renderer, Rect rect, Uint8 red, Uint8 green, Uint8 blue) {
-    const SDL_FRect target{float(rect.x), float(rect.y), float(rect.width), float(rect.height)};
-    SDL_SetRenderDrawColor(renderer, red, green, blue, 255);
-    SDL_RenderFillRect(renderer, &target);
-}
+using bench::box;
+using bench::ink;
+using bench::text;
+constexpr SDL_Color paper{225, 238, 230, 255}, mint{143, 229, 191, 255};
+constexpr SDL_Color quiet{160, 185, 184, 255}, dark{17, 36, 41, 255};
 
 #if LAB_CHECKPOINT >= 2
-inline void drawButton(SDL_Renderer* renderer, const Ui& ui, Control id, Rect rect, const char* label) {
-    fill(renderer, rect, 48, 63, 87);
-    if (ui.hot == id) {
-        fill(renderer, rect, 67, 87, 118);
-    }
-#if LAB_CHECKPOINT >= 3
-    if (ui.active == id && ui.hot == id) {
-        fill(renderer, rect, 33, 112, 104);
-    }
-#else
-    (void)id;
-#endif
-
-    SDL_SetRenderDrawColor(renderer, 230, 237, 247, 255);
-    SDL_RenderDebugText(renderer, float(rect.x + 16.0), float(rect.y + 18.0), label);
+inline SDL_FRect asSDL(Rect r) {
+    return {float(r.x), float(r.y), float(r.width), float(r.height)};
 }
-#endif
 
-inline void draw(SDL_Renderer* renderer, const Model& model, const Ui& ui) {
-    SDL_SetRenderDrawColor(renderer, 11, 16, 32, 255);
-    SDL_RenderClear(renderer);
-    fill(renderer, {24.0, 24.0, 616.0, 492.0}, 20, 29, 46);
-    fill(renderer, {48.0, floorY, 568.0, 2.0}, 100, 143, 137);
-
-#if LAB_CHECKPOINT >= 1
-    // Tô từng hàng ngang của hình tròn, không cần ảnh hoặc texture bên ngoài.
-    for (int row = -14; row <= 14; ++row) {
-        const double halfWidth = std::sqrt(ballRadius * ballRadius - double(row * row));
-        fill(renderer, {320.0 - halfWidth, model.y + double(row), halfWidth * 2.0 + 1.0, 1.0}, 255, 190, 104);
-    }
-    SDL_SetRenderDrawColor(renderer, 225, 232, 244, 255);
-    SDL_RenderDebugTextFormat(renderer, 48.0f, 486.0f, "y=%.2f v=%.2f ticks=%llu", model.y, model.velocity, static_cast<unsigned long long>(model.ticks));
-#else
-    (void)model;
-    fill(renderer, {306.0, 76.0, 28.0, 28.0}, 255, 190, 104);
-#endif
-
-#if LAB_CHECKPOINT >= 2
-    fill(renderer, panel, 25, 35, 54);
-    SDL_SetRenderDrawColor(renderer, 225, 232, 244, 255);
-    SDL_RenderDebugText(renderer, 688.0f, 48.0f, "SIMULATOR CONTROLS");
-    const char* pauseLabel = "Pause";
-    if (model.paused) {
-        pauseLabel = "Resume";
-    }
-    drawButton(renderer, ui, Control::Pause, pauseButton, pauseLabel);
-    drawButton(renderer, ui, Control::Reset, resetButton, "Reset scene");
-#else
-    (void)ui;
+inline void drawButton(SDL_Renderer* r, const Ui& ui, Control id, const char* title) {
+    const auto rect = asSDL(bounds(id));
+    SDL_Color background{50, 78, 82, 255};
+    if (ui.hot == id) background = {67, 102, 101, 255};
+    if (ui.active == id) background = {25, 109, 95, 255};
+    box(r, rect, background);
+    text(r, rect.x + 12, rect.y + 16, title, paper);
+}
 #endif
 
 #if LAB_CHECKPOINT >= 4
-    fill(renderer, gravitySlider, 38, 50, 72);
-    const double knobX = gravitySlider.x + model.gravity / 1200.0 * gravitySlider.width;
-    fill(renderer, {gravitySlider.x, 250.0, gravitySlider.width, 4.0}, 111, 132, 164);
-    fill(renderer, {knobX - 5.0, 238.0, 10.0, 28.0}, 89, 225, 190);
-    SDL_SetRenderDrawColor(renderer, 225, 232, 244, 255);
-    SDL_RenderDebugTextFormat(renderer, 688.0f, 212.0f, "Gravity: %.0f px/s^2", model.gravity);
-    SDL_RenderDebugText(renderer, 688.0f, 290.0f, "Range: 0 .. 1200");
-#endif
-
-#if LAB_CHECKPOINT >= 5
-    Rect focused{};
-    if (ui.focus == Control::Pause) {
-        focused = pauseButton;
-    }
-    if (ui.focus == Control::Reset) {
-        focused = resetButton;
-    }
-    if (ui.focus == Control::Gravity) {
-        focused = gravitySlider;
-    }
-    if (ui.focus != Control::None) {
-        const SDL_FRect border{float(focused.x - 3.0), float(focused.y - 3.0), float(focused.width + 6.0), float(focused.height + 6.0)};
-        SDL_SetRenderDrawColor(renderer, 255, 209, 102, 255);
-        SDL_RenderRect(renderer, &border);
-    }
-    SDL_SetRenderDrawColor(renderer, 225, 232, 244, 255);
-    SDL_RenderDebugText(renderer, 688.0f, 340.0f, "Tab / Shift+Tab: focus");
-    SDL_RenderDebugText(renderer, 688.0f, 360.0f, "Enter/Space: button");
-    SDL_RenderDebugText(renderer, 688.0f, 380.0f, "Arrows/Home/End: slider");
-    SDL_RenderDebugText(renderer, 688.0f, 400.0f, "N: one paused step");
-#endif
-
-#if LAB_CHECKPOINT >= 6
-    SDL_RenderDebugTextFormat(renderer, 48.0f, 48.0f, "Scene presses: %d", model.scenePresses);
-    SDL_RenderDebugText(renderer, 48.0f, 68.0f, "Click scene to move ball; UI must consume its clicks.");
-#endif
+// [snippet paint-track]
+inline void paintTrack(SDL_Renderer* r, const Ui& ui, Control id, double fraction, const char* label) {
+    const SDL_FRect rect = asSDL(bounds(id));
+    const float knob = rect.x + rect.w * float(fraction);
+    text(r, rect.x, rect.y - 22, label, paper);
+    box(r, {rect.x, rect.y + 13, rect.w, 4}, {68, 96, 99, 255});
+    box(r, {rect.x, rect.y + 13, knob - rect.x, 4}, mint);
+    SDL_Color handle = mint;
+    if (ui.hot == id) handle = paper;
+    if (ui.active == id) handle = {255, 195, 101, 255};
+    box(r, {knob - 3, rect.y + 5, 6, 20}, handle);
 }
+// [/snippet paint-track]
+#endif
 
+inline void draw(SDL_Renderer* r, const Model& model, const Ui& ui) {
+    ink(r, dark);
+    SDL_RenderClear(r);
+    text(r, 24, 24, "F I E L D   N O T E S      /      F L O C K   O B S E R V A T O R Y", mint);
+    text(r, 24, 52, "01   /   Flight field", paper);
+    bool overlay = false;
+#if LAB_CHECKPOINT >= 3
+    overlay = model.colony.showNeighbors;
+#endif
+    // [snippet paint-flock]
+    bench::drawColony(r, model.colony, overlay, model.ticks);
+    // [/snippet paint-flock]
+#if LAB_CHECKPOINT >= 2
+    box(r, asSDL(panel), {32, 54, 60, 255});
+    text(r, 676, 46, "02   /   Flight desk", mint);
+    text(r, 676, 74, "TRANSPORT", quiet);
+    const char* pause = "Pause";
+    if (model.paused) pause = "Resume";
+    drawButton(r, ui, Control::Pause, pause);
+    drawButton(r, ui, Control::Reset, "Reset preset");
+    const char* check = "[ ] Neighbors";
+#if LAB_CHECKPOINT >= 3
+    if (overlay) check = "[x] Neighbors";
+#endif
+    drawButton(r, ui, Control::Observe, check);
+#else
+    (void)ui;
+    text(r, 670, 60, "Flight desk / starter", mint);
+    text(r, 670, 88, "No controls yet.", quiet);
+#endif
+#if LAB_CHECKPOINT >= 4
+    char label[48];
+    const auto& params = model.colony.params;
+    std::snprintf(label, sizeof(label), "Sense radius     %5.1f px", params.radius);
+    paintTrack(r, ui, Control::Radius, (params.radius - 20) / 120, label);
+    std::snprintf(label, sizeof(label), "Separation       %5.2f  x", params.separationWeight);
+    paintTrack(r, ui, Control::Separation, params.separationWeight / 5, label);
+    text(r, 676, 407, "TEAL  neighbors", mint);
+    text(r, 676, 429, "GOLD  tracked bird", {255, 197, 108, 255});
+#endif
+#if LAB_CHECKPOINT >= 5
+    if (ui.focus != Control::None) {
+        auto focus = asSDL(bounds(ui.focus));
+        focus.x -= 3; focus.y -= 3; focus.w += 6; focus.h += 6;
+        ink(r, {255, 198, 97, 255});
+        SDL_RenderRect(r, &focus);
+    }
+    text(r, 676, 478, "Tab focus  /  Arrows tune", quiet);
+#endif
+    text(r, 24, 513, "SIMULATION PATH   /   P28 SPATIAL GRID   /   SEED 028", quiet);
+}
 } // namespace lab

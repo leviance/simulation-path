@@ -1,84 +1,53 @@
-# Project 63 — Đồi núi tự sinh: terrain procedural không seam giữa chunks
+# Project 63 — Từ núi tuyết ra đại dương: sinh địa hình, dòng sông và sóng biển
 
-Từ world streaming của Project 62, tự viết một hàm độ cao theo tọa độ world, thêm value noise và nhiều octave rồi lấp cột cỏ, đất, đá. Mọi chunk dùng chung seed nên địa hình không phụ thuộc thứ tự tải. Mục tiêu là hiểu dữ liệu được tạo ra thế nào và kiểm nó bằng số, không chỉ làm một ảnh đồi núi.
+Sinh bằng một seed cả rừng thông tuyết, hẻm đá, rừng lá rộng và bãi cát; đứng yên vẫn thấy dòng sông chạy ra đại dương.
 
-## Tự thử trước khi xem lời giải
+Một bản đồ liên tục có bờ, đáy, nhiều tầng đá, hai dáng cây và mặt biển có độ cao thay đổi.
 
-Trong 180–240 phút, thay mẫu đất phẳng bằng heightfield 2D trong không gian 3D. Di chuyển qua gốc âm, qua đường chia chunk, đi xa rồi quay lại. Hiện seed, độ cao H, generation và jobs. Đổi cấu hình không được trộn chunk cũ với mới; cùng một world point phải trả cùng kết quả khi hỏi từ hai chunk có halo.
+## Học bằng bản C++ của mình
 
-Prerequisites: Project 58–62, uint32_t, vòng lặp, map/set và ownership. Thời gian học 14–19 giờ. ZIP mang theo toàn bộ nền, không cần chép file ở project khác.
+Bộ nạp gần/xa và tầng mây đã có từ Project 62. Bây giờ thay đầu vào của Region::load: mỗi cột được sinh từ seed và tọa độ world.
 
-## Chín bài, mỗi bài có source chạy độc lập
-
-| Snapshot | Phần được thêm |
-| --- | --- |
-| starter | World phẳng cao 4, streaming hoàn chỉnh của P62, camera/greedy mesh/raster CPU |
-| 01 | Theo luồng tạo Entry, đọc H trong cửa sổ |
-| 02 | Hàm sin/cos theo world X/Z, lượng tử hóa số block |
-| 03 | Hash uint32_t theo địa chỉ lattice và seed, thử mảng thô |
-| 04 | Smoothstep, nội suy bốn góc thành value noise |
-| 05 | Tổng nhiều octave có chuẩn hóa, giới hạn lấy mẫu |
-| 06 | Air/Grass/Dirt/Stone, vách chênh cao và culling biên resident |
-| 07 | Cấu hình mới là thế hệ mới; bootstrap một chunk rồi tải theo budget |
-| 08 | Inspector cột nguyên, signal/H, cache raster và lifecycle input |
-| 09/final | Golden fixtures, oracle cột và bề mặt, regeneration và bounded tests |
-
-source-template/ là nguồn chuẩn trong repository website; npm run generate:course sinh CMake và snapshot. ZIP đã có starter, checkpoints/01…09, final, tests và CMakeLists.txt. C++ có comment, thụt bốn khoảng trắng và dòng dài không bị ngắt tùy tiện.
-
-## Build và chạy
-
-```bash
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 20
-./build/Debug/project_63_final.exe
-```
-
-Windows: Visual Studio 2022, Desktop development with C++. C++20, CMake ≥3.24, SDL3 khóa 3.4.8 qua FetchContent URL/checksum, link SDL3::SDL3. Không thư viện noise hay assets ngoài SDL runtime. Với single-config Ninja/Make, thêm CMAKE_BUILD_TYPE=Debug và executable ở build/. Final là target mặc định; BUILD_CHECKPOINTS=ON thêm starter và project_63_checkpoint_1…9.
+Giải nén ZIP vào thư mục riêng. Ngay cạnh `CMakeLists.txt`, chạy:
 
 ```powershell
-$smoke = Start-Process -FilePath ".\build\Debug\project_63_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
-if (-not $smoke.WaitForExit(30000)) {
-    $smoke.Kill()
-    throw "Smoke quá 30 giây."
-}
-if ($smoke.ExitCode -ne 0) { throw "Smoke thất bại." }
+cmake -S . -B build-work -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_63_work --parallel 1
+.\build-work\Release\project_63_work.exe
 ```
 
-Smoke ẩn và thoát sau một frame, không thay kiểm tương tác. CTest không tạo window, check vẫn chạy dưới NDEBUG. Automation cần deadline bên ngoài cho build và process tree; không dùng benchmark/drain vô hạn, chỉ tối đa hai compiler.
+CMake chỉ tạo `work/` từ `starter/` khi thư mục này chưa tồn tại. Sửa `work/include/trail/` xuyên suốt các bài, rồi build lại **cùng target**. Với Ninja/Make, mở `./build-work/project_63_work`. Các mục **Vị trí sửa và mã cần viết** trong bài cho biết chỗ chèn, đoạn cần thay và đoạn mới. Những dòng `// [snippet …]` là chú thích của sách, không phải lệnh C++.
 
-## Điều khiển
+Nếu học liền từ Project 62, ZIP đã có mã nền tương đương bản cuối trước và các tệp khung mới cho mốc này. Muốn giữ phần tự viết, đối chiếu `work/include/trail/` cũ với `starter/include/trail/` mới và mang sang các header chung bạn đã sửa; giữ các header mới và `src/main.cpp` của ZIP này. Không chép đè cả thư mục. Nếu API của bạn khác, nối lại ở hàm được chỉ trong bài đầu.
 
-- WASD dịch player 4 world units mỗi nhấn, không phải FPS controller. Arrow/drag ảnh 3D orbit; +/− zoom.
-- N: một batch. Space: chạy/dừng queue. B: budget 1/2. G: radius 1/2. T: bật route hữu hạn của P62, Space mới chạy.
-- P: vị trí mẫu, giữ config hiện tại. IJKL/click map: chọn Key; E đến tâm Key nếu trong miền. R reset cả world/config; Escape thoát.
-- Từ bài 07: C tăng seed, F đổi scale 16/32/64, O đổi octave 1..4. Thao tác pause và bắt đầu generation mới.
-- Từ bài 08: đọc n và H tại floor(player.X/Z). Từ bài 09: V kiểm resident bằng oracle cột/bề mặt và sanity scheduler; không thay toàn suite hành trình.
+Chỉ sau bài cuối mới build `project_63_tests` trong `build-work` rồi chạy `ctest --test-dir build-work -C Release --output-on-failure --timeout 30`. Ở cấu hình này tests đọc **work/include**, không đọc `final/`. Đừng lấy một lần chạy checkpoint hoặc CTest của bản mẫu làm kết quả bài làm.
 
-Canvas có bộ chỉnh draft/Áp dụng cấu hình thay phím C/F/O, preset, pause/reset, bước tay, orbit, nhập X/Z và height map kéo chọn cột. DPR, pointer capture/cancel, keyboard và reduced-motion được xử lý; mất focus/ẩn trang sẽ pause và không tự resume. Canvas có thêm mặt cắt và lỗi local có chủ đích chỉ ở preview 2D; native tập trung mesh, map streaming và inspector. Hai bản dùng cùng công thức và fixtures, không buộc UI giống nhau từng pixel.
+## Chạy bản mẫu để đối chiếu
 
-## Quy ước dữ liệu và toán
+Cần compiler C++20 và CMake 3.24 trở lên. Trên Windows, mở Developer PowerShell của Visual Studio 2022. Từ thư mục vừa giải nén:
 
-Từ bài 04, Canvas có thí nghiệm riêng trên một ô lattice: đọc bốn góc, kéo tx/tz, bật/tắt smoothstep và theo dõi a/b/n. Mọi thao tác kéo có input HTML tương đương. Thí nghiệm tĩnh dùng seed đang áp dụng, không sửa terrain resident. Bài 05 có bảng đóng góp từng octave tại world (15,8) để tính lại n và H bằng tay.
+```sh
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --parallel 1
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+```
 
-- Một tầng Y=0..15; Chunk 16³ x-fast: index=x+16*(z+16*y). Air=0, Grass/Dirt/Stone=1/2/3, tất cả block khác Air opaque.
-- worldX=Key.x*16+localX, tương tự Z. heightAt trả số block H trong [2,14], lấp y=0..H−1. Đỉnh mesh ở mặt phẳng y=H.
-- Seed nguyên 0..65535, dùng chung mọi chunk. Hash không giữ state, nhân unsigned modulo 2³². TypeScript dùng Math.imul/>>>; không dùng random hoặc std::hash.
-- Nút lattice chứa giá trị trong [−1,1]. Nội suy hai hàng rồi theo Z với s(t)=t²(3−2t). Đây là value noise, không phải gradient Perlin noise. Floor ở miền âm và kiểm finite trước cast.
-- Scale 16/32/64; 1..4 octave, frequency nhân 2, amplitude nhân 0.5; tổng chia tổng trọng số. H=clamp(floor(8+6n),2,14). Lớp chi tiết nhất có bước lattice tối thiểu hai block; không hứa band-limit hoàn toàn.
-- C1 nói về tín hiệu noise trước lượng tử hóa; H vẫn có bậc. Không yêu cầu H(15,z)=H(16,z). Cùng một điểm world qua hai halo mới phải bằng nhau.
-- Cột H<11 có Grass trên cùng, tối đa hai lớp Dirt ngay dưới, đáy Stone; H≥11 toàn Stone. Đây chỉ là quy tắc tô vật liệu.
-- Neighbor resident opaque che mặt chung dù khác material; neighbor chưa tải là Air để đóng frontier. Source luôn thuộc chunk đang dựng. Không generate neighbor trong lookup mesher.
-- P62 scheduler giữ player±512, Key±64, resident≤49, pending≤74, wanted r=1/2 và keep r+1; 1–2 jobs/tick, tối đa 5 mesh/job. Budget không bảo đảm millisecond.
-- Đổi config tạo generation mới ngoài state hiển thị, bỏ cache/queue cũ, chỉ bootstrap chunk dưới player rồi tải dần. Bootstrap/rebuild=1 là công việc của giao dịch, không phải một tick. Bộ đếm theo thế hệ; camera/player/radius/budget được giữ. R trở về mặc định.
-- Native config được copy theo value. Canvas generator giữ snapshot của config; sửa draft chưa áp dụng không đổi world. Không giữ Entry reference qua unload/config reset.
+Chạy `build/Release/project_63_final.exe`. Trên Linux/macOS với generator một cấu hình, thêm `-DCMAKE_BUILD_TYPE=Release` khi configure rồi chạy `./build/project_63_final`. Mặc định CMake dùng SDL 3.4.8 qua FetchContent và link SDL3::SDL3. Có thể chọn `-DCOURSE_USE_INSTALLED_SDL3=ON` nếu đã cài đúng phiên bản.
 
-## Kiểm chứng
+## Thử ngay trong cửa sổ C++
 
-Mặc định seed42/scale32/octaves3: hash lattice (0,0)=388445122, (−1,0)=4012630698, (17,−23),seed65535=823775260. FNV-1a chunk (0,0)=4263195062, (−1,0)=2291264103, (1,−1)=2892146174, (−64,64)=3054277751. Các fixture final không áp cho checkpoint trung gian. Double không bật fast-math; fixtures kiểm toolchain hỗ trợ, không hứa kết quả bit-exact trên mọi compiler.
+WASD di chuyển, mũi tên hoặc nhấp chuột rồi di chuột để nhìn; Escape thả chuột. R về vị trí đầu, P dừng giờ, F1 mở số liệu. Phím 1 về cảnh quan; 2/3/4 lần lượt là một viên đá, khối đặc và cảnh rỗng.
 
-Test riêng hash/nội suy/normalization, so các chunk với một vùng world sinh liên tục, kiểm cùng mẫu qua halo, đổi thứ tự gọi, gỡ/quay lại, config snapshot, input sai trước mutation và idle. Oracle cột độc lập vòng fill/address nhưng vẫn dùng heightAt/materialAt nên không thay fixture toán. Oracle bề mặt độc lập mesher, đi từ global cell/sáu neighbor và so multiset có hướng/material. Test mutation chứng minh bắt được local-reset, seed sai và thiếu đỉnh.
+1. **Khắc một lòng sông từ núi ra biển** — Bắt đầu ở bờ cát; bay thấp dọc sông với Q/E. Đổi sang bảng lớp để nhìn phần đáy bên dưới mặt thoáng. Ở bài này mặt nước còn tĩnh để dễ thấy hình dạng của lòng dẫn.
+2. **Cho tán thông vượt qua đường biên chunk** — Dùng N để thử seed khác. Quay về seed mẫu bằng cách mở lại chương trình, so một tán nằm ngang đường nối sau hai lần nạp ngược thứ tự.
+3. **Nhìn vệt nước chạy qua một tảng đá đứng yên** — Đứng bên sông, nhìn một viên đá làm mốc. Bật P để dừng vệt rồi xoay đầu, sau đó cho chạy tiếp. Động tác xoay không được đổi pha nước.
+4. **Đỉnh sóng phải nhô lên khỏi mặt biển** — Đứng thấp ở bãi cát, dùng một mỏm đá cố định làm thước. Chụp ở hai giờ mô phỏng, giữ nguyên camera và FOV. So cả đường gợn lẫn vùng sáng.
+5. **Theo một con sông qua năm điểm hẹn** — Dùng F5 tới F9 kiểm lần lượt năm mốc, rồi tự đi giữa hai mốc liền nhau không nhảy cảnh. Ghi seed, giờ, hai vị trí và hướng nhìn nếu muốn người khác kiểm đúng bức ảnh.
 
-Chưa có hang động, overhang, erosion, biome khí hậu, nước, editor/persistence, network/thread hoặc collision/FPS. Regeneration không bảo toàn edit chưa lưu. Terrain procedural không có nghĩa cấp phát vô hạn. Các project chưa phát hành được đánh dấu Sắp ra mắt trong roadmap của website.
+## Mã nguồn và phép kiểm
+
+`starter/` là điểm xuất phát; mỗi thư mục `checkpoints/NN/` và `final/` mang đủ source riêng. Xem `tests/tests.cpp` cho những ca không cần cửa sổ. Từ chương trình thật có thể chụp một khung hình bằng `--capture scene.png` và chọn mốc bằng `--landmark 0` tới `4`.
+
+- So mép đất, tán cây và mặt biển cùng tọa độ/giờ; kiểm hướng vệt nước ở hai mốc dọc sông.
+- Bốn section theo chiều đứng, seed ổn định, sóng hình học; không dùng bộ giải chất lưu.
+- Ở final nhìn thấy rừng, đồi đá, hẻm sâu, tuyết, bãi cát và nước mở trong cùng bản đồ; vừa thấy gợn sông trôi vừa thấy biển nhấp nhô. CTest so cả tính lặp lại và dấu của chuyển động.

@@ -1,93 +1,134 @@
-# Project 54 — Nhìn xuyên khối sương 3D
+# Project 54 — Volume Lightbox
 
-Xây ứng dụng C++20/SDL3/OpenGL 3.3 core: mỗi fragment phát một ray xuyên scalar volume, lấy density bằng sampler3D rồi tích lũy màu/transmittance theo front-to-back. Dự kiến 13–17 giờ; thử challenge 120–180 phút trước khi đọc lời giải.
+**Nhìn xuyên khối sương 3D bằng fragment shader.** Xoay góc nhìn quanh khối dữ liệu, chuyển MIP/average/alpha, chọn một tia để đọc từng mẫu và đo chất lượng–chi phí khi đổi step. Đây là ứng dụng C++/SDL3/OpenGL độc lập; không cần chạy website hoặc ghép source project khác.
 
-## Lộ trình chín bài
+## Mục đích và cách học
 
-1. Window/context → fullscreen triangle → gradient trong target 240×180.
-2. Camera orbit, basis, perspective ray normalized và pixel centre.
-3. Ray–box interval, parallel/miss và camera inside.
-4. Density float/R32F, x-fast, upload texture 3D và trilinear.
-5. Beer–Lambert có ds; một midpoint để kiểm medium hằng.
-6. Midpoint marching, partial tail, C/T và thứ tự front-to-back.
-7. Transfer warm/cool, ghép nền rồi mới gamma.
-8. Step size, early termination có bound và giới hạn workload.
-9. Pure CTest, shader smoke và GPU numeric verify nhỏ.
+Project 53 cho ta đọc scalar ở từng lát; Project 54 đọc cả đoạn dọc ray. Điều cần học không chỉ là tạo một đám mây đẹp mà là giải thích vì sao ba cách gộp mẫu tạo ba ảnh khác nhau, tìm lỗi bằng fixture và biết mình đã đo thời gian gì.
 
-Prerequisites: Project 33–36 (SDL/OpenGL/GLSL), 52 (ray/camera/slab), 53 (volume/spacing/centre/interpolation). Đây là visualization emission–absorption, không renderer scattering/lighting vật lý và không dữ liệu y khoa.
+Nên biết SDL/OpenGL/shader từ Project 33–36, ray từ 52, scalar/centre/trilinear từ 53. Camera, GL loader, glyph/UI và dữ liệu tổng hợp là scaffold được cung cấp. Volume shader/compositing vẫn được tự viết, không dùng engine hoặc mesh shell thay tích phân.
 
-## Build/run
+Giáo trình có **10 bài**, từ cửa sổ tới ray/box/texture, MIP/average, alpha, transfer/lighting, inspector, đo và kiểm chứng. Dự kiến đọc 4–5 giờ, tự viết 7–10 giờ, thử/kiểm 3–5 giờ; setup/build đầu tính riêng. Đầu module có thử thách để tự xây trước khi đọc hướng dẫn.
 
-CMake 3.24+, compiler C++20; SDL3 khóa 3.4.8/checksum qua FetchContent, link SDL3::SDL3. Windows: Visual Studio 2022 Desktop development with C++. Runtime cần driver/context OpenGL 3.3 core (không compute shader). Linux/macOS cần SDL platform dependencies và context phù hợp.
+Trong repository, `source-template/` là nguồn authored. Generator tạo starter/checkpoints/final; ZIP chỉ chứa các bản chạy độc lập đó, không mang source-template hoặc công cụ Node. Hãy sửa đúng snapshot/target đang học trong bản tải về. Mã hoàn chỉnh không bị chia thành các đoạn phải tự đoán cách ghép.
 
-```bash
+## Build và chạy
+
+- Compiler C++20, CMake **3.24+**, GPU/context **OpenGL 3.3 core** hỗ trợ texture 3D ít nhất 128³ và render target RGBA32F.
+- SDL **3.4.8** được tải bằng FetchContent với SHA-256 và link qua `SDL3::SDL3`. Không tự đổi dependency.
+- Windows đã dùng Visual Studio 2022. Hướng dẫn CMake đa nền tảng không đồng nghĩa mọi GPU/driver đều đã được kiểm.
+
+```powershell
+cmake -S . -B build
+cmake --build build --config Release --parallel 1
+.\build\Release\project_54_final.exe
+```
+
+Với generator single-config trên Linux/macOS, đặt `-DCMAKE_BUILD_TYPE=Release` khi configure và chạy executable ngay trong `build/`. Máy không có context/format cần thiết sẽ báo lỗi, không thay volume bằng một ảnh giả.
+
+Muốn build cả starter và checkpoint:
+
+```powershell
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
+cmake --build build --config Debug --parallel 1
 ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
+cmake --build build --config Release --parallel 1
 ctest --test-dir build -C Release --output-on-failure --timeout 20
 ```
 
-Windows chạy build/Debug/project_54_final.exe. Final mặc định; BUILD_CHECKPOINTS bật starter và project_54_checkpoint_1…9. Với single-config generator, chọn CMAKE_BUILD_TYPE lúc configure và executable nằm trực tiếp trong build. ZIP độc lập, không cần website/Project 53/generator.
+Ví dụ Bài 5: target `project_54_checkpoint_5`, thư mục source `checkpoints/05/`. Final là target mặc định. Shader thay đổi theo checkpoint được copy vào `shaders/<target-name>/` cạnh executable; không để các target chép đè shader của nhau.
 
-Shader đọc từ thư mục shader của checkpoint đang build; fallback sang shaders cạnh executable. CMake copy shader cho từng target. Không chỉ chép main.cpp: cần headers, shader và SDL runtime. Compile/link failure in tên shader và log driver; uniform active thiếu tên báo lỗi.
+## Sản phẩm và quy mô thật
 
-## Điều khiển
+- Final mặc định **128³ = 2.097.152 Float32 / 8 MiB** CPU, texture **GL_R32F** tương ứng trên GPU. N=64 dùng 262.144 mẫu / 1 MiB để học/so sánh; không thay mức nghiệm thu 128³.
+- Box **[-1,1]³**, spacing **2/N**, tâm i = -1+(i+0.5)*spacing; x-fastest `x+N*(y+N*z)`. World unit tùy chọn, không phải mm/HU.
+- Dataset: sương xoắn tổng hợp, hai lõi, slab, constant 0.25, ramp XYZ, empty. Đây là dữ liệu tĩnh, **không phải fluid solver**.
+- Viewer perspective dùng drawable thật, không phóng ảnh 240×180 thành sản phẩm cuối. Tab mở toàn cửa sổ; số ray pixels thực luôn hiện ở Tools. Target tối đa **4 Mi pixels**, 4096 mỗi chiều, RGBA32F tối đa 64 MiB payload; quá ngân sách phải giảm và công bố kích thước thật.
+- Volume chỉ fill/upload khi đổi dataset/N. Có candidate mới trước khi commit; thất bại giữ dữ liệu trước. Camera/transfer không sửa raw density.
 
-- Drag trái/mũi tên orbit, wheel đổi distance 4..12; pitch ±1.2.
-- Space bắt đầu/dừng tự quay 0.3 rad/s, mở paused. dt≤0.1s.
-- I camera inside (origin zero, forward +z cố định), R reset, Escape thoát.
-- P phantom/ramp/constant từ Bài 04; +/− sigma từ Bài 05.
-- Q step 0.02/0.04/0.08/0.16 từ Bài 06.
-- C warm/cool từ Bài 07; E early T≤0.001 từ Bài 08.
-- Blur/minimize/reset hủy capture, dừng tự quay, không tự resume.
+## Ba mode và công thức
 
-Canvas web là CPU oracle nhỏ 48×36, không WebGL và không GPU benchmark. Kéo/mũi tên orbit, Ray u/v chọn tia, N tiến một sample, Space chạy/dừng profile, R reset. Reduced motion chỉ cho tiến thủ công. Preview dựng batch tối đa hai hàng mỗi frame, hủy batch cũ khi đổi input; soft deadline 10ms không preempt một row đã bắt đầu.
+Ray normalized, interval entry>=0; camera inside bắt đầu ở mắt. Xử lý direction zero trước phép chia slab. Miss không lấy mẫu. Sampler texture dùng GL_LINEAR/CLAMP_TO_EDGE với `uvw=(world+1)/2`; direct sampler có replication nhưng loop vẫn bị giới hạn bởi ray–box.
 
-## Dữ liệu và công thức
+Cutoff áp dụng **trước reducer**: `rho'=clamp((rho-cutoff)/(1-cutoff),0,1)`. Nó chủ động thay scalar được tích lũy, không ghi ngược vào volume. Classification trước average khác classification sau average.
 
-Count 64×48×40; spacing (0.05,0.08,0.12) world units; box min=(-1.6,-1.92,-2.4), max=(1.6,1.92,2.4). Density R32F/float x-fast chiếm 480 KiB. Index=x+nx*(y+ny*z). Phantom cùng công thức Project 53; ramp=(x+2y+4z)/313, constant rho=0.25.
+| Mode | Kết quả raw / ý nghĩa |
+| --- | --- |
+| MIP | max rho' dọc đoạn; raw RGB chép scalar, W=1 là ô chưa dùng, không phải T |
+| Average | sum(rho'*ds)/L; trung bình có trọng số chiều dài, không phải ảnh X-ray |
+| Alpha | C+=T*alpha*color; T*=exp(-sigma*rho'*ds), alpha=1-exp(-sigma*rho'*ds); raw=(C,T) linear |
 
-Texture GL_R32F/GL_RED/GL_FLOAT, GL_LINEAR ở level0, CLAMP_TO_EDGE ba trục. UVW=(world−min)/extent; centre=(i+0.5)/N; CPU g=uvw*N−0.5 và replicate nửa ô sát edge. Box interval loại miss trước sampler clamp.
+Count=ceil(L/step); mỗi sample ở midpoint của ds thực, kể cả remainder cuối. Step **0.008..0.16**, sigma **0..12** trên world unit, cutoff **0..0.8**, cap **512 đoạn/ray**. Vượt cap là diagnostic/lỗi, không nhận ray bị cắt ngắn như đúng.
 
-Ray direction normalized, vertical FOV55°, tMax20. Inside entry=0. StepLength 0.02..0.25, sigma0..8; count=ceil(L/step), sample midpoint, ds cuối là remainder. C+=Told*(1−exp(−sigma*rho*ds))*transfer(rho); T*=exp(−sigma*rho*ds). Tiny floating-point tail có thể làm sample count CPU/GPU khác một, không làm thay optical length đáng kể.
+Palette gán màu bounded [0,1]. Gradient lighting tùy chọn trong alpha lấy sáu mẫu phụ ở khoảng spacing và nhân màu bằng local diffuse; không đổi T. Đây **không phải** shadow/multiple-scattering solver. Preset White + lighting off dùng để kiểm công thức medium hằng.
 
-Result RGBA32F chứa (C,T), alpha không phải opacity. Present C+T*background, gamma gần đúng1/2.2 sau cùng; GL_BLEND/GL_DEPTH_TEST/GL_FRAMEBUFFER_SRGB tắt. Warm đổi RGB, không đổi extinction. Density [0,1], transfer/background bounded; chưa có HDR.
+Early chỉ alpha, **T<=0.0005**. Bound áp cho C/T linear và composed color linear với transfer/background bounded, không áp nguyên xi lên ảnh gamma/8-bit. Present alpha là C+T*background, rồi gamma một lần. Density tổng hợp không phải HU hoặc CT reconstruction; không có DICOM/y khoa.
 
-Target 240×180 cố định, tối đa512 samples/ray; resize chỉ letterbox/present. Cap error trả diagnostic magenta, CPU throw, không partial result. Early tùy chọn T≤0.001 có bound sai khác C/T và mỗi channel màu compose≤0.001 cho transfer/background [0,1]; khác cap cắt ray.
+## Điều khiển desktop
 
-## Kiểm chứng có giới hạn
+| Thao tác | Kết quả |
+| --- | --- |
+| Kéo / mũi tên | Orbit, không ghi vào volume |
+| Wheel | Zoom, có thể tiến vào box; không đổi FOV |
+| I / F | Eye tại origin / nhìn thẳng trục Z |
+| 1 / 2 / 3 | MIP / average / alpha |
+| P / N | Đổi dataset / 64³–128³ |
+| Q / hai nút step | Đổi độ dài bước |
+| +/- | Sigma, chỉ có ý nghĩa alpha |
+| [ / ] | Cutoff trước reducer |
+| C / L | Palette / local gradient lighting alpha |
+| Shift+click trong scene | Chọn ray; sidebar không nằm trong ảnh |
+| , / . | Lùi/tiến con trỏ sample của CPU trace |
+| Space | Quay/dừng orbit tự động; mở ở trạng thái dừng |
+| R | Đặt lại camera/transfer/ray, giữ dataset/N |
+| Tab | Showcase toàn cửa sổ / mở lại Tools |
+| B | Bắt đầu/hủy phép đo bốn step |
+| Esc | Hủy job đang chạy; nếu không có job thì thoát |
 
-CTest pure không SDL/window/GPU. Checks không dùng assert nên Debug và Release đều kiểm interval, layout/edge, medium hằng analytic, partial tail, zero sigma, miss, early bound, ramp convergence, input bounds và dataset immutability.
+Blur/minimize/reset và mất left-button mask nhả capture, dừng orbit. Đổi tham số/camera/dataset vô hiệu hóa kết quả benchmark cũ. Inspector là **CPU reference** của ray đang chọn, không phải log sample readback từ fragment shader; nó không tự chứng minh shader đúng.
 
-GPU verify vẫn dùng target 16×12 và bốn pixel/cấu hình. Nó kiểm sáu settings trên mỗi view/dataset: hai step cơ sở, sigma=0, transfer cool và hai ca sigma=8 bật early. Tổng 576 phép so channel C/T, không phải benchmark. Phép so màu không chứng minh số mẫu đã tiết kiệm trên GPU; số mẫu và early bound được kiểm ở oracle CPU riêng. Giữ timeout ngoài process 30 s và không thử lại tự động sau timeout.
+## Đo chất lượng–thời gian
 
---smoke-gpu ở checkpoint1–9 render hidden16×12 một lần, kiểm shader compile/link/uniform, một pixel hữu hạn và GL errors. --verify-gpu chỉ checkpoint9/final: target16×12, bốn pixel/config, phantom/ramp/constant, outside/inside, step0.04/0.17. So linear C/T với CPU double, tolerance0.0025; không screenshot/gamma.
+Benchmark dùng cùng dataset/N/camera/mode/cutoff/palette/lighting, early OFF; target **320×240**, step **0.08/0.04/0.02/0.008**, **một warm-up + năm repeats**. `GL_TIME_ELAPSED` đo draw volume trên GPU; báo median/IQR, **không gồm CPU fill/upload, readback, present/swap**.
 
-Ví dụ PowerShell hard timeout30s ngoài process:
+Max error raw tại **48 pixel cố định** được so CPU fine step **0.002**. Đây là ước lượng ở những ray ấy, không là bound cho toàn ảnh hoặc oracle giải tích; midpoint sets không buộc error giảm đơn điệu. Canvas chỉ đo JavaScript CPU cho một ray, không dùng để kết luận GPU speedup/FPS.
+
+Job gửi tối đa một draw mỗi tick, deadline tổng **15 s**, poll query tối đa **3 s**, có cancel. Cả app/CPU loop/GPU loop đều có ngân sách; watchdog không preempt một command GPU hoặc bảo đảm driver không treo. Không mở rộng benchmark bằng một dispatch/loop vô hạn.
+
+## Kiểm tra hữu hạn
+
+Pure tests không mở window; checks vẫn hoạt động trong Release. Có constant/slab giải tích ở ba mode, centre/corners/boundary, inside/parallel/miss, empty, sigma zero, layer order, actual 64³/128³, histogram, input guard và early bound.
+
+`--verify-gpu` chỉ ở final/checkpoint 10: target **24×18** với texture **128³ thật**, sáu dataset, inside/outside, ba mode/nhiều step, tùy chọn cutoff/palette/early. So raw dimensionless output, abs tolerance **0.0025**, không so gamma screenshot. Trong app giới hạn kiểm 20 s; luôn thêm watchdog ngoài process.
 
 ```powershell
-$gpuCheck = Start-Process -FilePath ".\build\Debug\project_54_final.exe" -ArgumentList "--verify-gpu" -WindowStyle Hidden -PassThru -RedirectStandardOutput "gpu-verify.log" -RedirectStandardError "gpu-verify-error.log"
-if (-not $gpuCheck.WaitForExit(30000)) {
-    $gpuCheck.Kill()
-    throw "GPU verify vượt 30 giây."
+$program = (Resolve-Path '.\build\Release\project_54_final.exe').Path
+$taskProcess = Start-Process -FilePath $program -ArgumentList '--verify-gpu' -PassThru -WindowStyle Hidden
+if (-not $taskProcess.WaitForExit(30000)) {
+    Stop-Process -Id $taskProcess.Id -Force
+    throw 'GPU verification exceeded its 30-second process budget'
 }
-Get-Content "gpu-verify.log"
-Get-Content "gpu-verify-error.log"
-if ($gpuCheck.ExitCode -ne 0) { throw "GPU verify thất bại." }
+if ($taskProcess.ExitCode -ne 0) { throw 'GPU verification failed' }
 ```
 
-App kiểm deadline10s giữa readback. ReadPixels có thể chặn: timeout ngoài process cần thiết, nhưng không preempt GPU command đã gửi hoặc bảo đảm driver không treo. Không lặp lại khi timeout; xem log/driver trước. Không readback mỗi interactive frame.
+Trong repository dùng ProcessSupervisor/guardian theo ARCHITECTURE.md, không chỉ timeout của lời gọi tool. Các CLI khác:
 
-Numeric verify không kiểm mouse capture, keyboard, DPI/resize, pause/reset hoặc chất lượng driver. Kiểm tương tác desktop riêng. Không báo GPU PASS nếu môi trường không tạo được context.
+```powershell
+.\build\Release\project_54_final.exe --hidden --frames 3 --seconds 10
+.\build\Release\project_54_final.exe --hidden --capture volume.bmp --seconds 10
+.\build\Release\project_54_final.exe --hidden --mode mip --capture mip.bmp --seconds 10
+.\build\Release\project_54_final.exe --benchmark-gpu
+```
 
-## Phạm vi và source
+`--capture` đọc framebuffer thật trước swap, tự dừng sau ba frame nếu chưa đặt `--frames`. Hỗ trợ `--mode mip|average|alpha`, `--preset 0..5`, `--size 64|128`, `--showcase`. Frame limit tối đa 600, seconds tối đa 60; `--smoke-gpu` dùng target nhỏ và không phải bằng chứng viewport cuối. Bọc mọi lượt tự động bằng supervisor hữu hạn.
 
-Không DICOM/HU, CT reconstruction, calibration vật liệu, scattering, shadow, multiple scattering, animated volume, empty-space skipping, jitter hay adaptive step. Trilinear/step nhỏ không phục hồi resolution voxel.
+## Checklist sử dụng và giới hạn bằng chứng
 
-source-template, tests và README là authored inputs; starter/checkpoints/final/CMake/ZIP được sinh từ source chuẩn và không commit vào repository website. Không sửa snapshot trực tiếp; ZIP đã gồm đủ snapshot chạy độc lập.
+1. Mở final mặc định, xác nhận 128³/8 MiB và viewport lớn; Tab mở toàn cửa sổ, rồi khôi phục controls.
+2. So ba mode trên cùng Cloud/Cores/Slab. F + Constant + sigma=2 + White/light off cho ray giữa dài 2, T=exp(-1).
+3. Kéo/zoom/inside, Shift+click, tiến sample; tham chiếu đổi đúng và sidebar không pick thành scene.
+4. Pause/Reset/blur/mouse-up ngoài cửa sổ không giữ capture; Reset giữ preset/N.
+5. Chạy B đủ 4/4; thử hủy giữa chừng và đổi parameter. Bảng cũ phải mất hiệu lực.
+6. Resize/DPI và bàn phím thật cần kiểm riêng, không suy ra chỉ từ build/CTest/GPU oracle hoặc synthetic SDL events.
 
-Tham khảo: [SDL_GL_CreateContext](https://wiki.libsdl.org/SDL3/SDL_GL_CreateContext), [glTexImage3D](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glTexImage3D.xhtml), [glTexParameter](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glTexParameter.xhtml), [PBRT Transmittance](https://www.pbr-book.org/4ed/Volume_Scattering/Transmittance).
-
-Tiếp theo: Project55 — Máy X-ray ảo, tính tín hiệu detector sau khi tia xuyên các lớp vật liệu.
-
+Kiểm native input, browser/Canvas, thuật toán, benchmark và ZIP là các nhóm bằng chứng riêng. Ảnh chụp không thay executable; test số không tự chứng nhận UX/y khoa. Source/checkpoint/ZIP/ảnh/build/dependency sinh ra không đưa vào Git.

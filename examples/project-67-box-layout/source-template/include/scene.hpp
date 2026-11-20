@@ -25,22 +25,27 @@ inline void initStyles(const Widget& node, Styles& styles) {
 #endif
 
 // Starter giữ nguyên cách đặt Rect thủ công của Project 66, trên một cây phẳng.
+// [snippet manual]
 inline Scene buildScene() {
     Scene scene;
     Tree& tree = scene.tree;
     tree.root->local = {616, 24, 320, 492};
-    scene.title = add(tree, 1, Kind::Label, {18, 18, 284, 24}, "SIMULATOR");
+    scene.title = add(tree, 1, Kind::Label, {18, 18, 284, 24}, "FLIGHT DESK / BOX LAYOUT");
     WidgetId parent = 1;
 #if LAB_CHECKPOINT >= 5
-    scene.group = add(tree, 1, Kind::Panel, {22, 54, 276, 252}, "Controls");
+    // [snippet nested-group]
+    scene.group = add(tree, 1, Kind::Panel, {0, 0, 1, 1}, "Controls");
     parent = scene.group;
+    // [/snippet nested-group]
 #endif
     scene.pause = add(tree, parent, Kind::Button, {22, 58, 276, 36}, "Pause", Action::Pause);
     scene.reset = add(tree, parent, Kind::Button, {22, 108, 276, 36}, "Reset", Action::Reset);
-    add(tree, parent, Kind::Label, {22, 158, 276, 24}, "Gravity");
-    scene.slider = add(tree, parent, Kind::Slider, {22, 198, 276, 32}, "Gravity");
-    add(tree, parent, Kind::Label, {22, 244, 276, 24}, "", Action::None, Binding::Gravity);
-    scene.footer = add(tree, 1, Kind::Label, {18, 292, 284, 24}, "", Action::None, Binding::Time);
+    add(tree, parent, Kind::Button, {22, 154, 276, 36}, "Neighbors", Action::Observe);
+    add(tree, parent, Kind::Label, {22, 194, 276, 24}, "", Action::None, Binding::Radius);
+    scene.slider = add(tree, parent, Kind::Slider, {22, 224, 276, 32}, "", Action::None, Binding::Radius);
+    add(tree, parent, Kind::Label, {22, 268, 276, 24}, "", Action::None, Binding::Separation);
+    add(tree, parent, Kind::Slider, {22, 298, 276, 32}, "", Action::None, Binding::Separation);
+    scene.footer = add(tree, 1, Kind::Label, {18, 350, 284, 24}, "", Action::None, Binding::Time);
 #if LAB_CHECKPOINT >= 2
     initStyles(*tree.root, scene.styles);
     BoxStyle& rootStyle = scene.styles.at(1);
@@ -53,4 +58,5 @@ inline Scene buildScene() {
 #endif
     return scene;
 }
+// [/snippet manual]
 } // namespace lab

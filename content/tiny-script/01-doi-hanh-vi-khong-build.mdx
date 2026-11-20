@@ -1,0 +1,118 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giữ nguyên nút, đổi điều nó làm
+
+## Vấn đề cần giải quyết
+
+Bạn đã có nút Reset chạy được. Trong buổi khảo sát, bạn muốn Reset còn đặt Radius về 50 px và bật Links. Sửa HTML không giúp: HTML nói nút ở đâu chứ không nói phải làm gì. Nếu sửa C++ thì mỗi thay đổi nhỏ lại phải build.
+
+## Hiểu ý tưởng trước khi viết code
+
+Giữ ba lớp tách bạch: markup mô tả control, CSS bố trí và tô chúng, script nhận một event và chọn các lệnh C++ được cấp. Thuật toán Boids, thời gian và số chim không thuộc ngôn ngữ mới.
+
+<InteractiveLab demo="tiny-script" mode="script72-1" />
+
+## Viết code từng bước
+
+### Một script hoàn chỉnh trông như thế nào?
+
+{/* asset assets/flight.tiny */}
+
+```javascript title="assets/flight.tiny — Một script hoàn chỉnh trông như thế nào?"
+// Đếm các lần gọi Pause thành công trong phiên script hiện tại.
+let presses = 0;
+
+function onPause() {
+    presses = presses + 1;
+    if (paused()) {
+        resume();
+    } else {
+        pause();
+    }
+}
+
+function onReset() {
+    reset();
+}
+
+function onObserve() {
+    links(!showLinks());
+}
+
+function onRadius(value) {
+    radius(value);
+}
+
+function onSeparation(value) {
+    separate(value);
+}
+```
+
+### Lấy script từ thư mục đang chỉnh sửa
+
+Dùng cùng bộ đọc có giới hạn như HTML và CSS. Bản C++ vẫn có thể chạy nếu script đang sửa bị lỗi; chức năng dừng khẩn bằng F9 không đi qua interpreter.
+
+{/* snippet include/markup/source.hpp#read-file */}
+
+```cpp title="include/markup/source.hpp — Lấy script từ thư mục đang chỉnh sửa"
+inline std::string readFile(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input)
+        throw Error("1:1 cannot open " + path.filename().string());
+    const std::streamoff length = input.tellg();
+    if (length < 0 || length > static_cast<std::streamoff>(maxBytes))
+        throw Error("1:1 file exceeds 16 KiB");
+    std::string bytes(static_cast<std::size_t>(length), '\0');
+    input.seekg(0);
+    if (!input.read(bytes.data(), length))
+        throw Error("1:1 incomplete file");
+    return bytes;
+}
+```
+
+### Đặt một chỗ duy nhất cho lần nạp script
+
+Mốc đầu báo số byte. Các handler vẫn do C++ Project 71 thực hiện. Kiểm đúng file ở bước này trước khi nghi ngờ parser hay callback.
+
+{/* snippet include/script/session.hpp#install-script */}
+
+```cpp title="include/script/session.hpp — Đặt một chỗ duy nhất cho lần nạp script"
+inline bool reload(Session& s, tiny::Desk& d, const std::filesystem::path& file) {
+    try {
+        const auto text = tiny::readFile(file);
+        s.message = std::to_string(text.size()) + " script bytes; C++ bindings still active";
+        d.error = false;
+        d.status = s.message;
+        return true;
+    } catch (const std::exception& e) {
+        s.message = file.filename().string() + ":" + e.what();
+        d.error = true;
+        d.status = s.message;
+        return false;
+    }
+}
+```
+
+## Ghép các phần lại
+
+Chạy checkpoint 1 với `--assets assets`. Thêm một dòng comment trong flight.tiny, lưu rồi F5. Số byte thay đổi nhưng click vẫn hoạt động như ở Project 71.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_72_checkpoint_1 --parallel 2
+.\build\Release\project_72_checkpoint_1.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Sửa bản flight.tiny cạnh ZIP trong khi app đang mở bản cạnh executable. Thử truyền --assets để tự chứng minh mình đang chỉnh file nào.
+
+## Tự kiểm tra kết quả
+
+Bàn vẫn điều khiển đúng đàn, biết vị trí file và biết F5 làm gì. Không nhầm 'đọc được source' với 'đã thực thi source'.
+
+## Bài tập mở rộng
+
+Hãy mô tả bằng lời hành vi của một nút “khảo sát gần”. Những quyết định nào nên ra script, những việc nào nhất thiết ở lại trong C++?
+
+[Bài 2: Một dấu bằng khác hai dấu bằng](/projects/tiny-script/02-doc-token-cua-logic).

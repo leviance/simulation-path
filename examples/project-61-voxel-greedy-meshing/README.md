@@ -1,84 +1,52 @@
-# Project 61 — Gộp tường voxel thành mảng lớn: Greedy Meshing
+# Project 61 — Rừng đón gió: gộp mặt đất, giữ gốc cây và cỏ đứng yên
 
-Giữ nguyên chunk và bề mặt, chỉ thay cách chia mesh: các mặt ngoài cùng plane/hướng/material được gộp thành rectangle lớn. Full chunk 16³ từ 1536 quad/3072 triangle còn 6 quad/12 triangle. Đây không phải xóa block hoặc chỉ render sáu mặt bất kể dữ liệu.
+Dựng một bìa rừng có thể xem khung dây mặt đất và nhìn gốc cỏ đứng yên khi ngọn nghiêng theo gió.
 
-## Tự thử trước khi đọc lời giải
+Cỏ và lá nhận cùng cơn gió qua nhiều vị trí; họa tiết đất vẫn lặp đúng từng block sau khi gộp.
 
-Trong 150–210 phút, thêm chế độ baseline/greedy vào khung đã hiển thị được chunk. Cho xoay camera, đổi preset và đọc bảng 2D của một hướng mặt. Kiểm tường sọc giữ màu, khoang Air không bị lấp, checker không gộp nhầm. Không cần editor hoặc streaming.
+## Học bằng bản C++ của mình
 
-Prerequisite: Project 58–59 (storage, neighbor-face elimination, camera/rasterizer CPU). Project 60 hữu ích cho luồng edit/dirty, nhưng ZIP này có đủ nền và không cần chép file từ module khác. Thời gian học 14–18 giờ.
+Dùng quy tắc mặt lộ của Project 59 và giữ ống ngắm của Project 60. Mặt đất được gộp lúc dựng, lá/cỏ chỉ uốn lúc vẽ.
 
-## Chín bài theo công việc thực tế
-
-| Snapshot | Kết quả |
-| --- | --- |
-| starter | Window, texture, chunk đặc đã bỏ mặt tiếp giáp, camera/rasterizer chạy được |
-| 01 | Readout mặt đơn vị/quad/triangle của baseline |
-| 02 | Mask một hướng/plane, bảng vật liệu 16×16 |
-| 03 | Khóa material, tách culling khỏi merging |
-| 04 | Rectangle width-first, height kiểm cả hàng, xóa vùng đã dùng |
-| 05 | Tích hợp quad lớn riêng +Y: full=1281 quad |
-| 06 | Gộp đủ sáu hướng, cut y: full=6 quad |
-| 07 | Preview lưu sẵn, bước tay/playback có giới hạn |
-| 08 | Cache mesh/frame, idle không rebuild/raster |
-| 09/final | Oracle độc lập, winding, fixture, raster/depth và cache tests |
-
-source-template/ là nguồn chuẩn trong repository website; chạy npm run generate:course ở gốc để sinh CMake/snapshot. ZIP đã có starter, checkpoints/01…09, final, tests và CMake. Mỗi snapshot có mã hoàn chỉnh, comment và các khối cách nhau; không tự ghép snippet rời để build.
-
-## Build và chạy
-
-```bash
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 20
-```
-
-Windows: Visual Studio 2022, Desktop development with C++. Chạy build/Debug/project_61_final.exe. Target final mặc định; BUILD_CHECKPOINTS bật starter và project_61_checkpoint_1…9. Single-config generator dùng CMAKE_BUILD_TYPE và executable ở build. C++20, CMake ≥3.24, SDL3 3.4.8 khóa URL/checksum bằng FetchContent, link SDL3::SDL3. Không assets/font library ngoài SDL runtime.
+Giải nén ZIP vào thư mục riêng. Ngay cạnh `CMakeLists.txt`, chạy:
 
 ```powershell
-$smoke = Start-Process -FilePath ".\build\Debug\project_61_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
-if (-not $smoke.WaitForExit(30000)) {
-    $smoke.Kill()
-    throw "Smoke quá 30 giây."
-}
-if ($smoke.ExitCode -ne 0) { throw "Smoke thất bại." }
+cmake -S . -B build-work -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_61_work --parallel 1
+.\build-work\Release\project_61_work.exe
 ```
 
-Smoke hidden thoát sau một frame. CTest thuần không tạo window và vẫn kiểm trong Release. Dùng tối đa hai compiler, deadline ngoài cho automation/build tree, không retry hoặc benchmark vô hạn.
+CMake chỉ tạo `work/` từ `starter/` khi thư mục này chưa tồn tại. Sửa `work/include/trail/` xuyên suốt các bài, rồi build lại **cùng target**. Với Ninja/Make, mở `./build-work/project_61_work`. Các mục **Vị trí sửa và mã cần viết** trong bài cho biết chỗ chèn, đoạn cần thay và đoạn mới. Những dòng `// [snippet …]` là chú thích của sách, không phải lệnh C++.
 
-## Điều khiển final
+Nếu học liền từ Project 60, ZIP đã có mã nền tương đương bản cuối trước và các tệp khung mới cho mốc này. Muốn giữ phần tự viết, đối chiếu `work/include/trail/` cũ với `starter/include/trail/` mới và mang sang các header chung bạn đã sửa; giữ các header mới và `src/main.cpp` của ZIP này. Không chép đè cả thư mục. Nếu API của bạn khác, nối lại ở hàm được chỉ trong bài đầu.
 
-- P: chín preset (số 8 là mask 4×4 của bài 04); R: reset. M: baseline/greedy.
-- Arrow hoặc left drag: orbit; +/−: zoom. Blur/minimize nhả capture và dừng playback.
-- F: hướng mặt, [ / ]: plane 0..16. PageUp/PageDown: cut y 0..15.
-- N: rectangle tiếp; Space: chạy/dừng preview, chạy lại từ đầu nếu đã hết.
-- V: đối chiếu oracle của khối hiện tại; Escape: thoát.
+Chỉ sau bài cuối mới build `project_61_tests` trong `build-work` rồi chạy `ctest --test-dir build-work -C Release --output-on-failure --timeout 30`. Ở cấu hình này tests đọc **work/include**, không đọc `final/`. Đừng lấy một lần chạy checkpoint hoặc CTest của bản mẫu làm kết quả bài làm.
 
-Native dùng nhãn ASCII. Canvas có nút/range/select thay thế keyboard, DPR, pointer capture/cancel, reduced-motion và readout tiếng Việt. Mở tạm dừng; không bắt người học dùng chuột để đi bước.
+## Chạy bản mẫu để đối chiếu
 
-Canvas đánh dấu seed và ô làm dừng width/height của rectangle đang xem; dữ liệu lấy từ danh sách đã trích và mask sau các rectangle trước đó. Playback chờ đủ 150 ms từ mốc RAF đầu, tạo đồng hồ mới khi Resume và không chạy bù thời gian Pause. Bài 04 có mask 4×4 với bốn rectangle được kiểm chung trong Node/CTest.
+Cần compiler C++20 và CMake 3.24 trở lên. Trên Windows, mở Developer PowerShell của Visual Studio 2022. Từ thư mục vừa giải nén:
 
-## Quy ước và phạm vi
+```sh
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --parallel 1
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+```
 
-- Chunk 16³, index=x+16*(z+16*y), Air=0, Grass/Dirt/Stone=1/2/3 đều opaque, y lên trên. Mesher chỉ đọc storage.
-- Culling: source đặc và neighbor Air/ngoài miền active thì giữ. Khác material vẫn che nhau. Cut dùng cùng activeBlock cho cả source/neighbor.
-- Face 0..5 = +X,−X,+Y,−Y,+Z,−Z. axis=face/2; uAxis=(axis+1)%3, vAxis=(axis+2)%3. +Y dùng u=Z, v=X.
-- Plane 0..16; source dương=plane−1, âm=plane. Vertex có thể bằng 16 nhưng index block chỉ 0..15.
-- Mỗi mask thuộc một direction/plane; material là khóa biến thiên. Duyệt v rồi u, width trước height; kiểm mọi ô hàng mới và xóa đúng w×h.
-- Quad corners P,P+wU,P+wU+hV,P+hV; hướng dương 0-1-2/0-2-3, âm đảo. Flat color theo material/hướng; chưa UV/AO/transparency.
-- 6×17×256=26112 mask samples cho greedy. comparisons đếm kiểm khóa khi mở rectangle, không phải ms. Baseline samples là neighbor checks, đơn vị khác.
-- Preview lưu danh sách rectangle của một mask, chỉ hiện prefix; mesh 3D luôn đầy đủ. Không diễn giả mesher bị tạm dừng giữa thuật toán.
-- Idle không rebuild/raster, camera chỉ frameDirty, chunk/cut/merge làm meshDirty. SDL present vẫn chạy. Preview plane/face không rebuild mesh.
-- Greedy không cam kết ít quad nhất. T-junction có thể có; demo CPU flat-color không chứng minh watertight cho mọi renderer hoặc thích hợp làm collision mesh.
+Chạy `build/Release/project_61_final.exe`. Trên Linux/macOS với generator một cấu hình, thêm `-DCMAKE_BUILD_TYPE=Release` khi configure rồi chạy `./build/project_61_final`. Mặc định CMake dùng SDL 3.4.8 qua FetchContent và link SDL3::SDL3. Có thể chọn `-DCOURSE_USE_INSTALLED_SDL3=ON` nếu đã cài đúng phiên bản.
 
-Chia source theo trách nhiệm: model/preset, quad, baseline, mask, rectangles, mesh, raster, stepper, cache, oracle, app (SDL controls/view), main (lifetime/event loop). Các file nhỏ, snapshot độc lập. Có thể nối edit Project 60 qua meshDirty; chưa tích hợp editor, streaming, controller hoặc texture atlas.
+## Thử ngay trong cửa sổ C++
 
-## Nghiệm thu
+WASD di chuyển, mũi tên hoặc nhấp chuột rồi di chuột để nhìn; Escape thả chuột. R về vị trí đầu, P dừng giờ, F1 mở số liệu. Phím 1 về cảnh quan; 2/3/4 lần lượt là một viên đá, khối đặc và cảnh rỗng.
 
-Fixture: single=6, full=6, cavity=12, empty=0, checker=12288 quad. Full baseline=1536 quad; full cut y=0 có 576 mặt đơn vị/6 quad. Tường sọc không gộp qua vật liệu.
+1. **Một vạt đất phẳng cần bao nhiêu quad?** — Chọn khối đặc bằng 3, nhấn F2 đổi giữa mặt đơn vị và mặt gộp, bật M để thấy các cạnh. Tiếp đó nhìn sát vách trong cảnh bờ suối; hạt đá không được to ra khi gộp.
+2. **Cho cơn gió đi qua rừng, thay vì lắc cả cảnh** — Đổi hướng bằng G rồi chỉnh cường độ bằng hai phím ngoặc vuông. Nhấn P khi ngọn đang nghiêng, đi vòng sang bên: ngọn vẫn đứng yên trong world khi camera di chuyển.
+3. **Gắn chuyển động vào từng ngọn cỏ và tán lá** — Ở gần một bờ cỏ, đứng yên rồi lần lượt tắt gió, bật gió và Pause. Nhìn một nhánh qua khe giữa hai cây để nhận ra phần nào đang di chuyển.
+4. **Đo riêng công dựng đất và công vẽ ngọn cây** — Ở final, bật F1 rồi F2, chờ mesh ổn định. Ghi quad và thời gian dựng tại cùng góc; đi ngang với gió còn thổi và theo dõi bộ đếm builds.
 
-Oracle quét block-neighbor độc lập với makeMask; key gồm x/y/z/direction/material. Bung quad, sort và so multiset để bắt duplicate, mất mặt và đổi material. Test thêm winding/bounds sáu hướng, mask chữ L, cut 0/7/15, storage không đổi, cache idle/camera/mode, raster coverage/depth ở camera hữu hạn. Màu pixel tie đồng phẳng không so byte-for-byte.
+## Mã nguồn và phép kiểm
 
-Desktop QA riêng: preset/cut/plane/face, M, orbit/zoom, step/pause/reset, repeat/blur/capture, resize/high-DPI. Node/CTest và smoke không thay tương tác desktop. Project 62 (streaming) chưa nằm trong source này.
+`starter/` là điểm xuất phát; mỗi thư mục `checkpoints/NN/` và `final/` mang đủ source riêng. Xem `tests/tests.cpp` cho những ca không cần cửa sổ. Từ chương trình thật có thể chụp một khung hình bằng `--capture scene.png`.
+
+- So tập mặt đơn vị của hai cách dựng, tắt gió và Pause để kiểm gốc, ngọn và bộ đếm mesh.
+- Không gộp lá động vào hình học tĩnh, không dựng lại đất để làm gió.
+- Bảng kiểm gồm khối đặc, bàn cờ, hốc rỗng và biên hai cột. Gió chạy nhiều nhịp vẫn không làm thay đổi bất kỳ mặt đất tĩnh nào.

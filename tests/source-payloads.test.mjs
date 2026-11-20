@@ -100,9 +100,17 @@ test(
           files.map(async (file) => {
             assert.equal(typeof file.path, "string");
             assert.equal(typeof file.source, "string");
-            assert.ok(
-              ["bash", "cmake", "cpp", "glsl", "diff", "markdown", "text"].includes(file.language),
-            );
+            const teachingLanguage = { ".html": "html", ".css": "css", ".tiny": "tinyscript" }[
+              path.extname(file.path)
+            ];
+            if (teachingLanguage) assert.equal(file.language, teachingLanguage, file.path);
+            else
+              assert.ok(
+                ["bash", "cmake", "cpp", "glsl", "diff", "markdown", "text"].includes(
+                  file.language,
+                ),
+                project.id + "/" + key + "/" + file.path + ": " + file.language,
+              );
             const snapshot =
               key === "common"
                 ? ""

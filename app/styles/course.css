@@ -927,6 +927,18 @@
 .source-file[open] > summary::before {
   content: "−";
 }
+.voxel-work-file > section {
+  min-width: 0;
+  padding: 0.5rem 1rem 1rem;
+  border-top: 1px solid var(--line);
+}
+.voxel-work-file > section > p,
+.voxel-work-file > section > details {
+  margin: 0.5rem 0;
+}
+.voxel-work-file > section > p code {
+  overflow-wrap: anywhere;
+}
 .source-file > summary code {
   margin-right: auto;
   font-weight: 800;

@@ -1,0 +1,116 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Thấy lớp trước và lớp sau bằng alpha compositing
+
+## Vấn đề cần giải quyết
+
+MIP và average đã đọc cả đoạn nhưng không giữ cảm giác lớp trước che lớp sau. Với sương, ta muốn đóng góp ở xa được giảm bởi phần môi trường đã đi qua. Bài này thêm alpha vào vòng march đang chạy; không thay camera, box hay mảng density.
+
+Ta dùng mô hình emission–absorption đơn giản để trực quan hóa scalar: mỗi đoạn có màu phát xạ và cản một phần đóng góp phía sau. Đây không phải solver tán xạ ánh sáng, không mô phỏng mây vật lý và không phải ảnh X-ray hiệu chuẩn.
+
+## Hiểu ý tưởng trước khi viết code
+
+Giữ hai trạng thái: `color` là màu linear đã tích lũy; `transmittance` hay T là phần còn truyền qua các đoạn phía trước. Bắt đầu C=0, T=1. Với một đoạn density ρ, độ dài ds và hệ số sigma:
+
+`segmentT = exp(-sigma * rho * ds)`, `alpha = 1 - segmentT`.
+
+Đóng góp màu mới là `T_cũ * alpha * colorĐoạn`. Cộng xong mới nhân T với segmentT. Sigma có đơn vị “trên world unit”, density không đơn vị; tích sigma*ρ*ds không có đơn vị. Vì vậy opacity phải gắn với ds, không phải với số lần loop.
+
+Với density hằng và màu trắng, ta có đáp số độc lập `T=exp(-sigma*rho*L)` và `C=1-T`. Đổi step chỉ chia đường đi khác đi, không được làm medium hằng tự đậm lên.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-6" />
+
+## Viết code từng bước
+
+### 1. Tính alpha của một đoạn
+
+Hàm CPU dùng `expm1` để tránh mất chữ số khi số mũ rất gần 0. Shader dùng `1-exp(...)` với float; ta sẽ kiểm sai số của cả đường GPU thay vì hứa bitwise giống double.
+
+{/* snippet include/reference.hpp#segment-alpha */}
+
+```cpp title="include/reference.hpp — Opacity không tách rời độ dài"
+inline double segmentAlpha(double density, double sigma, double ds) {
+    if (!std::isfinite(density) || !std::isfinite(sigma) || !std::isfinite(ds) || density < 0 || sigma < 0 || ds <= 0)
+        throw std::invalid_argument("Finite nonnegative coefficients and positive segment length required");
+    return -std::expm1(-sigma * density * ds);
+}
+```
+
+Đừng truyền step danh nghĩa nếu đây là đoạn cuối ngắn hơn. `ds` phải là độ dài thực đã tính ở Bài 5.
+
+### 2. Thêm nhánh alpha vào loop CPU
+
+Đặt nhánh này trong vòng lặp đọc density đã có. Maximum/weighted sum vẫn là các đại lượng riêng; alpha không phải một tên khác của hai phép chiếu ấy.
+
+{/* snippet include/reference.hpp#alpha-loop */}
+
+```cpp title="include/reference.hpp — Dùng transmittance cũ cho đóng góp mới"
+if (settings.mode == Mode::Alpha) {
+    const double alpha = segmentAlpha(density, settings.sigma, ds);
+    Vec3 color = transferColor(density, settings.palette);
+    result.color = result.color + color * (result.transmittance * alpha);
+    result.transmittance *= std::exp(-settings.sigma * density * ds);
+}
+```
+
+`color` ở checkpoint 6 là trắng, để ta tập trung vào trọng số. Sau bài sau, transfer có màu nhưng thứ tự hai dòng cập nhật không đổi.
+
+### 3. Viết cùng recurrence trong shader
+
+`uMode=2` mới đi vào nhánh này. Tự xác định những biến đã được khởi tạo trước loop: color bằng zero và transmittance bằng một. Cả hai đều local cho fragment hiện tại.
+
+{/* snippet shaders/volume.frag#shader-alpha */}
+
+```glsl title="shaders/volume.frag — Alpha front-to-back trên GPU"
+if (uMode == 2) {
+    float segmentT = exp(-uSigma * density * ds);
+    float alpha = 1.0 - segmentT;
+    vec3 emission = transferColor(density);
+    color += transmittance * alpha * emission;
+    transmittance *= segmentT;
+}
+```
+
+Shader ghi `(C.r,C.g,C.b,T)` vào target raw. Nó chưa cộng nền và chưa gamma. Đây là dữ liệu sẽ đọc khi đối chiếu CPU/GPU.
+
+### 4. Chỉ ghép nền một lần
+
+Vì C đã được nhân trọng số alpha/T, không nhân C thêm với `(1-T)` ở present. Đường alpha trong present chỉ cần:
+
+{/* snippet shaders/present.frag#present-alpha */}
+
+```glsl title="shaders/present.frag — Background đi sau tích lũy"
+if (uMode == 2) linear = raw.rgb + raw.a * bg;
+```
+
+Sau đó mới đổi linear sang display gamma. Nền/grid chỉ giúp định hướng và không tạo density. Phân biệt này cũng là điểm cốt lõi của mô hình trực quan hóa trong [GPU Gems — Volume Rendering Techniques](https://developer.nvidia.com/gpugems/gpugems/part-vi-beyond-triangles/chapter-39-volume-rendering-techniques).
+
+## Ghép các phần lại
+
+```powershell
+cmake --build build --config Debug --target project_54_checkpoint_6 --parallel 1
+.\build\Debug\project_54_checkpoint_6.exe
+```
+
+Phím 3 chọn Alpha; +/- đổi sigma. Chọn Constant, sigma=2 rồi nhấn F để nhìn thẳng trục Z (Canvas có nút “Nhìn theo trục Z”). Ray ở giữa đi qua đoạn dài 2 nên T phải gần exp(-1); dòng “CPU ray T” cho đáp số tham chiếu. Đổi step 0,02 sang 0,13 trước khi quay về mẫu sương. Khi orbit sang hướng khác, L thay đổi nên không áp exp(-1) một cách máy móc.
+
+Ảnh scalar projection ở Bài 5 không có T vật lý. Đừng lấy alpha channel bằng 1 của MIP/average để kết luận “vật luôn trong suốt”; đó chỉ là cách dùng format raw cho một đại lượng khác.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm dùng alpha cố định 0,05 mỗi mẫu. Giữ Constant và giảm step: ảnh tự đậm lên cho thấy mô hình đã bị gắn với số vòng lặp.
+2. Cập nhật T trước rồi dùng T mới để cộng màu. So với đáp số C=1-T; ảnh có thể trông hợp lý nhưng thiếu đóng góp.
+3. Nhân thêm alpha ở present. So nền trắng/đen để thấy lỗi premultiplied rõ hơn, rồi trả về `C+T*background`.
+
+## Tự kiểm tra kết quả
+
+- [ ] Constant/white transfer có T và C đúng qua nhiều step/partial tail.
+- [ ] Sigma=0 cho C=0, T=1; empty/miss không tạo sương.
+- [ ] Màu được cộng bằng T cũ; background/gamma chỉ thực hiện sau tích lũy.
+- [ ] Diễn giải rõ mô hình trực quan hóa, không suy ra hiệu lực vật lý/y khoa từ ảnh.
+
+## Bài tập mở rộng
+
+Tạo hai lớp có density và màu khác nhau. Xem từ hai phía: MIP/average và T có thể giữ nguyên trong ca đối xứng, còn màu alpha đổi vì lớp nào ở gần mắt đã đổi. Tách kiểm thứ tự màu khỏi kiểm tổng optical depth.
+
+[Bài 7](./07-transfer-va-anh-sang) sẽ thêm palette/cutoff và ánh sáng cục bộ tùy chọn, để cấu trúc trong khối dễ quan sát hơn.

@@ -363,9 +363,18 @@ test("all published project and lesson routes render", async () => {
     assert.match(html, /CẦN BIẾT TRƯỚC/i, `Missing project prerequisites: ${project}`);
     assert.match(html, /SẢN PHẨM CUỐI/i, `Missing final product description: ${project}`);
     assert.match(html, /KIẾN THỨC SẼ DÙNG/i, `Missing project objectives: ${project}`);
-    assert.match(html, /MÔ HÌNH TƯƠNG TÁC/i, `Missing project-level interactive model: ${project}`);
-    assert.match(html, /class="interactive-lab"/i, `Missing project Canvas lab: ${project}`);
-    assert.ok(hasCanvasReadoutClass(html), `Missing textual Canvas state: ${project}`);
+    const { id } = projectCatalog.find((entry) => entry.slug === project);
+    const { default: lab } = await import(`../course/projects/p${id}/lab.ts`);
+    if (lab.native?.overview?.length) {
+      assert.match(html, /data-native-media=/, `Missing native gallery: ${project}`);
+      assert.match(html, /<figcaption\b/, `Missing recording description: ${project}`);
+      assert.ok(html.includes(lab.native.takes[lab.native.overview[0]].poster));
+      assert.doesNotMatch(html, /CANVAS 2D · LIVE/);
+    } else {
+      assert.match(html, /MÔ HÌNH TƯƠNG TÁC/i, `Missing project-level interactive model: ${project}`);
+      assert.match(html, /class="interactive-lab"/i, `Missing project Canvas lab: ${project}`);
+      assert.ok(hasCanvasReadoutClass(html), `Missing textual Canvas state: ${project}`);
+    }
     assert.match(html, /href="#lessons"/i, `Missing reveal-tutorial link: ${project}`);
     assert.ok(
       html.indexOf("project-challenge") < html.indexOf("project-progress"),
@@ -415,6 +424,14 @@ test("all published project and lesson routes render", async () => {
       for (const file of await walkFiles(path.join(root, "tests"))) {
         if (isCourseTextFile(file))
           expectedFiles.push(path.relative(root, file).split(path.sep).join("/"));
+      }
+      // The editable panel, stylesheet and script are part of the final source,
+      // not opaque art bundled alongside it. Enumerate the real ZIP inputs.
+      if (project.sourceSeries === "flock-workbench" && Number(project.id) >= 68) {
+        for (const file of await walkFiles(path.join(root, "assets"))) {
+          if (isCourseTextFile(file))
+            expectedFiles.push(path.relative(root, file).split(path.sep).join("/"));
+        }
       }
     }
     const checkpointSource = html.match(
@@ -474,24 +491,34 @@ test("all authored internal links resolve and unpublished project pages stay una
     ...lessons.map((lesson) => lesson.route),
   ];
   const links = new Set();
+  const anchorsByRoute = new Map();
+  const anchors = (html) => new Set([...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]));
   for (const route of routes) {
     const response = await render(route);
     assert.equal(response.status, 200, `Route failed while crawling: ${route}`);
     const html = await response.text();
+    anchorsByRoute.set(route, anchors(html));
     for (const match of html.matchAll(/<a\b[^>]*\bhref="([^"]+)"/g)) {
       if (match[1].startsWith("/")) links.add(match[1]);
     }
   }
   for (const href of links) {
     const [pathname, fragment] = href.split("#");
-    if (pathname.startsWith("/downloads/")) {
-      await stat(path.join(workspace, "public", pathname));
+    if (pathname.startsWith("/downloads/") || pathname.startsWith("/field-notes/")) {
+      const asset = await stat(path.join(workspace, "public", pathname));
+      assert.ok(asset.isFile() && asset.size > 0, `Missing static resource: ${href}`);
       continue;
     }
-    const response = await render(pathname || "/");
-    assert.equal(response.status, 200, `Broken internal link: ${href}`);
+    const route = pathname || "/";
+    // Hundreds of glossary links share one page. Its status and all target IDs
+    // were observed above; do not deserialize/reparse that response for each anchor.
+    if (!anchorsByRoute.has(route)) {
+      const response = await render(route);
+      assert.equal(response.status, 200, `Broken internal link: ${href}`);
+      anchorsByRoute.set(route, anchors(await response.text()));
+    }
     if (fragment)
-      assert.ok((await response.text()).includes(`id="${fragment}"`), `Broken fragment: ${href}`);
+      assert.ok(anchorsByRoute.get(route).has(fragment), `Broken fragment: ${href}`);
   }
   assert.equal((await render("/projects/project-09")).status, 404);
   assert.equal((await render("/projects/hello-pixels/not-a-lesson")).status, 404);
@@ -580,7 +607,16 @@ test("each Canvas lab ships as an independent lazy client chunk", async () => {
     path.join(workspace, "course", "generated", "lab-loaders.ts"),
     "utf8",
   );
-  const labNames = projectCatalog.map((project) => project.demoId);
+  const labNames = [];
+  for (const project of projectCatalog) {
+    const { default: lab } = await import(`../course/projects/p${project.id}/lab.ts`);
+    if (!lab.native || Object.keys(lab.modes).some((mode) => !lab.native.lessons[mode])) {
+      labNames.push(project.demoId);
+    } else {
+      assert.ok(!registry.includes(`"/components/labs/${project.demoId}-lab"`) &&
+        !registry.includes(`@/components/labs/${project.demoId}-lab`), "A recordings-only project must not ship its retired Canvas");
+    }
+  }
   for (const labName of labNames) {
     assert.ok(
       registry.includes(`lazy(() => import("@/components/labs/${labName}-lab"))`),
@@ -588,7 +624,7 @@ test("each Canvas lab ships as an independent lazy client chunk", async () => {
     );
     await stat(path.join(workspace, "components", "labs", `${labName}-lab.tsx`));
   }
-  assert.equal((registry.match(/lazy\(\(\) => import\(/g) ?? []).length, projectCatalog.length);
+  assert.equal((registry.match(/lazy\(\(\) => import\(/g) ?? []).length, labNames.length);
 
   const clientChunks = await readdir(
     path.join(workspace, "dist", "client", "_next", "static", "chunks"),

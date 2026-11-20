@@ -1,0 +1,106 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đổi màu không có nghĩa là phải đo lại cả bảng
+
+## Vấn đề cần giải quyết
+
+Bạn bấm F5 để đổi chữ trên Pause sang vàng nhạt. Nút vẫn rộng, cao và ở đúng chỗ cũ; lúc này đo lại mười hai node chỉ làm tốn việc. Nhưng nếu giảm padding quanh nhóm, giữ vùng bấm cũ lại là lỗi.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hãy coi computed style có hai phần: bảng màu cho paint và kích thước hộp cho layout. Đổi màu vẫn cần vẽ, không cần measure; giải quyết geometry mới trước sự kiện chuột tiếp theo.
+
+<InteractiveLab demo="tiny-css" mode="css69-4" />
+
+## Viết code từng bước
+
+### Cùng HTML, kiểu trình bày thứ hai
+
+{/* asset assets/field.css */}
+
+```css title="assets/field.css — Cùng HTML, kiểu trình bày thứ hai"
+.sheet { background: #E5F1EB; padding: 8px; gap: 4px; border-color: #728F92; }
+.group { background: #CADDD7; padding: 5px; gap: 2px; border-color: #91AAA4; }
+h1 { background: #E5F1EB; color: #173E49; border: 0px; }
+button { background: #AACAC6; color: #173838; height: 30px; }
+.action { border-color: #729795; }
+.primary { color: #402B11; }
+#pause { background: #F5CD80; }
+label { background: #CADDD7; color: #26484E; border: 0px; }
+input { background: #C4D5D0; color: #216D70; border-color: #789A97; }
+span { background: #E5F1EB; color: #3A585B; border: 0px; }
+```
+
+### So sánh phần làm các hàng dời chỗ
+
+Không có màu trong phép so. So bốn cạnh margin và padding, không chỉ bên trái: thay padding phải cũng có thể làm thanh kéo ngắn đi.
+
+{/* snippet include/style/editor.hpp#geometry */}
+
+```cpp title="include/style/editor.hpp — So sánh phần làm các hàng dời chỗ"
+inline bool sameBox(const lab::BoxStyle& a, const lab::BoxStyle& b) {
+    return a.width == b.width && a.height == b.height && a.fixedWidth == b.fixedWidth && a.fixedHeight == b.fixedHeight &&
+        a.border == b.border && a.gap == b.gap && sameEdges(a.margin, b.margin) && sameEdges(a.padding, b.padding);
+}
+```
+
+### Chỉ chuyển sang bảng mới khi mọi node hợp lệ
+
+Tính vào bản nháp trên nền mặc định nguyên vẹn. Nếu một giá trị tạo hình học sai ở node cuối, các node trước vẫn giữ theme cũ. Khi geometry đổi mới hủy gesture và bố trí lại.
+
+{/* snippet include/style/editor.hpp#commit-styles */}
+
+```cpp title="include/style/editor.hpp — Chỉ chuyển sang bảng mới khi mọi node hợp lệ"
+inline void installSheet(Desk& d, Palette& palette, Sheet sheet, std::string_view source) {
+    std::map<lab::WidgetId, Computed> next;
+    auto boxes = palette.defaults;
+    bool geometry = false;
+    for (const auto& [id, index] : d.page.elements) {
+        Computed c = cascade(d.page.document.elements[index], palette.defaults.at(id), sheet);
+        const auto& node = *lab::find(*d.page.layout.scene.tree.root, id);
+        if (!lab::validStyle(c.box, node)) {
+            std::size_t at = 0;
+            const auto it = c.winner.find("height");
+            if (it != c.winner.end())
+                at = it->second.declaration.offset;
+            fail(source, at, "invalid box for #" + d.page.document.elements[index].id);
+        }
+        if (!sameBox(d.page.layout.scene.styles.at(id), c.box))
+            geometry = true;
+        boxes[id] = c.box;
+        next.emplace(id, std::move(c));
+    }
+    if (geometry) {
+        d.page.layout.scene.styles = std::move(boxes);
+        lab::invalidate(d.page.layout, d.ui);
+        lab::ensureLayout(d.page.layout, d.ui);
+    }
+    palette.computed = std::move(next);
+    palette.sheet = std::move(sheet);
+    ++palette.paints;
+}
+```
+
+## Ghép các phần lại
+
+Trong bản sáng, chỉnh riêng color của #pause rồi F5: số lượt layout đứng yên. Giảm padding của .sheet, F5: lượt layout tăng và bạn có thể kéo Radius ở vị trí mới ngay.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_69_checkpoint_4 --parallel 2
+.\build\Release\project_69_checkpoint_4.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Hãy bỏ màu background khỏi theme thứ hai. Nếu nó vẫn giữ màu đặc trưng của theme trước, bạn đã dùng kết quả cũ làm mặc định cho lần tính mới.
+
+## Tự kiểm tra kết quả
+
+Theme tối cao 34 cho Button, theme sáng cao 30. Màu khác mà width không đổi thì không có thêm lượt đo; hit-test theo Rect mới ngay khi padding đổi.
+
+## Bài tập mở rộng
+
+Đang kéo Radius thì chỉ đổi màu rồi F5. So kết quả với trường hợp đổi width giữa một lần kéo. Chính sách giữ hoặc hủy capture khác nhau ở điểm nào?
+
+[Bài 5: Đọc ngược từ màu trên nút về đúng dòng stylesheet](/projects/tiny-css/05-doc-nguon-cua-mau).

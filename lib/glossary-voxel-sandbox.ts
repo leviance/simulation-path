@@ -1,20 +1,26 @@
 export const voxelSandboxGlossaryTerms = [
   {
-    id: "voxel-session-delta",
-    term: "Base terrain và session delta",
+    id: "voxel-world-flakes",
+    term: "Tuyết trong tọa độ world",
     definition:
-      "Terrain procedural là dữ liệu nền; delta lưu các cell world đã làm khác nền, gồm cả Air tombstone khi phá block. Entry resident/mesh là cache có thể gỡ và tạo lại. Khôi phục đúng base thì xóa delta. Project 64 giới hạn 512 delta và chưa tự giữ qua đóng chương trình; cần xuất bản lưu.",
+      "Chỉ sinh bông mới trong một hộp gần mắt để tiết kiệm công. Bông đã sinh có vị trí riêng và tiếp tục rơi, trôi theo gió dù người xem đi sang bên. Depth buffer quyết định nó ở trước hay sau thân thông.",
   },
   {
     id: "voxel-unknown-picking",
-    term: "Unknown trong world picking",
+    term: "Ô chưa biết khác ô Air",
     definition:
-      "Chunk chưa resident không cung cấp Block ID nên picker dừng thay vì coi là Air rồi chọn xuyên tới phía sau. Mesher vẫn coi neighbor chưa tải là Air để đóng frontier. Hai quy tắc phục vụ hai mục đích: tạo mặt ngoài nhìn thấy được và bảo vệ thao tác sửa trên dữ liệu chưa biết.",
+      "Nếu cột chưa cư trú, ống ngắm trả về chưa biết chứ không nhìn xuyên vào phía sau. Bộ dựng mesh có lý do khác: nó tạm giữ mặt ngoài ở mép chưa nạp rồi sửa mặt đó khi dữ liệu tới.",
   },
   {
-    id: "voxel-snapshot",
-    term: "VXL1 snapshot",
+    id: "voxel-day-clock",
+    term: "Đồng hồ cảnh và hướng nắng",
     definition:
-      "Bản lưu text có version, seed/scale/octaves và delta canonical theo x/y/z, không chứa mesh/cache/history. Project 64 kiểm ASCII 32768 byte, 512 record, số nguyên, miền, duplicate và redundant trước khi thay phiên. Output C++/Canvas có cùng fixture byte; người dùng tự giữ text ra file, không có autosave ngầm.",
+      "Cùng giờ cảnh quyết định vị trí Mặt Trời, sắc trời và phía sáng của vách đá. Pause dừng sóng, gió, hạt và giờ nhưng không khóa camera: ta vẫn có thể đi vòng quanh để kiểm chiều sâu.",
+  },
+  {
+    id: "voxel-walk-collision",
+    term: "Đi bộ trên bậc voxel",
+    definition:
+      "Kiểm chân, đầu và bề ngang người ở vị trí sắp tới. Bậc thấp có khoảng trống trên đầu thì bước được; vách cao hoặc cột chưa nạp phải chặn. Chỉ cho nhảy khi chân đang được đỡ.",
   },
 ];

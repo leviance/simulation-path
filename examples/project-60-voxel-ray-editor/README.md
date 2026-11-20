@@ -1,78 +1,51 @@
-# Project 60 — Chọn, phá và đặt block bằng tia từ camera
+# Project 60 — Ống ngắm địa hình: đọc cảnh vật bằng một tia nhìn
 
-Biến chunk 16³ của Project 59 thành editor nhỏ: ngắm pixel, tạo ray trực giao, clip vào chunk, đi qua từng ô bằng 3D DDA, rồi phá/đặt đúng một block mỗi lần nhấn. Không đọc màu pixel để đoán ID, không dùng Hit cũ để sửa world.
+Tự làm một ống ngắm đọc được từng viên đá: chỉ vào đâu, cách mắt bao xa, nhìn trúng mặt nào?
 
-## Tự thử trước khi đọc lời giải
+Khi tâm ngắm đi từ thân cây ra trời, tên vật liệu nhường chỗ cho kết quả không gặp gì.
 
-Trong 150–210 phút, tự thêm tâm ngắm, outline hit và ghost đặt block vào khung có sẵn. Click trái phá block gần nhất, click phải đặt vào Air sát mặt vừa chọn. Kiểm được ray âm, song song, biên/góc, MISS và đặt vượt chunk. Chưa cần controller FPS, texture hoặc greedy meshing.
+## Học bằng bản C++ của mình
 
-Prerequisite chính: Project 58–59 (storage, mesher, camera/rasterizer, dirty flags); Project 52 ray/AABB là phần ôn hữu ích. Thời gian học khoảng 14–18 giờ. ZIP chứa code nền, không cần chép file từ module khác.
+Bờ suối đã có mặt ngoài và các phép đọc qua biên chunk từ Project 59. Ống ngắm chỉ hỏi dữ liệu; không có lệnh đặt hoặc phá block.
 
-## Chín bước chạy độc lập
-
-| Snapshot | Kết quả mới |
-| --- | --- |
-| starter | Đất bậc thang đã loại mặt tiếp giáp, camera/window/rasterizer chạy được |
-| 01 | Crosshair, mouse/WASD aim, đổi logical coordinate về CPU pixel |
-| 02 | Ray từ phép chiếu trực giao, kiểm chiếu ngược đúng pixel |
-| 03 | Slab clip, half-open chunk, reach, phương song song |
-| 04 | 3D DDA step/tMax/tDelta, xem từng visit, chưa dừng ở đất |
-| 05 | Hit đầu tiên, entry normal, quy tắc tie và origin-inside |
-| 06 | Break action re-query, mỗi lần nhấn đổi tối đa một ID |
-| 07 | Place tại hit+normal, ghost, occupancy/bounds/material |
-| 08 | Cache preview/mesh/frame riêng, counter có ý nghĩa rõ ràng |
-| 09/final | Oracle AABB hữu hạn, fixture, mutation/cache tests |
-
-Trong repository website, source-template/ là nguồn chuẩn; chạy npm run generate:course ở gốc để sinh snapshot/CMake. Trong ZIP, mọi snapshot và CMake đã sẵn có, không cần Node hoặc web server để build native. Không sửa file generated trong repository.
-
-## Build và test
-
-```bash
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 20
-```
-
-Windows: Visual Studio 2022, workload Desktop development with C++. Final là target mặc định; BUILD_CHECKPOINTS thêm starter và checkpoint_1…9. Chạy build/Debug/project_60_final.exe. Single-config generator đặt CMAKE_BUILD_TYPE, executable trực tiếp trong build. C++20, CMake ≥3.24, SDL3 3.4.8 khóa URL/checksum qua FetchContent, link SDL3::SDL3. Không cần assets/font library ngoài SDL runtime.
+Giải nén ZIP vào thư mục riêng. Ngay cạnh `CMakeLists.txt`, chạy:
 
 ```powershell
-$smoke = Start-Process -FilePath ".\build\Debug\project_60_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
-if (-not $smoke.WaitForExit(30000)) {
-    $smoke.Kill()
-    throw "Smoke quá 30 giây."
-}
-if ($smoke.ExitCode -ne 0) { throw "Smoke thất bại." }
+cmake -S . -B build-work -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_60_work --parallel 1
+.\build-work\Release\project_60_work.exe
 ```
 
-Smoke mở hidden và thoát sau một frame. CTest thuần không tạo SDL window, check còn hiệu lực ở Release. Giới hạn hai compiler; khi dùng automation/CI cần thêm deadline ngoài để giới hạn cả build/process tree. Không retry hoặc benchmark vô hạn.
+CMake chỉ tạo `work/` từ `starter/` khi thư mục này chưa tồn tại. Sửa `work/include/trail/` xuyên suốt các bài, rồi build lại **cùng target**. Với Ninja/Make, mở `./build-work/project_60_work`. Các mục **Vị trí sửa và mã cần viết** trong bài cho biết chỗ chèn, đoạn cần thay và đoạn mới. Những dòng `// [snippet …]` là chú thích của sách, không phải lệnh C++.
 
-## Điều khiển final
+Nếu học liền từ Project 59, ZIP đã có mã nền tương đương bản cuối trước và các tệp khung mới cho mốc này. Muốn giữ phần tự viết, đối chiếu `work/include/trail/` cũ với `starter/include/trail/` mới và mang sang các header chung bạn đã sửa; giữ các header mới và `src/main.cpp` của ZIP này. Không chép đè cả thư mục. Nếu API của bạn khác, nối lại ở hàm được chỉ trong bài đầu.
 
-- Mouse hover hoặc WASD: dịch aim. Middle drag hoặc arrow: orbit. +/−: zoom.
-- Left click, Delete/Backspace: phá. Right click hoặc E: đặt. 1/2/3: Grass/Dirt/Stone.
-- [ / ]: reach 1..64. Space: chạy/dừng preview DDA. N: bước tiếp theo.
-- P: bảy preset. R: reset. V: pure oracle audit hữu hạn. Escape: thoát.
-- Một button-down hoặc key-down không repeat là một action; giữ/kéo không auto-paint. Blur/minimize nhả capture và dừng playback. Nhãn native ASCII; bài học/Canvas tiếng Việt.
+Chỉ sau bài cuối mới build `project_60_tests` trong `build-work` rồi chạy `ctest --test-dir build-work -C Release --output-on-failure --timeout 30`. Ở cấu hình này tests đọc **work/include**, không đọc `final/`. Đừng lấy một lần chạy checkpoint hoặc CTest của bản mẫu làm kết quả bài làm.
 
-## Quy ước phải giữ đúng
+## Chạy bản mẫu để đối chiếu
 
-- y hướng lên, index=x+16*(z+16*y), Air=0, Grass/Dirt/Stone=1/2/3 opaque. Chỉ một chunk [0,16)³, không display cut.
-- CPU 320×240, projection scale=6, center=8, zoom=.5..1.5; ray đi qua pixel center (x+.5,y+.5). Camera trực giao: origin khác theo pixel, direction giống nhau.
-- Origin trên camera depth=32, direction normalized, t/reach là world distance từ origin plane, không từ mắt FPS. API reach (0,64], UI 1..64. Origin finite trong ±128; reject ray sai trước traversal.
-- Slab/visit chỉ nhận đoạn có exit−enter>1e-9 theo t; contact-only và đoạn mỏng không vượt tolerance được bỏ. Direction component 0 dùng infinity, không chia zero.
-- Biên nguyên đi chiều âm bắt đầu ở ô phía âm. Tie trong tolerance step mọi trục, normal ưu tiên X/Y/Z. Không chọn ô chỉ chạm cạnh/góc. Tối đa 64 vòng, vượt giới hạn là lỗi.
-- Origin hẳn trong block: hit t=0, normal zero; được phá nhưng không đặt. Origin trên mặt voxel vẫn có entry normal, kể cả mặt nội bộ chunk; không dùng t=0 để tự kết luận thiếu normal. Target=hit.cell+normal chỉ hợp lệ khi normal đơn trục, còn Air và trong chunk. Không overwrite hoặc tự sinh chunk kế bên.
-- Query không sửa storage. Action re-query dữ liệu hiện tại; preview chỉ đọc. Aim/reach chỉ pickDirty, camera thêm frameDirty, edit thành công thêm meshDirty. Counter queries đếm refresh preview, không đếm query xác nhận action.
-- Outline/ghost là debug overlay. Inset XZ có thể chồng các visit khác y; đọc XYZ/t ở text. World chỉ ở RAM, không persistence/undo.
+Cần compiler C++20 và CMake 3.24 trở lên. Trên Windows, mở Developer PowerShell của Visual Studio 2022. Từ thư mục vừa giải nén:
 
-Nguồn chia theo trách nhiệm: model/geometry/mesh/raster/cache kế thừa, ray (camera), clip (slab), traversal (DDA), editing (mutation), editor (state/invalidation), audit (oracle), controls/view, main (SDL lifetime). Snapshot không cần file bên ngoài thư mục project.
+```sh
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --parallel 1
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+```
 
-## Nghiệm thu
+Chạy `build/Release/project_60_final.exe`. Trên Linux/macOS với generator một cấu hình, thêm `-DCMAKE_BUILD_TYPE=Release` khi configure rồi chạy `./build/project_60_final`. Mặc định CMake dùng SDL 3.4.8 qua FetchContent và link SDL3::SDL3. Có thể chọn `-DCOURSE_USE_INSTALLED_SDL3=ON` nếu đã cài đúng phiên bản.
 
-Pure tests: chiếu ngược pixel, axis/parallel/signed-zero/tangent/reach/negative-entry/inside, tie không phantom cell, nearest hit/normal, oracle bảy preset, mutation một ID, stale-preview và cache counters. Oracle dùng chung clipBox nên vẫn cần fixture có đáp án tính tay.
+## Thử ngay trong cửa sổ C++
 
-Desktop kiểm riêng: preset, aim/orbit/zoom/reach, break/place/material, một action mỗi nhấn, capture/cancel/blur/reset, resize/high-DPI/letterbox. Canvas thêm reduced-motion/manual step và các nút keyboard-accessible. Sanity UI chỉ kiểm trace hữu hạn, không thay toàn bộ Node/CTest hoặc QA desktop.
+WASD di chuyển, mũi tên hoặc nhấp chuột rồi di chuột để nhìn; Escape thả chuột. R về vị trí đầu, P dừng giờ, F1 mở số liệu. Phím 1 về cảnh quan; 2/3/4 lần lượt là một viên đá, khối đặc và cảnh rỗng.
 
-Project 61 (greedy meshing) và 62 (streaming) chưa nằm trong source này. Chưa perspective, controller/collision người chơi, texture, undo hoặc lưu world.
+1. **Từ tâm màn hình đến hướng nhìn trong thế giới** — Nhấn F3 để bật/tắt tâm ngắm. Dùng mũi tên xoay đầu tại chỗ, sau đó W đi về phía thân cây. Tia đổi gốc khi đi, đổi hướng khi quay.
+2. **Theo tia đến mặt đầu tiên, không bỏ sót block** — Ngắm mặt nước từ bờ, rồi ngẩng lên trời. Ống ngắm coi mặt nước là vật liệu có thể đọc; không xuyên qua nước để chọn đất đáy.
+3. **Đóng băng phép đo và đi quanh vật vừa ngắm** — Nhấn I khi đang ngắm vách, bước sang phải rồi nhìn lại. Khung chọn vẫn chỉ ô cũ cho tới khi mở khóa. F3 cất ống ngắm để chỉ còn phong cảnh.
+
+## Mã nguồn và phép kiểm
+
+`starter/` là điểm xuất phát; mỗi thư mục `checkpoints/NN/` và `final/` mang đủ source riêng. Xem `tests/tests.cpp` cho những ca không cần cửa sổ. Từ chương trình thật có thể chụp một khung hình bằng `--capture scene.png`.
+
+- Phân biệt trống với chưa nạp. Đóng băng và tắt được ống ngắm; hash địa hình bất biến.
+- 3D DDA chỉ đọc, tầm hữu hạn; không đặt hoặc phá block.
+- Qua lần lượt đá, cát, nước và trời; đồng thời kiểm hash ô, số quad và số lần dựng mesh trước/sau một loạt phép dò. Tất cả số đo về hình học phải bất biến.

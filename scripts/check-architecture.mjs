@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { loadProjectCatalog, workspace } from "./project-catalog.mjs";
 import { isCourseTextFile, isDisplayableCourseFile } from "./course-file-types.mjs";
+import { courseSourceTemplates } from "./course-source-templates.mjs";
 
 const sourceExtensions = new Set([".css", ".mjs", ".ts", ".tsx"]);
 const codeExtensions = new Set([
@@ -136,7 +137,7 @@ for (const project of loadProjectCatalog()) {
   const authoredFiles = [
     path.join(exampleDirectory, "CMakeLists.txt"),
     ...topLevelDocs,
-    ...walkFiles(path.join(exampleDirectory, "source-template")),
+    ...[...courseSourceTemplates(workspace, project).values()].map(({ sourcePath }) => sourcePath),
     ...walkFiles(path.join(exampleDirectory, "tests")),
     ...(existsSync(sharedAssetsDirectory) ? walkFiles(sharedAssetsDirectory) : []),
   ];

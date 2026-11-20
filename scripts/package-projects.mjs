@@ -10,14 +10,23 @@ import {
 } from "./package-digest.mjs";
 import { reconcileGeneratedFiles } from "./generated-files.mjs";
 
-const projects = loadProjectCatalog();
+const catalog = loadProjectCatalog();
+const args = process.argv.slice(2);
+const choice = args[0]?.match(/^--project=(\d{2})$/);
+if (
+  args.length &&
+  (args.length !== 1 || !choice || !catalog.some((project) => project.id === choice[1]))
+) {
+  throw new Error("Usage: node scripts/package-projects.mjs [--project=ID]");
+}
+const projects = choice ? catalog.filter((project) => project.id === choice[1]) : catalog;
 const downloadsDirectory = path.join(workspace, "public", "downloads");
 const manifestPath = path.join(downloadsDirectory, "manifest.json");
 
 mkdirSync(downloadsDirectory, { recursive: true });
 const previousManifest = readPackageManifest(manifestPath);
 const previousDigests = previousManifest.projects ?? {};
-const nextDigests = {};
+const nextDigests = choice ? { ...previousDigests } : {};
 const expectedArchives = new Set();
 
 for (const project of projects) {
@@ -58,7 +67,7 @@ for (const project of projects) {
   process.stdout.write(`Packaged ${project.sourceDirectory}.zip\n`);
 }
 
-for (const file of readdirSync(downloadsDirectory)) {
+for (const file of choice ? [] : readdirSync(downloadsDirectory)) {
   if (/^project-\d{2}-.+\.zip$/.test(file) && !expectedArchives.has(file)) {
     rmSync(path.join(downloadsDirectory, file));
     process.stdout.write(`Removed obsolete ${file}\n`);

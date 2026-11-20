@@ -1,65 +1,51 @@
-# Project 59 — Ẩn các mặt nằm trong đất
+# Project 59 — Vách đá bên suối: bỏ những mặt bị đất che kín
 
-Nâng cấp chunk 16³ của Project 58 bằng neighbor-face elimination: không tạo mặt tiếp giáp giữa hai block opaque. Cùng dữ liệu và camera, full chunk giảm từ 49152 xuống 3072 triangles; Z-buffer vẫn bật, bề mặt ngoài không đổi.
+Giữ nguyên vật liệu và camera, giảm số mặt của vách mà không làm đổi hình bên ngoài.
 
-## Thử sức trước lời giải
+Một vách đá có thể đi vòng quanh, khung dây và công tắc để đối chiếu hai mesh.
 
-Trong 2–3 giờ, tự giữ baseline và thêm chế độ chỉ dựng mặt giáp Air. Phải đúng ở cả sáu biên, khác vật liệu, khoang rỗng, checker và lớp cắt. Thêm bộ đếm và công cụ đọc từng mặt; đừng chỉ báo “hình trông ổn”. Chưa cần OpenGL, texture hoặc greedy meshing.
+## Học bằng bản C++ của mình
 
-Prerequisite chính là Project 58: Block ID/layout, mesh sáu mặt, camera, rasterizer/Z-buffer và bảng lớp. Tất cả code nền đã có trong ZIP, không cần chép header từ project cũ. Thời gian học dự kiến 12–16 giờ.
+Giữ cách chiếu, raster và vật liệu của bờ suối ở Project 58. Việc mới là quản lý nhiều cột và bỏ đúng các mặt ở giữa chúng.
 
-## Tám bước
-
-| Snapshot | Nội dung |
-| --- | --- |
-| starter | SDL/window/texture, camera và rasterizer chạy được, mesh rỗng |
-| 01 | Baseline đủ sáu mặt mỗi block và bộ đếm |
-| 02 | appendFace sinh hai triangles, refactor chưa đổi hình |
-| 03 | Sáu neighbor, biên an toàn, chuyển baseline/culled bằng M |
-| 04 | Opaque khác ID, cavity, checker, empty, steps |
-| 05 | Cắt y<=slice, giữ nắp, không sửa Chunk |
-| 06 | Chọn block/hướng, đọc nguyên nhân giữ/bỏ |
-| 07 | meshDirty/frameDirty và counters đúng việc |
-| 08/final | Oracle F=6N−2E, tập mặt theo plane sweep, winding/depth/cache tests |
-
-Trong repository, source-template/ là nguồn chuẩn; starter/checkpoints/final và CMake được sinh bởi npm run generate:course ở gốc website. ZIP đã có các snapshot độc lập và không cần Node hoặc web server để chạy native.
-
-## Build và kiểm tra
-
-```bash
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 20
-```
-
-Visual Studio 2022 cần Desktop development with C++. Chạy build/Debug/project_59_final.exe. Final là target mặc định; BUILD_CHECKPOINTS thêm starter và checkpoint_1…8. Single-config generator đặt CMAKE_BUILD_TYPE, executable trực tiếp trong build. SDL3 3.4.8 được FetchContent với checksum, link SDL3::SDL3, không cần asset/font library ngoài SDL runtime.
+Giải nén ZIP vào thư mục riêng. Ngay cạnh `CMakeLists.txt`, chạy:
 
 ```powershell
-$smoke = Start-Process -FilePath ".\build\Debug\project_59_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
-if (-not $smoke.WaitForExit(30000)) {
-    $smoke.Kill()
-    throw "Smoke quá 30 giây."
-}
-if ($smoke.ExitCode -ne 0) { throw "Smoke thất bại." }
+cmake -S . -B build-work -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_59_work --parallel 1
+.\build-work\Release\project_59_work.exe
 ```
 
-Smoke chỉ một frame, không benchmark hoặc auto rotation. CTest thuần không mở SDL; check tường minh còn hoạt động ở Release. Các build/test cần timeout ngoài và tối đa 2 compiler; không tự thử lại vô hạn nếu một bước lỗi.
+CMake chỉ tạo `work/` từ `starter/` khi thư mục này chưa tồn tại. Sửa `work/include/trail/` xuyên suốt các bài, rồi build lại **cùng target**. Với Ninja/Make, mở `./build-work/project_59_work`. Các mục **Vị trí sửa và mã cần viết** trong bài cho biết chỗ chèn, đoạn cần thay và đoạn mới. Những dòng `// [snippet …]` là chú thích của sách, không phải lệnh C++.
 
-## Điều khiển final
+Nếu học liền từ Project 58, ZIP đã có mã nền tương đương bản cuối trước và các tệp khung mới cho mốc này. Muốn giữ phần tự viết, đối chiếu `work/include/trail/` cũ với `starter/include/trail/` mới và mang sang các header chung bạn đã sửa; giữ các header mới và `src/main.cpp` của ZIP này. Không chép đè cả thư mục. Nếu API của bạn khác, nối lại ở hàm được chỉ trong bài đầu.
 
-P preset, M baseline/culled, R reset, drag/arrow orbit, +/− zoom, Space chạy/dừng, PageUp/PageDown cut. Inspector: U/I x, J/K y, N/O z, F hướng +X/−X/+Y/−Y/+Z/−Z; click/drag bảng đọc x/z tại selected y. V pure audit, Escape thoát. Focus loss dừng/nhả capture. Nhãn native ASCII, bài học và Canvas tiếng Việt.
+Chỉ sau bài cuối mới build `project_59_tests` trong `build-work` rồi chạy `ctest --test-dir build-work -C Release --output-on-failure --timeout 30`. Ở cấu hình này tests đọc **work/include**, không đọc `final/`. Đừng lấy một lần chạy checkpoint hoặc CTest của bản mẫu làm kết quả bài làm.
 
-## Quy ước và đáp án
+## Chạy bản mẫu để đối chiếu
 
-- y hướng lên; index=x+16*(z+16*y), local 0..15. Air=0, mọi ID còn lại opaque, kể cả khi khác vật liệu.
-- Giữ mặt khi neighbor không active solid. Ngoài chunk đơn lẻ và trên display cut là Air hiển thị; không wrap/clamp hoặc get ngoài mảng.
-- Từng mặt có hai triangles CCW; không gộp quad. Z-buffer trực giao 320×240, clear -infinity, depth lớn hơn gần hơn.
-- Quad single/pair/full/cavity/checker/empty/steps: 6/10/1536/1542/12288/0/912. Full giảm 93.75% triangles, checker không giảm.
-- Full slice=0 là 16×1×16: 576 quad/1152 triangles, storage không đổi. Bảng inspector y độc lập với display cut.
-- Geometry change mới meshDirty, camera chỉ frameDirty, selection chỉ overlay. Giảm triangles không hứa FPS tăng cùng tỷ lệ.
+Cần compiler C++20 và CMake 3.24 trở lên. Trên Windows, mở Developer PowerShell của Visual Studio 2022. Từ thư mục vừa giải nén:
 
-Nguồn được chia theo trách nhiệm: model (storage/presets), geometry (quad/triangles), mesh (neighbor rules), inspection (lý do), cache (invalidation), raster (CPU/Z-buffer), controls/view và main. Chưa ray picking, phá/đặt block, trong suốt, greedy meshing hoặc dữ liệu chunk lân cận.
+```sh
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --parallel 1
+ctest --test-dir build -C Release --output-on-failure --timeout 30
+```
 
-Kiểm desktop riêng: bảy preset, chuyển M giữ camera, cut caps, inspector, keyboard, capture/cancel, resize/high-DPI/letterbox và blur/pause/reset. Project 60 mới ray chọn/phá/đặt block, Project 61 mới greedy meshing, Project 62 mới streaming; chúng không nằm trong source này.
+Chạy `build/Release/project_59_final.exe`. Trên Linux/macOS với generator một cấu hình, thêm `-DCMAKE_BUILD_TYPE=Release` khi configure rồi chạy `./build/project_59_final`. Mặc định CMake dùng SDL 3.4.8 qua FetchContent và link SDL3::SDL3. Có thể chọn `-DCOURSE_USE_INSTALLED_SDL3=ON` nếu đã cài đúng phiên bản.
+
+## Thử ngay trong cửa sổ C++
+
+WASD di chuyển, mũi tên hoặc nhấp chuột rồi di chuột để nhìn; Escape thả chuột. R về vị trí đầu, P dừng giờ, F1 mở số liệu. Phím 1 về cảnh quan; 2/3/4 lần lượt là một viên đá, khối đặc và cảnh rỗng.
+
+1. **Tại sao có thể bỏ hai mặt mà vách đá vẫn nguyên?** — Chọn khối đặc bằng phím 3, bật F1 và đổi F2 khi mắt đứng yên. Sau đó nhấn 1 để quay về bờ suối. Thử nhìn mép cát từ cả hai phía.
+2. **Ai chịu trách nhiệm về đường nối giữa hai bờ?** — Đi dọc suối qua z=16. Thử nạp hai khối đặc đứng cạnh nhau trong test; hãy đếm theo vị trí và hướng của mặt, không chỉ nhìn tổng tam giác.
+3. **So hai bức hình trước khi tin số tam giác** — Bật M khi nhìn một hốc, thử F2 rồi tắt M. Chọn cả preset rỗng bằng 4 và một viên đá bằng 2. Trong bản final nhấn V để đối chiếu khối đặc chuẩn.
+
+## Mã nguồn và phép kiểm
+
+`starter/` là điểm xuất phát; mỗi thư mục `checkpoints/NN/` và `final/` mang đủ source riêng. Xem `tests/tests.cpp` cho những ca không cần cửa sổ. Từ chương trình thật có thể chụp một khung hình bằng `--capture scene.png`.
+
+- Khối đặc từ 24.576 xuống 1.536 quad; hốc, mép nước và đường nối hai cột vẫn kín.
+- Mặt giáp nước chỉ có một chủ. Camera không làm đổi dữ liệu block.
+- Chạy CTest cho bề mặt kín, mép nước, hốc và hai chunk kề nhau. Trong ứng dụng F1 phải báo các số đo của chính cảnh đang xem; quay đầu không dựng lại mesh.

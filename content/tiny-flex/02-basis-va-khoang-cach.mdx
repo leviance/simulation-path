@@ -1,0 +1,104 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đặt ba nút lên một hàng
+
+## Vấn đề cần giải quyết
+
+Hãy đặt thử hai thẻ dài 40 và 20 trong thanh rộng 100. Giữa chúng có gap 8. Nút thứ hai phải bắt đầu ở 48; nếu nó bắt đầu ở 40 thì bạn đang quên khoảng trống mà mắt người đọc cần.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chiều dài một dòng bằng tổng basis, margin theo trục chính và N−1 gap. Tính bằng pixel trước; chưa chia chỗ thừa. Không cần một bảng tọa độ dành riêng cho từng kích thước cửa sổ.
+
+<InteractiveLab demo="tiny-flex" mode="flex70-2" />
+
+## Viết code từng bước
+
+### Đếm những gì đã chiếm chỗ
+
+Nút đầu không có gap trước nó và dòng rỗng không phát sinh gap âm. Nếu bị thiếu chỗ, phần dư đặt về 0: các basis không bị ép thành số âm.
+
+{/* snippet include/flex/line.hpp#occupied */}
+
+```cpp title="include/flex/line.hpp — Đếm những gì đã chiếm chỗ"
+double occupied = 0, totalGrow = 0;
+if (items.size() > 1)
+    occupied = gap * double(items.size() - 1);
+for (const auto& it : items) {
+    occupied += it.before + it.basis + it.after;
+    totalGrow += it.grow;
+}
+double remainder = std::max(0.0, available - occupied);
+```
+
+### Đặt Rect trong content box của cha
+
+Lấy size đã đo và margin đúng hướng, bỏ child ẩn, rồi dịch kết quả bằng gốc content. Các WidgetId vẫn là ID cũ của tài liệu HTML.
+
+{/* snippet include/flex/layout.hpp#place-children */}
+
+```cpp title="include/flex/layout.hpp — Đặt Rect trong content box của cha"
+inline void placeFlex(lab::Widget& parent, lab::Rect frame, const lab::Styles& styles, const FlexMap& all, const lab::Measures& sizes) {
+    parent.local = frame;
+    if (parent.kind != lab::Kind::Panel)
+        return;
+    const auto& box = styles.at(parent.id);
+    const auto opt = all.at(parent.id);
+    const auto inside = lab::contentBox({0, 0, frame.width, frame.height}, box);
+    std::vector<Item> items;
+    std::vector<lab::Widget*> children;
+    for (auto& child : parent.children) {
+        if (!child->visible)
+            continue;
+        children.push_back(child.get());
+        const auto size = sizes.at(child->id);
+        const auto pref = all.at(child->id);
+        const auto& b = styles.at(child->id);
+        Item item{size.height, size.width, 0, b.margin.top, b.margin.bottom, b.margin.left, b.margin.right, b.width == lab::Width::Fill};
+        if (opt.axis == Axis::Row)
+            item = {size.width, size.height, 0, b.margin.left, b.margin.right, b.margin.top, b.margin.bottom, b.height == lab::Height::Auto};
+        if (opt.flex) {
+            item.grow = pref.grow;
+            if (pref.basis >= 0)
+                item.basis = pref.basis;
+        }
+        items.push_back(item);
+    }
+    double length = inside.height, breadth = inside.width;
+    if (opt.axis == Axis::Row) {
+        length = inside.width;
+        breadth = inside.height;
+    }
+    const auto rects = line(opt, length, breadth, box.gap, items);
+    for (std::size_t i = 0; i < children.size(); ++i) {
+        auto r = rects[i];
+        r.x += inside.x;
+        r.y += inside.y;
+        placeFlex(*children[i], r, styles, all, sizes);
+    }
+}
+```
+
+## Ghép các phần lại
+
+Chạy mốc 2: ba nút chuyển thành một hàng. Dừng đàn, kéo Radius và bấm Reset. Layout thay cách đặt nút, không thay ý nghĩa một lần click hay cách slider ánh xạ vị trí.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_70_checkpoint_2 --parallel 2
+.\build\Release\project_70_checkpoint_2.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Thay gap bằng margin ngay trong renderer thay vì layout: khoảng cách có vẻ có trên ảnh nhưng hit-test ở khe trống lại chọn nhầm. Hãy thử bấm vào đúng khoảng giữa hai nút.
+
+## Tự kiểm tra kết quả
+
+Với 40,20 và gap 8, tổng đã dùng là 68 pixel. Dòng còn 32 pixel chưa chia; một nút đứng một mình vẫn không có gap.
+
+## Bài tập mở rộng
+
+Thêm margin trước/sau cho riêng Reset, tự tính vị trí mới của Links trước khi chạy.
+
+[Bài 3: Có chỗ trống: chia cho nút nào?](/projects/tiny-flex/03-chia-phan-du).

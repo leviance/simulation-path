@@ -1,0 +1,145 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Quét lát liên tục mà không tính lại mọi thứ
+
+## Vấn đề cần giải quyết
+
+Khi xoay camera, dữ liệu của ba ảnh phẳng không đổi. Khi chỉ chỉnh palette, scalar của chúng cũng không đổi. Nếu mọi thao tác đều tạo lại volume, lấy mẫu ba ảnh rồi upload tất cả texture, công cụ sẽ chậm mà không cho thêm thông tin.
+
+Bài này thêm quét theo thời gian và chia rõ các mức công việc: dataset, scalar image, RGBA và ảnh phối cảnh. Cache đúng là giữ lại một kết quả khi đầu vào của nó chưa thay đổi, không phải giữ một ảnh cũ rồi quên cập nhật khi cần.
+
+## Hiểu ý tưởng trước khi viết code
+
+Một raw slice phụ thuộc dataset, sampler và **một tọa độ fixed**. Chẳng hạn ảnh XY không phụ thuộc probe.x/probe.y; hai tọa độ ấy chỉ dời crosshair. RGBA phụ thuộc raw slice cùng display window/palette. Cảnh 3D còn phụ thuộc camera và vị trí các cap.
+
+Quét không phải một solver vật lý: nó chỉ dời mặt cắt 12 mm/s. Ta dùng elapsed time thay vì tăng một số pixel mỗi frame. Frame dt bị chặn ở 0,05 s để một lần treo/đổi tab không làm lát nhảy xa; vì vậy khi máy quá chậm, quét có thể chậm hơn wall time. Tới mặt biên cuối thì dừng, không quét mãi rồi quay vòng âm thầm.
+
+<InteractiveLab demo="volume-slicer" mode="slice53-8" />
+
+## Viết code từng bước
+
+### 1. Dời đúng trục theo thời gian
+
+`advance` không tạo dataset và không đổi camera. Nó chỉ dời tọa độ fixed của view đang chọn và đánh dấu ảnh cần cập nhật.
+
+{/* snippet include/state.hpp#scan-clock */}
+
+```cpp title="include/state.hpp — Quét hữu hạn, có pause"
+void advance(double elapsedSeconds) {
+    if (paused) return;
+    const int axis = axesFor(activeView).fixed;
+    const Grid geometry = grid();
+    const double end = (geometry.origin + geometry.extent())[axis];
+    const double elapsed = std::clamp(elapsedSeconds, 0.0, 0.05);
+    probe[axis] = std::min(end, probe[axis] + 12.0 * elapsed);
+    if (probe[axis] >= end) paused = true;
+    dirty = true;
+}
+```
+
+Pause dừng việc tăng tọa độ, không khóa các nút zoom hay inspector. Bản web còn tắt quét khi reduced motion đang bật; tắt reduced motion trở lại không được tự tiếp tục một lượt đã dừng.
+
+### 2. So đầu vào của từng ảnh
+
+Đoạn dưới nằm trong vòng lặp qua các view của `refresh`. `previousCut` giữ tọa độ fixed đã dùng; dataset mới buộc cache hết hạn bằng cách reset các khóa này trong `load`.
+
+{/* snippet include/state.hpp#slice-cache */}
+
+```cpp title="include/state.hpp — Tách lấy mẫu scalar khỏi tô màu"
+    resample = coordinate != previousCut[view] || linear != previousLinear;
+    if (resample) {
+        if (volume) renderSlice(*volume, slices[view], view, probe, linear);
+        sampledPixels += slices[view].scalar.size();
+    }
+    if (resample || window.level != previousWindow.level || window.width != previousWindow.width || colored != previousColored) {
+        colorImage(slices[view], colors[view], window, colored);
+        colorDirty[view] = true;
+    }
+    previousCut[view] = coordinate;
+}
+previousLinear = linear;
+previousWindow = window;
+previousColored = colored;
+```
+
+Điểm đáng chú ý là nhánh màu: nó chạy nếu raw đổi **hoặc** window/palette đổi. Nếu chỉ gắn một dirty flag cho raw rồi quên màu, kéo window sẽ không có tác dụng. Ngược lại, nếu đưa camera vào khóa raw slice, xoay góc nhìn sẽ lấy mẫu lại ba ảnh không cần thiết.
+
+### 3. Chỉ upload texture vừa thay đổi
+
+`colorDirty` được refresh tạo lại theo từng view. Scene texture vẫn đổi khi camera/cap đổi, nhưng ba texture ảnh không cần upload chỉ vì UI được vẽ thêm một frame.
+
+{/* snippet src/main.cpp#refresh-and-upload */}
+
+```cpp title="src/main.cpp — Ghi texture sau khi có dữ liệu mới"
+if (state.dirty) {
+    state.refresh();
+    for (int view = 0; view < 3; ++view)
+        if (state.colorDirty[view]) platform.upload(platform.slices[view], state.colors[view].data(), 256, 256);
+    if (state.scene) platform.upload(platform.scene, state.scene->pixels().data(), 820, 620);
+}
+```
+
+Đừng dùng `SDL_RenderReadPixels` để biết ảnh đã thay đổi chưa. App đã sở hữu dữ liệu và khóa cache; readback là thao tác chậm chỉ dùng một lần khi chụp ảnh nghiệm thu, không nằm trong vòng lặp bình thường.
+
+### 4. Nạp dataset thành một bước riêng
+
+Đổi N hoặc preset là công việc lớn hơn. Ta chuẩn bị volume, statistics và mesh mới trước khi thay state đang xem; exception phải để bộ dữ liệu cũ còn dùng được.
+
+{/* snippet include/state.hpp#transactional-load */}
+
+```cpp title="include/state.hpp — Dataset mới không được để lại state dở dang"
+bool load(Preset nextPreset, int nextSide) {
+    paused = true;
+    const auto started = std::chrono::steady_clock::now();
+    try {
+        auto nextVolume = std::make_unique<Volume>(buildVolume(nextPreset, nextSide));
+        Statistics nextStatistics = measure(*nextVolume);
+        Mesh nextMesh = buildContextMesh(*nextVolume);
+        mesh = std::move(nextMesh);
+        volume = std::move(nextVolume);
+        statistics = nextStatistics;
+        preset = nextPreset;
+        side = nextSide;
+        previousCut.fill(1e30);
+        previousWindow = {-1, -1};
+        buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        status = "Dataset ready. Measurements use the full scalar array.";
+        dirty = true;
+        return true;
+    } catch (const std::exception& error) {
+        status = std::string("Dataset unchanged: ") + error.what();
+        return false;
+    }
+}
+```
+
+Canvas chia việc tạo volume/vỏ theo các slab, có AbortSignal và ngân sách 20 giây. Đổi dataset liên tiếp hoặc rời trang hủy job cũ; kết quả đến muộn không được ghi đè lựa chọn mới. C++ dùng vòng lặp có kích thước tối đa đã chặn; không tạo thread pool mới chỉ để trình xem có thêm kỹ thuật.
+
+## Ghép các phần lại
+
+Mỗi vòng lặp nhận hết event, tính elapsed, gọi `advance` rồi refresh nếu dirty. Các thao tác đổi preset/reset/blur dừng quét và nhả capture. Code vẽ UI vẫn chạy được khi paused để camera, controls và inspector phản hồi.
+
+```bash
+cmake --build build --config Debug --target project_53_checkpoint_8 --parallel 1
+```
+
+Đặt một lát gần biên rồi bấm quét để kiểm điểm dừng nhanh, không cần chờ hết chiều dài box. Ở trạng thái đứng yên, thử xoay camera và đổi window để phân biệt công việc nào thực sự cần tính lại.
+
+## Thử làm sai để hiểu đúng
+
+1. Bỏ thành phần sampler khỏi khóa raw. Giữ cùng probe rồi bật/tắt trilinear: nhãn đổi nhưng ảnh có còn đúng không? Khôi phục và kiểm scalar image, không chỉ nhìn checkbox.
+2. Quên reset cache khi load dataset cùng kích thước. Chuyển Sphere sang Layers tại cùng probe; ảnh cũ không được giữ chỉ vì tọa độ fixed giống nhau.
+3. Trên web, chọn 128³ rồi đổi preset ngay khi đang tạo. Sau đó chuyển trang. Không được thấy job cũ tiếp tục báo progress hoặc trả một kết quả ghi đè dataset mới.
+
+## Tự kiểm tra kết quả
+
+- [ ] Camera không fill volume hoặc resample raw slice; palette/window không sửa scalar.
+- [ ] Dời một tọa độ fixed chỉ cần lấy mẫu lại ảnh phụ thuộc tọa độ ấy; crosshair ở hai ảnh còn lại vẫn cập nhật.
+- [ ] Quét dừng đúng biên, blur và reduced motion; pause không khóa thao tác xem.
+- [ ] Dataset mới làm hết hạn cache; job lỗi/bị hủy không commit state nửa vời.
+
+## Bài tập mở rộng
+
+Thêm ba bộ đếm raw-sample, color-map và texture-upload vào debug UI. Dự đoán số đếm tăng thế nào cho bốn thao tác: kéo probe.x, đổi window, xoay camera và đổi preset. Chỉ sau khi dự đoán mới đo, để tránh tối ưu theo một con số chưa hiểu.
+
+Bài cuối sẽ kiểm chính các ranh giới dữ liệu này, build cả Debug/Release và chạy source hoàn chỉnh từ gói tải về.

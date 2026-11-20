@@ -1,0 +1,119 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đọc ngược từ màu trên nút về đúng dòng stylesheet
+
+## Vấn đề cần giải quyết
+
+Khi một nút sáng sai màu, việc đổi đại vài mã hex đến lúc trông tạm được không giúp bạn biết lỗi ở đâu. Ta cần nhìn được element, danh sách rule khớp và declaration thắng.
+
+## Hiểu ý tưởng trước khi viết code
+
+So câu trả lời của inspector với một đáp án nhỏ tự tính. Nếu #pause thắng background còn class đứng sau thắng color, bạn có thể lần từ hai màu trên một nút về hai chỗ khác nhau trong file.
+
+<InteractiveLab demo="tiny-css" mode="css69-5" />
+
+## Viết code từng bước
+
+### Tìm ký tự không phải số hex
+
+{/* asset assets/broken.css */}
+
+```css title="assets/broken.css — Tìm ký tự không phải số hex"
+button {
+    background: #35Z566;
+}
+```
+
+### Vẽ từ computed style của đúng widget
+
+Lớp sơn đọc background, viền và màu chữ theo node. Focus vẫn có đường bao riêng để người dùng bàn phím nhìn thấy, slider vẫn đọc mô hình hiện hành.
+
+{/* snippet include/style/skin.hpp#custom-paint */}
+
+```cpp title="include/style/skin.hpp — Vẽ từ computed style của đúng widget"
+inline void paintStyled(SDL_Renderer* r, const Desk& d, const lab::WidgetView& item, const Computed& c) {
+    const auto box = item.bounds;
+    const auto& node = *item.node;
+    const auto clip = item.clip;
+    const int x = int(std::ceil(clip.x)), y = int(std::ceil(clip.y));
+    const SDL_Rect window{x, y, int(std::floor(clip.x + clip.width)) - x, int(std::floor(clip.y + clip.height)) - y};
+    lab::require(SDL_SetRenderClipRect(r, &window));
+    auto fill = [r](lab::Rect b, RGB color) {
+        lab::fill(r, b, Uint8(color.r), Uint8(color.g), Uint8(color.b));
+    };
+    RGB paper = c.paint.paper;
+    if (d.ui.hot == node.id)
+        paper = lighter(paper, 10);
+    if (d.ui.active == node.id)
+        paper = lighter(paper, 18);
+    const double border = c.box.border;
+    fill(box, c.paint.edge);
+    fill({box.x + border, box.y + border, std::max(0.0, box.width - 2 * border), std::max(0.0, box.height - 2 * border)}, paper);
+    const auto content = lab::contentBox(box, c.box);
+    if (d.page.values.contains(node.id)) {
+        const auto& range = *d.page.document.elements.at(d.page.elements.at(node.id)).range;
+        const double fraction = std::clamp((rangeValue(d, node.id) - range.low) / (range.high - range.low), 0.0, 1.0);
+        const auto track = std::max(0.0, box.width - 12);
+        const auto mid = box.y + box.height / 2;
+        fill({box.x + 6, mid - 2, track, 4}, c.paint.edge);
+        fill({box.x + 6, mid - 2, fraction * track, 4}, c.paint.ink);
+        fill({box.x + 3 + fraction * track, mid - 9, 6, 18}, c.paint.ink);
+    } else if (node.kind != lab::Kind::Panel) {
+        std::string label = node.text;
+        if (node.action == lab::Action::Pause && d.model.paused)
+            label = "Resume";
+        if (node.action == lab::Action::Observe && d.model.colony.showNeighbors)
+            label = "[x] " + node.text;
+        if (node.binding == lab::Binding::Radius)
+            label = node.text + "  " + decimal(d.model.colony.params.radius) + " px";
+        if (node.binding == lab::Binding::Separation)
+            label = node.text + "  " + decimal(d.model.colony.params.separationWeight);
+        if (node.binding == lab::Binding::Time)
+            label = "Tick " + std::to_string(d.model.ticks);
+        caption(r, float(content.x), float(box.y + box.height / 2 - 4), label, rgba(c.paint.ink));
+    }
+    if (d.ui.focus == node.id) {
+        const SDL_FRect edge{float(box.x + 2), float(box.y + 2), float(std::max(0.0, box.width - 4)), float(std::max(0.0, box.height - 4))};
+        bench::ink(r, {255, 202, 111, 255});
+        SDL_RenderRect(r, &edge);
+    }
+}
+```
+
+### Cài một tình huống có hai người cùng muốn thắng
+
+Một element khớp năm rule: hai class đặt màu chữ, một ID đấu với một tag về nền. Ca này không thể đạt bằng cách luôn chọn rule cuối cùng.
+
+{/* snippet tests/tests.cpp#cascade-test */}
+
+```cpp title="tests/tests.cpp — Cài một tình huống có hai người cùng muốn thắng"
+const auto sheet = parseSheet("button { color: #111111; } .action { color: #222222; } .primary { color: #333333; } #pause { background: #886622; } button { background: #000000; }");
+const auto c = cascade(e, p.defaults.at(id), sheet);
+check(c.matches.size() == 5, "all matching rules are recorded in source order");
+check(c.paint.ink == RGB{51, 51, 51} && c.winner.at("color").rule == 2, "later class wins a tie");
+check(c.paint.paper == RGB{136, 102, 34} && c.winner.at("background").rule == 3, "ID beats a later tag");
+```
+
+## Ghép các phần lại
+
+Chạy final, 1/2 đổi hai giao diện. Nhấn I, [ hoặc ] tìm #pause, P chuyển property cần xem. Nhấn 3 để gây lỗi; quay lại 2, chạy CTest cả Debug/Release với `--timeout 20`.
+
+```bash title="Terminal — Windows, Visual Studio"
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --target project_69_final --parallel 2
+.\build\Release\project_69_final.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Thử thay mọi computed paint bằng cùng một màu trong renderer. Test parser vẫn có thể đạt; hai ảnh từ cùng executable và việc đọc inspector giúp bắt lỗi đường nối giữa dữ liệu và nét vẽ.
+
+## Tự kiểm tra kết quả
+
+Cùng cây HTML và cùng đàn, hai stylesheet tạo hai giao diện khác cả màu lẫn geometry. Nhập CSS sai không mất theme hợp lệ; focus và hai slider còn dùng được.
+
+## Bài tập mở rộng
+
+Hãy thử xếp hai nút cạnh nhau chỉ bằng CSS của bài này. Vì sao chỉ thay width chưa thể tạo một hàng ngang? Đó là điểm bắt đầu của Project 70.
+
+[Tải toàn bộ mã nguồn C++ và các file thực hành](/downloads/project-69-tiny-css.zip) · [Trở lại lộ trình](/roadmap#project-69).

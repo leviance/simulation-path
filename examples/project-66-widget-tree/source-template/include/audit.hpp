@@ -17,6 +17,7 @@ inline void checkNode(const Widget& node, int depth, const Tree& tree, std::set<
     }
 }
 
+// [snippet tree-audit]
 inline int audit(const Tree& tree, const Ui& ui) {
     if (!tree.root || tree.root->kind != Kind::Panel || tree.nextId > maxId + 1)
         throw std::runtime_error("invalid root");
@@ -31,5 +32,6 @@ inline int audit(const Tree& tree, const Ui& ui) {
         throw std::runtime_error("stale widget id");
     return count;
 }
+// [/snippet tree-audit]
 #endif
 } // namespace lab

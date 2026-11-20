@@ -1,0 +1,33 @@
+// Chế độ khảo sát gần: cùng cử chỉ nhưng chỉ dùng nửa khoảng bán kính.
+let saved = 0;
+
+function nearRadius(value) {
+    return 20 + (value - 20) / 2;
+}
+
+function onPause() {
+    if (paused()) {
+        resume();
+    } else {
+        saved = getRadius();
+        pause();
+    }
+}
+
+function onReset() {
+    reset();
+    radius(50);
+    links(true);
+}
+
+function onObserve() {
+    links(!showLinks());
+}
+
+function onRadius(value) {
+    radius(nearRadius(value));
+}
+
+function onSeparation(value) {
+    separate(value);
+}

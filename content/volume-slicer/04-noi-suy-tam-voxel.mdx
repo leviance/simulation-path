@@ -1,0 +1,162 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Đi giữa các tâm voxel bằng trilinear
+
+## Vấn đề cần giải quyết
+
+Kéo lát thật chậm ở checkpoint trước, ảnh vẫn đổi theo từng nấc. Đó không nhất thiết là lỗi slider: nearest cứ giữ một mẫu cho tới khi mẫu khác gần hơn. Ta cần một cách ước lượng scalar khi điểm đo nằm giữa các tâm.
+
+Bài này thêm trilinear và bảng tám đóng góp. Không chỉ bật một bộ lọc texture của SDL rồi gọi ảnh trông mượt hơn là đã nội suy dữ liệu 3D.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hãy bắt đầu bằng hai số a và b trên một đoạn. Nếu t = 0, ta lấy a; t = 1 lấy b; ở giữa lấy `(1-t)*a + t*b`. Trong một ô 3D, vị trí có ba phần lẻ fx/fy/fz. Một góc ở phía thấp theo x nhận `(1-fx)`, phía cao nhận fx; làm tương tự cho y/z rồi nhân ba hệ số.
+
+Tám trọng số đều không âm và cộng lại bằng một. Vì vậy kết quả nằm trong khoảng nhỏ nhất–lớn nhất của tám mẫu. Nó là ước lượng từ dữ liệu đang có, không phải phép phục hồi một chi tiết chưa từng được lấy mẫu.
+
+Ở sát mép, world point vẫn có thể nằm trong physical box nhưng nằm ngoài đoạn nối các tâm. Ta kẹp grid coordinate về tâm biên trước khi lấy phần lẻ. Ngoài box thì trả miss, không kéo dài mẫu biên ra vô tận.
+
+<InteractiveLab demo="volume-slicer" mode="slice53-4" />
+
+Mở bảng tám voxel, chọn Ramp và dời từng slider. Trước khi chạy, thử dự đoán mẫu nào có trọng số lớn nhất khi điểm đo tiến gần một góc ô.
+
+## Viết code từng bước
+
+### 1. Giữ nearest để có thứ so sánh
+
+Ta không xóa nearest. Nó giúp kiểm các tâm mẫu và nhận ra sự khác biệt do cách đọc dữ liệu, thay vì do camera hoặc palette.
+
+{/* snippet include/sampling.hpp#nearest */}
+
+```cpp title="include/sampling.hpp — Mốc so sánh nearest"
+inline std::optional<double> sampleNearest(const Volume& volume, Vec3 point) {
+    const Grid& grid = volume.grid();
+    if (!grid.contains(point)) return std::nullopt;
+    std::array<int, 3> voxel{};
+    for (int axis = 0; axis < 3; ++axis) {
+        const double q = grid.coordinate(point[axis], axis);
+        voxel[axis] = std::clamp(static_cast<int>(std::floor(q + 0.5)), 0, grid.size[axis] - 1);
+    }
+    return volume.at(voxel[0], voxel[1], voxel[2]);
+}
+```
+
+Tại đúng một tâm, nearest và trilinear phải cho cùng scalar. Giữa hai tâm, nearest có bước nhảy theo quy tắc tie đã công bố; trilinear thay đổi liên tục trong đoạn ấy.
+
+### 2. Tìm tám mẫu và trọng số
+
+`Contribution` giữ đủ chỉ số voxel, địa chỉ mảng, scalar và weight. Nhờ vậy inspector có thể cho thấy phép tính thật, không tính một con số rồi tự dựng tám giá trị minh họa khác.
+
+{/* snippet include/sampling.hpp#trilinear-stencil */}
+
+```cpp title="include/sampling.hpp — Tám đóng góp của một world point"
+inline std::optional<std::array<Contribution, 8>> linearStencil(const Volume& volume, Vec3 point) {
+    const Grid& grid = volume.grid();
+    if (!grid.contains(point)) return std::nullopt;
+    std::array<int, 3> lower{}, upper{};
+    Vec3 fraction;
+    for (int axis = 0; axis < 3; ++axis) {
+        const double q = std::clamp(grid.coordinate(point[axis], axis), 0.0, static_cast<double>(grid.size[axis] - 1));
+        lower[axis] = static_cast<int>(std::floor(q));
+        upper[axis] = std::min(lower[axis] + 1, grid.size[axis] - 1);
+        fraction[axis] = q - lower[axis];
+    }
+    std::array<Contribution, 8> result{};
+    int entry = 0;
+    for (int z = 0; z < 2; ++z) {
+        for (int y = 0; y < 2; ++y) {
+            for (int x = 0; x < 2; ++x) {
+                const std::array<int, 3> corner{x, y, z};
+                Contribution contribution;
+                contribution.weight = 1.0;
+                for (int axis = 0; axis < 3; ++axis) {
+                    contribution.voxel[axis] = lower[axis];
+                    double axisWeight = 1.0 - fraction[axis];
+                    if (corner[axis] == 1) {
+                        contribution.voxel[axis] = upper[axis];
+                        axisWeight = fraction[axis];
+                    }
+                    contribution.weight *= axisWeight;
+                }
+                const auto& v = contribution.voxel;
+                contribution.address = volume.index(v[0], v[1], v[2]);
+                contribution.value = volume.at(v[0], v[1], v[2]);
+                result[entry++] = contribution;
+            }
+        }
+    }
+    return result;
+}
+```
+
+Phần đầu tìm lower/upper và fraction trên từng trục. Ba vòng lặp sau chọn tám tổ hợp góc. Đừng làm tròn q trước khi lấy fraction: làm vậy sẽ xóa thông tin điểm đang nằm ở đâu giữa các tâm.
+
+Nếu một trục chỉ có một mẫu, lower và upper trùng nhau. Một số dòng sẽ trùng địa chỉ hoặc có weight 0; đó là cách biểu diễn hợp lệ, không phải có thêm voxel nằm ngoài mảng.
+
+### 3. Cộng scalar trước, ánh xạ màu sau
+
+Hàm cuối chỉ cộng tám đóng góp vừa tính. Khi miss, nó giữ miss để nơi gọi tự quyết định cách hiển thị nền.
+
+{/* snippet include/sampling.hpp#trilinear-sum */}
+
+```cpp title="include/sampling.hpp — Scalar nội suy từ tám mẫu"
+inline std::optional<double> sampleLinear(const Volume& volume, Vec3 point) {
+    const auto stencil = linearStencil(volume, point);
+    if (!stencil) return std::nullopt;
+    double value = 0;
+    for (const Contribution& contribution : *stencil)
+        value += contribution.weight * contribution.value;
+    return value;
+}
+```
+
+Scalar được lưu Float32 nhưng trọng số và tổng dùng double. Không vì vậy mà mọi dữ liệu đều chính xác đến 1e−10: ngưỡng test sau chỉ áp cho fixture có giá trị được chọn để biểu diễn chính xác trong Float32.
+
+### 4. Kiểm bằng một đáp số tính tay
+
+Fixture 3×2×4 lưu `x + 10*y + 100*z`, origin (-1,-2,-3), spacing (2,4,6). World point (1,0,3) tương ứng grid (0,5;0;0,5). Chỉ bốn weight khác 0, mỗi weight bằng 0,25; bốn scalar là 0, 1, 100, 101. Kết quả phải là 50,5.
+
+{/* snippet tests/tests.cpp#known-eight */}
+
+```cpp title="tests/tests.cpp — Đáp số độc lập 50.5"
+const Vec3 middle{1, 0, 3};
+const auto stencil = linearStencil(fixture, middle).value();
+double weights = 0;
+for (const Contribution& contribution : stencil) {
+    weights += contribution.weight;
+    check(contribution.weight >= 0, "convex weights");
+}
+near(weights, 1, 1e-15, "eight weights sum to one");
+near(sampleLinear(fixture, middle).value(), 50.5, 1e-12, "known half-cell result");
+```
+
+Phép kiểm không hỏi chính sampler xem đáp số đúng là gì. Ta đã có đáp số từ cấu trúc fixture; sampler chỉ là phần bị kiểm tra.
+
+## Ghép các phần lại
+
+`sample` trong `sampling.hpp` chọn nearest hoặc linear theo flag. `renderSlice` không đổi cách đặt điểm world. Trong `ui.hpp`, bảng inspector gọi `linearStencil` tại đúng probe ấy để hiện các đóng góp.
+
+```bash
+cmake --build build --config Debug --target project_53_checkpoint_4 --parallel 1
+```
+
+Đặt một vị trí rồi bật/tắt Trilinear. Probe phải giữ nguyên. Trên Canvas, đường lấy mẫu nóng dùng bảy lerp tương đương để tránh cấp phát tám object cho mỗi pixel; bảng inspector vẫn hiển thị đúng tám trọng số của cùng công thức.
+
+## Thử làm sai để hiểu đúng
+
+1. Dự đoán tổng weight tại tâm, giữa ô và sát góc. Thử các vị trí ấy trong inspector; tại tâm chỉ cần một đóng góp khác 0.
+2. Tạm làm tròn q trước khi tính fraction. Ảnh có thể vẫn nhìn hợp lý khi đứng yên, nhưng khi kéo lát chậm nó trở lại hành vi nearest. Khôi phục rồi kiểm fixture 50,5.
+3. Bỏ `contains` và chỉ kẹp chỉ số. Query ngoài box sẽ không còn miss. Hãy thêm test cho cả sáu phía thay vì chỉ thử một điểm ở bên trái.
+
+## Tự kiểm tra kết quả
+
+- [ ] Tại tâm: kết quả đúng scalar lưu; tại (1,0,3) của fixture: kết quả 50,5.
+- [ ] Tám weight không âm, tổng một; constant field giữ nguyên và affine field được tái tạo trong vùng giữa các tâm.
+- [ ] Outside là miss; singleton và nửa voxel sát biên không chia cho 0 hay đọc quá mảng.
+- [ ] Chuyển sampler không đổi probe và không nội suy các byte màu.
+
+## Bài tập mở rộng
+
+Viết trilinear bằng bảy lần lerp, rồi so với phép cộng tám weight trên nhiều điểm ngẫu nhiên của cùng fixture. Đừng chỉ so hai cách ở tâm mẫu, vì đó là ca mà hầu như mọi lỗi weight đều khó lộ.
+
+Bài tiếp theo giữ nguyên sampler và thay cách đưa scalar lên màn hình. Ta sẽ thấy vì sao hai ảnh trông khác nhau vẫn có thể đến từ cùng một dữ liệu.

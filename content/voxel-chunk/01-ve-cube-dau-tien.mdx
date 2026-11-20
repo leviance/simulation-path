@@ -1,126 +1,91 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
 
-# Vẽ một cube trước khi dựng khối đất
+# Viên đá đầu tiên bên bờ suối
 
 ## Vấn đề cần giải quyết
 
-Hãy hình dung một khối đất ghép từ những viên lập phương nhỏ. Nếu mỗi viên đã có vị trí và loại vật liệu, chương trình cần làm gì để biến chúng thành hình trên màn hình? Đó là câu hỏi xuyên suốt phần Voxel World.
-
-Trước khi xem lời giải, hãy đọc [thử thách đầu module](/projects/voxel-chunk) và tự thử một bản nhỏ. Ta chưa xây Minecraft: sản phẩm lần này chỉ có **một chunk 16×16×16**, đủ để học cách lưu block, dựng hình và kiểm dữ liệu bên trong.
-
-Bài đầu không bắt bạn viết ngay vòng lặp 4096 block. Ta mở bộ khung SDL3, vẽ **một cube** rồi kiểm xem sáu mặt có ghép kín không. Khi một viên đã đúng, bài sau mới nhân nó lên.
+Trước khi hỏi một chunk chứa được bao nhiêu block, hãy vẽ một viên đá đứng yên trong không gian. Việc đầu tiên là phân biệt ba thứ: vị trí viên đá, vị trí mắt và những pixel cuối cùng hiện trong cửa sổ. Nếu ba thứ ấy bị trộn vào nhau, sau này nhấn W rất dễ làm cả thế giới trượt theo người xem.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Ở Project 16–17, bạn đã rasterize tam giác bằng barycentric và dùng Z-buffer. ZIP lần này mang theo một bản rasterizer trực giao nhỏ trong `include/raster.hpp`; không cần chép code từ project cũ. Starter có window, renderer, texture, framebuffer và event loop, nhưng chưa thêm tam giác nào nên chỉ hiện nền tối.
-
-Ta dùng x sang phải, y lên trên, z là trục còn lại trên mặt đất. Cube có origin `(7,7,7)`, cạnh dài một đơn vị. Tọa độ các đỉnh local chỉ là 0 hoặc 1; cộng origin để đưa chúng vào world:
-
-$$p_{world}=origin+p_{local},\qquad N_{triangle}=6\times2=12.$$
-
-Mỗi mặt có bốn đỉnh. Chia quad theo `(0,1,2)` và `(0,2,3)` để tạo hai tam giác chung đường chéo. Nhìn từ bên ngoài cube, các đỉnh đi ngược chiều kim đồng hồ — CCW. Dù renderer hiện chưa cull mặt quay lưng, ta vẫn giữ winding đúng ngay từ đầu.
+Starter mở cửa sổ SDL và vẽ bầu trời. Tại checkpoint 1, một viên đá cạnh một block xuất hiện. Hãy đoán: nhìn được ba mặt thì chương trình đã tạo ba mặt hay sáu mặt? Giữ câu trả lời đến khi mở bảng số liệu bằng F1.
 
 <InteractiveLab demo="voxel-chunk" mode="voxel58-1" />
 
-Ba mặt nhìn thấy có màu đậm nhạt khác nhau. Đây là hệ số màu cố định theo hướng mặt để dễ nhận hình khối, chưa phải chiếu sáng vật lý. Tất cả 12 tam giác đều được rasterize; Z-buffer che phần ở phía sau.
-
-Ở phần Đọc một mặt dưới demo, chọn +X. Bốn nhãn v0..v3 là bốn góc của **một quad**, không phải tám góc của cả cube. Tam giác vàng dùng (v0,v1,v2), tam giác xanh dùng (v0,v2,v3); chúng chung đường chéo v0–v2. Mũi tên là normal tính bằng cross product, bảng bên dưới cho cả thứ tự đỉnh lẫn tọa độ.
-
-Thử Đảo winding tam giác 2: chỉ đổi nó thành (v0,v3,v2). Normal của nửa mặt này quay vào trong, dù tấm mặt vẫn trông kín vì chưa cull mặt quay lưng. Bỏ checkbox để khôi phục trước khi đọc code. Thí nghiệm là overlay riêng, không thay mesh/counts của khối chính.
-
 ## Viết code từng bước
 
-### Bước 1 — Chạy bộ khung trước
+Chạy starter một lần: đã có bầu trời, camera và cửa sổ SDL, nhưng `mesh` rỗng. Mình sẽ giữ nguyên cả ba thứ ấy. Chỉ cần cho cảnh một vật để vẽ.
 
-Giải nén ZIP của Project 58, mở terminal tại thư mục có `CMakeLists.txt` rồi chạy bằng PowerShell:
+### Gấp sáu mặt thành một viên đá
 
-```bash title="Terminal — starter"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_58_starter --parallel 2
-.\build\Debug\project_58_starter.exe
-```
+Mở `surface.hpp`. `Face` có vị trí, hướng, chiều rộng, chiều cao và vật liệu; `Mesh` là danh sách những mặt đó. Viết `appendCube` sau các bảng hướng. Mỗi lần qua vòng lặp, đặt một tấm vuông cạnh 1 ở một phía của ô. Đừng chọn mặt theo camera: xoay người chỉ đổi mặt ta nhìn thấy.
 
-Starter phải mở nền tối và đóng được bằng Escape. `main.cpp` đã kiểm `SDL_Init`, window, renderer, texture và đi qua một đường cleanup khi có lỗi. Nếu bước này chưa chạy, hãy sửa lỗi build/SDL trước, đừng thêm geometry để rồi phải đoán lỗi nằm ở đâu.
+{/* snippet include/trail/surface.hpp#six-faces */}
 
-### Bước 2 — Cho tam giác một cấu trúc rõ ràng
-
-```cpp title="include/model.hpp"
-struct Triangle {
-    std::array<Vec3, 3> points;
-    Color color;
-};
-using Mesh = std::vector<Triangle>;
-```
-
-`Vec3` có ba `double`; `Color` có bốn byte RGBA. Một tam giác giữ ba vị trí world và một màu phẳng. Bản nền cố ý chưa dùng index buffer: một cube lưu 36 lượt vertex, dễ lần theo mặt nào sinh tam giác nào. Đừng nhầm 36 lượt lưu này với tám góc hình học của cube.
-
-Trong `mesh.hpp`, mảng `faces` chứa sáu quad. Mặt +X có bốn góc local v0=(1,0,0), v1=(1,1,0), v2=(1,1,1), v3=(1,0,1). Mọi x đều bằng 1; khi cộng origin=(7,7,7), mặt nằm trên world x=8. Bạn có thể đối chiếu từng tọa độ trong bảng của demo thay vì lần theo cả mảng sáu mặt ngay lập tức.
-
-Từ v0, cạnh v1−v0=(0,1,0) và v2−v0=(0,1,1). Cross product bằng (1,0,0), đúng hướng +X. Đến mặt −X, cả tọa độ x và thứ tự đi quanh quad phải đổi sao cho normal hướng ra −X; không chỉ thay số 1 thành 0 rồi giữ thứ tự cũ.
-
-### Bước 3 — Ghép hai tam giác cho từng mặt
-
-```cpp title="include/mesh.hpp"
-constexpr std::array<int, 6> corners{0, 1, 2, 0, 2, 3};
-for (int face = 0; face < 6; ++face) {
-    const auto& quad = faces.at(static_cast<std::size_t>(face));
-    for (int triangle = 0; triangle < 2; ++triangle) {
-        Triangle output{};
-        output.color = faceColor(material, face);
-        for (int vertex = 0; vertex < 3; ++vertex) {
-            const int corner = corners.at(static_cast<std::size_t>(triangle * 3 + vertex));
-            const Vec3 local = quad.at(static_cast<std::size_t>(corner));
-            output.points.at(static_cast<std::size_t>(vertex)) = {origin.x + local.x, origin.y + local.y, origin.z + local.z};
-        }
-        mesh.push_back(output);
+```cpp title="include/trail/surface.hpp — Thêm sáu mặt vào mesh"
+inline void appendCube(Mesh& mesh, Vec3 cell, Block block) {
+    for (int face = 0; face < 6; ++face) {
+        mesh.push_back({cell + faceStarts[face], face, 1, 1, block});
     }
 }
 ```
 
-Đây là thân của `appendCube`. Vòng ngoài chọn mặt, vòng giữa chọn tam giác, vòng trong chọn ba góc. Không gọi SDL trong hàm này: nó chỉ bổ sung geometry vào `Mesh`, vì thế có thể kiểm bằng CTest mà không cần cửa sổ.
+<VoxelWorkFile project="58" step={1} file="surface" />
 
-`main` tạo mesh rồi gọi `voxel::render`. Trong checkpoint đầu, camera nhìn quanh tâm 7.5 và dùng scale 60 để cube đủ lớn. Ảnh CPU luôn 320×240; texture được phóng gần nhất lên vùng 640×480, không tăng số pixel cần raster khi bạn kéo to cửa sổ.
+### Đặt viên đá vào cảnh
 
-### Bước 4 — Đưa framebuffer lên texture đúng pitch
+Mở `Scene::generate()` trong `scene.hpp`. Ngay sau `solids = 0;`, gọi `appendCube(mesh, {7, 7, 7}, Block::Stone);`, rồi đặt `solids = 1;`. Constructor đã gọi `generate()`; còn `Scene::draw()` đã duyệt `mesh`. Nếu chỉ khai báo hàm ở bước trên, danh sách vẫn rỗng, cửa sổ chỉ có trời.
 
-```cpp title="src/main.cpp"
-void upload(SDL_Texture* texture, const voxel::Frame& frame) {
-    void* pixels = nullptr;
-    int pitch = 0;
-    require(SDL_LockTexture(texture, nullptr, &pixels, &pitch));
-    for (int y = 0; y < voxel::imageHeight; ++y) {
-        auto* row = static_cast<std::uint8_t*>(pixels) + y * pitch;
-        const auto* source = frame.pixels.data() + y * voxel::imageWidth;
-        std::memcpy(row, source, voxel::imageWidth * sizeof(voxel::Color));
-    }
-    SDL_UnlockTexture(texture);
-}
+{/* snippet include/trail/scene.hpp#first-stone */}
+
+```cpp title="include/trail/scene.hpp — Đưa viên đá vào mesh của cảnh"
+appendCube(mesh, {7, 7, 7}, Block::Stone);
+solids = 1;
 ```
 
-Texture dùng `SDL_PIXELFORMAT_RGBA32` cùng các byte r/g/b/a trong `Color`. `pitch` là số byte giữa đầu hai hàng của vùng khóa, không nhất thiết bằng width×4. Ta copy từng hàng và ghi đủ mọi pixel, vì [SDL_LockTexture là vùng ghi, không bảo đảm trả lại ảnh cũ](https://wiki.libsdl.org/SDL3/SDL_LockTexture). Chỉ unlock sau khi lock thành công.
+<VoxelWorkFile project="58" step={1} file="scene" />
+
+### Lần theo một pixel ra cửa sổ
+
+Không chép lại `uploadFrame`: starter đã có hàm này. Sau khi `drawFace` tô framebuffer, SDL nhận từng hàng pixel qua `pitch`, rồi trình bày texture trong cửa sổ. Nếu F1 báo sáu mặt mà bạn chưa thấy đá, hãy kiểm vị trí mắt và vật liệu trước khi sửa vòng lặp SDL.
+
+{/* snippet include/trail/window.hpp#present-frame */}
+
+```cpp title="include/trail/window.hpp — Từ framebuffer ra cửa sổ"
+inline void uploadFrame(Display& display, const Frame& frame) {
+    const int pitch = frame.width * static_cast<int>(sizeof(Color));
+    require(SDL_UpdateTexture(display.texture, nullptr, frame.pixels.data(), pitch));
+    require(SDL_SetRenderDrawColor(display.renderer, 0, 0, 0, 255));
+    require(SDL_RenderClear(display.renderer));
+    require(SDL_RenderTexture(display.renderer, display.texture, nullptr, nullptr));
+}
+```
 
 ## Ghép các phần lại
 
-```bash title="Terminal — checkpoint 1"
-cmake --build build --config Debug --target project_58_checkpoint_1 --parallel 2
-.\build\Debug\project_58_checkpoint_1.exe
+Chạy bản vừa sửa, bật F1. Bảng phải ghi **1 block, 12 triangles** dù mắt chỉ nhìn được vài mặt. Mỗi quad gồm hai tam giác, nên bạn vừa dựng sáu mặt. Muốn đọc số quad trực tiếp, đóng cửa sổ rồi thêm `--smoke` vào lệnh mở chương trình: terminal sẽ in `1 blocks, 6 quads`.
+
+Mở terminal cạnh `CMakeLists.txt` của ZIP đã giải nén. Lần cấu hình đầu tạo `work/` từ starter; chỉnh tệp trong đó, rồi build lại cùng target. Cấu hình lần nữa không ghi đè bài làm.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake -S . -B build-work -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_58_work --parallel 1
+.\build-work\Release\project_58_work.exe
 ```
 
-Đường đi đầy đủ là `appendCube → render → upload → SDL_RenderTexture → SDL_RenderPresent`. `render` clear cả màu lẫn depth trước mỗi lần vẽ lại. `dirty` giữ cho bản paused không raster cùng một hình liên tục. Present vẫn phục vụ cửa sổ, còn geometry không tự tăng theo số frame.
-
-Phần “Mã chạy được sau bài” có toàn bộ file của checkpoint, bao gồm rasterizer và CMake. Bạn có thể build snapshot độc lập; các đoạn ở trên là những phần cần chú ý, không phải một file `main.cpp` bị cắt mất đầu/cuối.
+Với Ninja hoặc Make trên Linux/macOS, chạy `./build-work/project_58_work` thay cho dòng mở `.exe`.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi góc thứ ba của tam giác thứ hai từ 3 thành 2 trong `corners`. Tam giác `(0,2,2)` suy biến, một nửa mặt biến mất. Hoàn nguyên về `(0,2,3)`.
-2. Bỏ phép cộng `origin.z` khi tạo vertex. Cube bị kéo sai vị trí theo z. Lỗi này thuộc bước dựng geometry, không phải texture hoặc event loop.
+Trong `appendCube`, thử kết thúc vòng lặp ở 5, build lại bản của mình rồi mở F1. Hình có thể trông y như cũ vì mặt thiếu nằm khuất, nhưng bộ đếm phải còn **10 triangles**. Nếu vẫn là 12, kiểm tra tệp bạn vừa sửa và tên chương trình trước khi sửa hàm lần nữa. Khôi phục đủ sáu hướng.
 
 ## Tự kiểm tra kết quả
 
-Starter chỉ nền tối; checkpoint có một cube không hở đường chéo và đủ 12 tam giác trong mesh. Resize giữ tỷ lệ nhờ letterbox. Escape đóng sạch. Không cần texture atlas, OpenGL hoặc thư viện font; `SDL_RenderDebugText` ở những bài sau chỉ dùng nhãn ASCII để giảm phụ thuộc.
+Starter có bầu trời; checkpoint 1 có viên đá, 6 quad và 12 tam giác. Escape đóng chương trình. Mở Canvas và đảo thứ tự đỉnh của một tam giác để xem normal đổi chiều.
 
 ## Bài tập mở rộng
 
-Tô sáu hướng bằng sáu màu khác nhau trong `faceColor`, rồi vẽ sơ đồ nhỏ ghi mặt +X/−X/+Y/−Y/+Z/−Z. Giữ sáu quad và 12 tam giác; chỉ thay màu. Đưa về bản chuẩn trước khi học tiếp để dễ đối chiếu.
+Tô tạm mặt trên một màu riêng. Từ một ảnh chụp, bạn có phân biệt được mặt ấy với mặt hướng về phía mắt không?
 
-[Bài tiếp theo](/projects/voxel-chunk/02-luu-block-trong-chunk) — Lưu 4096 block trong một chunk.
+[Bài 2: Một viên đá nằm ở đâu trong 4.096 ô?](/projects/voxel-chunk/02-luu-block-trong-chunk).

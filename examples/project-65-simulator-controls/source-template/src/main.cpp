@@ -31,10 +31,18 @@ lab::Key translateKey(SDL_Keycode key) {
 
 int main(int argc, char** argv) {
     bool smoke = false;
+    const char* capturePath = nullptr;
+    std::string_view take;
     for (int index = 1; index < argc; ++index) {
         if (std::string_view(argv[index]) == "--smoke") {
             smoke = true;
         }
+        if (std::string_view(argv[index]) == "--capture" && index + 1 < argc) {
+            capturePath = argv[++index];
+            smoke = true;
+        }
+        if (std::string_view(argv[index]) == "--take" && index + 1 < argc)
+            take = argv[++index];
     }
 
     // Khởi tạo SDL và từng resource riêng để biết chính xác bước nào thất bại.
@@ -49,7 +57,7 @@ int main(int argc, char** argv) {
     if (smoke) {
         flags |= SDL_WINDOW_HIDDEN;
     }
-    SDL_Window* window = SDL_CreateWindow("Project 65 - Simulator controls", 960, 540, flags);
+    SDL_Window* window = SDL_CreateWindow("65 / Flock Observatory - Flight desk", 960, 540, flags);
     if (!window) {
         SDL_Log("SDL_CreateWindow: %s", SDL_GetError());
         SDL_Quit();
@@ -74,6 +82,17 @@ int main(int argc, char** argv) {
 
     lab::Model model;
     lab::Ui ui;
+#if LAB_CHECKPOINT >= 4
+    // Hai ảnh cùng seed, cùng tick; điều khiển qua chính đường input của người học.
+    if (capturePath && (take == "near" || take == "wide")) {
+        lab::setPaused(model, true);
+        double x = lab::radiusSlider.x;
+        if (take == "wide") x += lab::radiusSlider.width - 0.001;
+        const lab::Point point{x, lab::radiusSlider.y + 15};
+        lab::pointerDown(model, ui, point);
+        lab::pointerUp(model, ui, point);
+    }
+#endif
     bool running = true;
     int result = EXIT_SUCCESS;
 #if LAB_CHECKPOINT >= 1
@@ -89,6 +108,7 @@ int main(int argc, char** argv) {
                 running = false;
             }
 #if LAB_CHECKPOINT >= 6
+            // [snippet event-space]
             if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_MINIMIZED || event.type == SDL_EVENT_WINDOW_HIDDEN || event.type == SDL_EVENT_WINDOW_RESIZED) {
                 lab::suspend(model, ui);
                 SDL_CaptureMouse(false);
@@ -97,6 +117,7 @@ int main(int argc, char** argv) {
                 SDL_Log("Event conversion: %s", SDL_GetError());
                 continue;
             }
+            // [/snippet event-space]
 #elif LAB_CHECKPOINT >= 3
             if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
                 lab::cancelPointer(ui);
@@ -147,6 +168,8 @@ int main(int argc, char** argv) {
 #endif
 #if LAB_CHECKPOINT >= 5
                 consumed = lab::keyDown(model, ui, translateKey(event.key.key), (event.key.mod & SDL_KMOD_SHIFT) != 0, event.key.repeat);
+                if (!consumed && event.key.key == SDLK_SPACE && !event.key.repeat)
+                    lab::setPaused(model, !model.paused);
                 if (ui.active == lab::Control::None) {
                     SDL_CaptureMouse(false);
                 }
@@ -169,6 +192,7 @@ int main(int argc, char** argv) {
         }
 
 #if LAB_CHECKPOINT >= 1
+        // [snippet frame-loop]
         const Uint64 now = SDL_GetTicksNS();
         double elapsed = double(now - previous) / 1e9;
         previous = now;
@@ -178,8 +202,14 @@ int main(int argc, char** argv) {
         }
 #endif
         lab::advance(model, elapsed);
+        // [/snippet frame-loop]
 #endif
         lab::draw(renderer, model, ui);
+        if (capturePath != nullptr) {
+            SDL_Surface* image = SDL_RenderReadPixels(renderer, nullptr);
+            if (!image || !SDL_SavePNG(image, capturePath)) result = EXIT_FAILURE;
+            SDL_DestroySurface(image);
+        }
         if (!SDL_RenderPresent(renderer)) {
             SDL_Log("SDL_RenderPresent: %s", SDL_GetError());
             result = EXIT_FAILURE;

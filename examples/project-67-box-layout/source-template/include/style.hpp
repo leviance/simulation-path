@@ -4,12 +4,14 @@
 
 namespace lab {
 #if LAB_CHECKPOINT >= 2
+// [snippet edges]
 struct Edges {
     double left = 0;
     double top = 0;
     double right = 0;
     double bottom = 0;
 };
+// [/snippet edges]
 
 enum class Width {
     Fill,
@@ -60,8 +62,10 @@ inline bool validStyle(const BoxStyle& style, const Widget& node) {
     return (style.width == Width::Fill || style.width == Width::Fixed) && (style.height == Height::Fixed || (style.height == Height::Auto && node.kind == Kind::Panel)) && std::isfinite(style.fixedWidth) && style.fixedWidth >= 8 && style.fixedWidth <= 600 && std::isfinite(style.fixedHeight) && style.fixedHeight >= 8 && style.fixedHeight <= 540 && validEdges(style.margin, 64) && validEdges(style.padding, 48) && std::isfinite(style.border) && style.border >= 0 && style.border <= 8 && std::isfinite(style.gap) && style.gap >= 0 && style.gap <= 32;
 }
 
+// [snippet content]
 inline Rect contentBox(Rect box, const BoxStyle& style) {
     return {box.x + style.border + style.padding.left, box.y + style.border + style.padding.top, std::max(0.0, box.width - 2 * style.border - style.padding.left - style.padding.right), std::max(0.0, box.height - 2 * style.border - style.padding.top - style.padding.bottom)};
 }
+// [/snippet content]
 #endif
 } // namespace lab

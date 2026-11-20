@@ -1,0 +1,80 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
+
+# Ai chịu trách nhiệm về đường nối giữa hai bờ?
+
+## Vấn đề cần giải quyết
+
+Ở hàng cuối của chunk đầu tiên, ô kế bên có x local bằng 16. Nếu cứ coi đó là không khí, hai cột đất liền nhau vẫn mang một vách kín ở giữa. Lỗi thường không lộ từ trên cao; chỉ cần hạ mắt ngang mặt nước là thấy.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chia một dãy 32 block thành hai nửa. Từ x=15 đi thêm một bước là chunk kế, local=0, không phải quay về đầu chunk cũ. Khi chưa nạp được hàng xóm, cứ tạm giữ mặt ngoài cho kín. Khi hàng xóm xuất hiện, quyết định cũ ở hai phía phải được xét lại.
+
+<InteractiveLab demo="voxel-hidden-faces" mode="voxel59-2" />
+
+## Viết code từng bước
+
+Chạy bài trước ở bờ suối: HUD mới đếm một cột. Đường biên đáng xét là giữa hàng z = 15 của cột đầu và z = 0 của cột ngay phía sau nó. Mình sẽ nạp thêm đúng một cột, không viết lại bộ dựng mặt.
+
+### Theo một câu hỏi đi qua đường nối
+
+Ô sát mép không thể tìm láng giềng bằng cách đọc local z = 16 trong cùng mảng. `Region::sample` của bài trước đổi tọa độ world sang chunk/local; `markNeighborhood` đánh dấu lại những cột có chung mép. Hãy đọc hai đoạn đã có này trước khi thêm cột: chính chúng quyết định mặt cũ có biến mất hay không.
+
+{/* snippet include/trail/region.hpp#lookup-neighbor */}
+
+```cpp title="include/trail/region.hpp — Đọc nhanh trong cột, tra bảng ở mép"
+const auto sample = [&](int wx, int y, int wz) {
+    const int x = wx - key.first * side, z = wz - key.second * side;
+    if (x >= 0 && x < side && z >= 0 && z < side)
+        return column.get(x, y, z);
+    return read(wx, y, wz);
+};
+```
+
+{/* snippet include/trail/region.hpp#dirty-border */}
+
+```cpp title="include/trail/region.hpp — Đánh dấu những cột thật sự bị ảnh hưởng"
+void markNeighborhood(Key k) {
+    for (auto delta : std::array<Key, 5>{{{0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1}}}) {
+        const Key key{k.first + delta.first, k.second + delta.second};
+        if (tiles.contains(key))
+            dirty.insert(key);
+    }
+}
+```
+
+### Nạp cột thứ hai trước khi dựng mesh
+
+Trong `field-scene.hpp`, tìm nhánh cảnh bờ suối của `Scene::generate`. Ngay sau `region.load({0, 0});`, thêm `region.load({0, 1});`; giữ nguyên vòng xử lý các cột bẩn ngay sau đó. Khi xử lý cột đầu lần này, nó đã nhìn thấy hàng xóm ở phía z dương. Nếu bạn sửa kích thước section thay cho lệnh nạp, bạn đang làm một bài khác.
+
+{/* snippet include/trail/field-scene.hpp#neighbor-load */}
+
+```cpp title="include/trail/field-scene.hpp — Lệnh nạp hàng xóm theo trục z"
+region.load({0, 1});
+```
+
+<VoxelWorkFile project="59" step={2} file="field-scene" />
+
+## Ghép các phần lại
+
+Chọn cảnh 1 và mở F1: số chunk phải từ 1 lên 2. Men theo bờ qua đường z = 16 rồi ngoái lại. Chuyển F2 để so: cảnh không được có vệt sáng hay lỗ thủng đúng đường nối. Đếm chunk trước khi tìm lỗi trong phép tô màu.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_59_work --parallel 1
+.\build-work\Release\project_59_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Tạm bỏ lệnh đánh dấu hàng xóm rồi nạp khối thứ hai. Khối thứ nhất vẫn giữ một vách cũ; đổi thứ tự nạp khiến kết quả đổi theo.
+
+## Tự kiểm tra kết quả
+
+Cùng hai chunk đặc liền x, tổng còn 2.560 quad đơn vị. Đổi thứ tự nạp vẫn có cùng tập mặt ngoài; bước qua đường nối không lộ đáy trời.
+
+## Bài tập mở rộng
+
+Thử gỡ chunk bên phải. Dự đoán 256 mặt nào cần quay lại và vì sao.
+
+[Bài 3: So hai bức hình trước khi tin số tam giác](/projects/voxel-hidden-faces/03-do-cung-mot-vach).

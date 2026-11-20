@@ -22,34 +22,34 @@ const data = {
   challenge: {
     timebox: "150–210 phút tự thử trước khi đọc hướng dẫn",
     mission:
-      "Tự xây dựng một mô phỏng bóng rơi có bảng điều khiển tự xếp từ trên xuống. Người dùng thay gap, padding, chiều rộng Panel hoặc ẩn Reset; những control còn lại phải được đặt lại mà bạn không sửa từng tọa độ y.",
+      "Tự xây dựng một bàn quan sát đàn Boids của Project 28 có bảng điều khiển tự xếp từ trên xuống. Người dùng thay gap, padding, chiều rộng Panel hoặc ẩn Reset; những control còn lại phải được đặt lại mà bạn không sửa từng tọa độ y.",
     outcome:
-      "Root Panel chứa tiêu đề, Group với Pause/Reset/Gravity và footer. Group tự cao vừa nội dung; Slider vẫn kéo đúng sau khi layout thay đổi hoặc một phần của nó bị clip.",
+      "Root Panel chứa tiêu đề, Group với Pause, Reset, Neighbors, Radius và Separation và footer. Group tự cao vừa nội dung; Slider vẫn kéo đúng sau khi layout thay đổi hoặc một phần của nó bị clip.",
     requirements: [
       "C++20, CMake ≥3.24, SDL3 3.4.8; không dùng thư viện UI hay layout ngoài.",
       "Giữ cây và input của Project 66. Style nằm riêng; Widget::local là output. Root ở y=24, mép phải x=936, height=492, width từ 220 tới 420.",
       "Box model gồm margin, border và padding không âm. Width hỗ trợ Fill/Fixed; Auto height chỉ dành cho Panel, leaf dùng border-box height cho trước.",
       "Duyệt child theo thứ tự lưu. Hai margin đứng cạnh nhau cộng lại, gap chỉ ở giữa hai child visible; không gap đầu/cuối, không CSS margin collapsing.",
       "Đo kích thước rồi arrange; Panel con dùng content width của parent. Đo và đặt mỗi node một lần trong một lượt layout.",
-      "Thay gap/padding, ẩn Reset, thêm tối đa bốn Label và xóa Label cuối; giữ ID còn sống và tách Reset vật lý khỏi khôi phục layout.",
-      "Hoàn tất layout trước input và render. Khi hình học đổi, hủy active/capture, đối chiếu focus; gravity và ticks không làm dirty layout.",
+      "Thay gap/padding, ẩn Reset, thêm tối đa bốn Label và xóa Label cuối; giữ ID còn sống và tách Reset đàn chim khỏi khôi phục layout.",
+      "Hoàn tất layout trước input và render. Khi hình học đổi, hủy active/capture, đối chiếu focus; thay bán kính, lực tách và bước thời gian không làm dirty layout.",
       "Fixed width không tự co. Content width được clamp về 0 nếu inset quá lớn; overflow bị clip và không nhận input ngoài clip.",
-      "Canvas theo từng checkpoint, có preset, pause/reset/bước tay, keyboard, DPR và reduced-motion; source đầy đủ của từng bài và ZIP độc lập.",
+      "Trang học có ảnh chụp đúng mốc C++; chạy ZIP độc lập để thử chuột, bàn phím và các preset.",
     ],
     constraints: [
       "Một cột, không wrap chữ, percent, min/max, absolute positioning, scrolling, flex shrink/grow hoặc row/column. Các khái niệm mở rộng thuộc Project 68–70.",
       "Tối đa 32 node, depth 6, bốn Label thêm; margin≤64, padding≤48, border≤8, gap≤32. Không chạy vòng layout tới khi hội tụ.",
-      "Canvas dùng 960×540; width control mô phỏng constraint. Native dùng cùng logical space, resize cấp width=clamp(windowWidth/3,220,420). Không coi window units là framebuffer pixels.",
+      "Bản C++ dùng không gian hiển thị 960×540; resize cấp width=clamp(windowWidth/3,220,420). Không coi window units là framebuffer pixels.",
       "Nhãn SDL dùng ASCII debug text, không suy đoán chiều cao theo nội dung hay cắt dòng. Leaf height đã bao gồm border và padding.",
       "Đây không phải CSS box model đầy đủ. Quy tắc được định nghĩa riêng, không tuyên bố tương đương trình duyệt.",
     ],
     definitionOfDone: [
       "Starter có window/renderer và control chạy được trước khi thêm kiểu layout.",
-      "Width root=320 cho Group height=252; Pause world=(656,96), width=240 và height=36.",
+      "Width root=320 cho Group height=352; Pause world=(656,96), width=240 và height=36.",
       "Ẩn Reset làm Group giảm 52 và các node sau dịch lên 52; bật lại phục hồi Rect cũ.",
-      "Đổi width root 320→220 làm Fill nhỏ đi 100 nhưng Fixed giữ 320; slider vẫn dùng bounds chưa bị cắt để ánh xạ gravity.",
+      "Đổi width root 320→220 làm Fill nhỏ đi 100 nhưng Fixed giữ 320; slider vẫn dùng bounds chưa bị cắt để ánh xạ bán kính.",
       "Gap của N child visible chỉ tính N−1 lần; empty Panel không có gap; margin cộng chứ không collapse.",
-      "1000 frame đọc, input và bước vật lý không tăng passes sau bài 07; input ngay sau đổi constraint dùng layout mới.",
+      "1000 frame đọc, input và bước thời gian không tăng passes sau bài 07; input ngay sau đổi constraint dùng layout mới.",
       "Bounds, clip, cache, mutation và input được kiểm độc lập ở Debug/Release; smoke có deadline, desktop QA được báo riêng.",
       "Chín bài có code thật, One Dark, source cuối bài, glossary, search, README và ZIP khớp source; không commit output sinh tự động.",
     ],
@@ -58,9 +58,8 @@ const data = {
     {
       id: "p67-l01",
       slug: "01-tu-bo-cuc-thu-cong",
-      title: "Chạy bảng điều khiển và nhìn ra việc phải sửa tọa độ",
-      summary:
-        "Dùng lại cây UI chạy được rồi thử thêm khoảng cách: vì sao sửa một control kéo theo nhiều tọa độ khác?",
+      title: "Vì sao thêm một nút lại phải dời cả bảng?",
+      summary: "Bắt đầu với đàn chim và các control đặt tay của Project 66.",
       order: 1,
       estimatedMinutes: 70,
       demoId: "box-layout",
@@ -68,8 +67,8 @@ const data = {
     {
       id: "p67-l02",
       slug: "02-margin-border-padding",
-      title: "Tách margin, border, padding và phần nội dung",
-      summary: "Vẽ từng lớp hộp; giữ Style đầu vào riêng với Rect do layout tính ra.",
+      title: "Bốn mép quanh một nút Pause",
+      summary: "Phân biệt khoảng cách ngoài nút, đường viền, khoảng đệm và nơi đặt chữ.",
       order: 2,
       estimatedMinutes: 85,
       demoId: "box-layout",
@@ -77,8 +76,8 @@ const data = {
     {
       id: "p67-l03",
       slug: "03-do-kich-thuoc",
-      title: "Đo một control trước khi quyết định đặt nó ở đâu",
-      summary: "Tính width Fill/Fixed và các số đo border box; chưa tự di chuyển control.",
+      title: "Đo slider trước khi quyết định đặt nó ở đâu",
+      summary: "Một lượt đo trả kích thước theo ID, chưa sửa vị trí thật.",
       order: 3,
       estimatedMinutes: 85,
       demoId: "box-layout",
@@ -86,8 +85,8 @@ const data = {
     {
       id: "p67-l04",
       slug: "04-xep-mot-cot",
-      title: "Dùng cursorY xếp control từ trên xuống",
-      summary: "Đặt cả cột bằng một vòng lặp; phân biệt margin của child với gap của parent.",
+      title: "Để hàng sau tự nhường chỗ cho hàng trước",
+      summary: "Dùng một cursorY và cộng gap đúng giữa hai child đang hiện.",
       order: 4,
       estimatedMinutes: 90,
       demoId: "box-layout",
@@ -95,8 +94,9 @@ const data = {
     {
       id: "p67-l05",
       slug: "05-panel-tu-tinh-chieu-cao",
-      title: "Cho Panel con tự cao vừa những control bên trong",
-      summary: "Đo từ lá lên rồi arrange từ cha xuống; không cần ghi chiều cao Group bằng tay.",
+      title: "Nhóm điều khiển cao bao nhiêu thì vừa?",
+      summary:
+        "Tính được chiều cao của Panel từ bảy hàng bên trong, không dùng một con số ước lượng.",
       order: 5,
       estimatedMinutes: 100,
       demoId: "box-layout",
@@ -104,8 +104,8 @@ const data = {
     {
       id: "p67-l06",
       slug: "06-an-them-xoa-control",
-      title: "Ẩn, thêm và xóa control mà không sửa vị trí phía sau",
-      summary: "Chỉ node visible tham gia flow; ID và dữ liệu mô phỏng vẫn giữ nguyên.",
+      title: "Ẩn Reset, kéo Radius ngay ở chỗ mới",
+      summary: "Để việc thêm hoặc bỏ một hàng thay đổi hình mà không thay đàn.",
       order: 6,
       estimatedMinutes: 90,
       demoId: "box-layout",
@@ -113,9 +113,8 @@ const data = {
     {
       id: "p67-l07",
       slug: "07-dirty-layout-va-input",
-      title: "Chỉ tính lại layout khi đầu vào đổi",
-      summary:
-        "Dùng dirty flag và cập nhật Rect trước input; không kéo một Slider bằng hình học đã cũ.",
+      title: "Khi nào thực sự phải xếp lại bảng?",
+      summary: "Cập nhật hình học trước sự kiện kế tiếp, không đợi đến cuối frame.",
       order: 7,
       estimatedMinutes: 100,
       demoId: "box-layout",
@@ -123,8 +122,8 @@ const data = {
     {
       id: "p67-l08",
       slug: "08-overflow-va-clipping",
-      title: "Xử lý control rộng hơn khung chứa",
-      summary: "Giữ bounds khác clip, không tự co Fixed và không bắt chuột ở phần bị cắt.",
+      title: "Phần slider bị cắt có còn thuộc về nó không?",
+      summary: "Tách kích thước đầy đủ để tính giá trị khỏi phần nhìn thấy để bắt đầu thao tác.",
       order: 8,
       estimatedMinutes: 85,
       demoId: "box-layout",
@@ -132,9 +131,8 @@ const data = {
     {
       id: "p67-l09",
       slug: "09-kiem-chung-va-hoan-thien",
-      title: "Kiểm chứng layout và chạy toàn bộ dự án",
-      summary:
-        "Dùng fixture độc lập, kiểm cache và input, build mọi checkpoint cùng Debug/Release.",
+      title: "Nghiệm thu bảng điều khiển của đàn Boids",
+      summary: "Kiểm độc lập hình học, sự kiện sau reflow và chi phí lúc đàn đang bay.",
       order: 9,
       estimatedMinutes: 100,
       demoId: "box-layout",

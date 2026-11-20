@@ -21,36 +21,15 @@ function sameContents(target, expected) {
   }
 }
 
-function filesBelow(directory) {
-  if (!existsSync(directory)) return [];
-  const output = [];
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    const target = path.join(directory, entry.name);
-    if (entry.isDirectory()) output.push(...filesBelow(target));
-    else if (entry.isFile()) output.push(target);
-  }
-  return output;
-}
-
-function removeEmptyDirectories(directory, keepRoot = true) {
-  if (!existsSync(directory)) return;
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    if (entry.isDirectory()) removeEmptyDirectories(path.join(directory, entry.name), false);
-  }
-  if (!keepRoot && readdirSync(directory).length === 0) rmdirSync(directory);
-}
-
 export function reconcileGeneratedFiles({
   expectedFiles,
   managedRoots = [],
-  retainedFiles = [],
+  checkedDirectories = [],
   checkOnly = false,
   workspace,
 }) {
   const expectedTargets = new Set([...expectedFiles.keys()].map((target) => path.resolve(target)));
-  // Streaming generators already reconciled these files in smaller project
-  // batches. Retain only their paths, not their source buffers, during root pruning.
-  const retainedTargets = new Set([...retainedFiles].map((target) => path.resolve(target)));
+  const checked = new Set([...checkedDirectories].map((directory) => path.resolve(directory)));
   let changedCount = 0;
   let removedCount = 0;
   let mismatchCount = 0;
@@ -67,11 +46,19 @@ export function reconcileGeneratedFiles({
     changedCount += 1;
   }
 
-  for (const root of managedRoots) {
-    for (const target of filesBelow(root)) {
-      if (expectedTargets.has(path.resolve(target)) || retainedTargets.has(path.resolve(target)))
-        continue;
-      if (checkOnly) {
+  // One bottom-up scan both spots stale files and prunes empty folders.
+  // Do not re-enumerate every descendant just to discover whether it is empty.
+  function reconcileDirectory(directory) {
+    let empty = true;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const target = path.join(directory, entry.name);
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        if (checked.has(target) || !reconcileDirectory(target) || checkOnly) empty = false;
+        else rmdirSync(target);
+      } else if (!entry.isFile() || expectedTargets.has(target)) {
+        empty = false;
+      } else if (checkOnly) {
+        empty = false;
         mismatchCount += 1;
         process.stderr.write(`Unexpected generated file: ${path.relative(workspace, target)}\n`);
       } else {
@@ -79,7 +66,10 @@ export function reconcileGeneratedFiles({
         removedCount += 1;
       }
     }
-    if (!checkOnly) removeEmptyDirectories(root);
+    return empty;
+  }
+  for (const root of managedRoots) {
+    if (existsSync(root)) reconcileDirectory(path.resolve(root));
   }
 
   return { changedCount, removedCount, mismatchCount };

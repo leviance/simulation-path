@@ -1,96 +1,55 @@
-# Project 64 — Minecraft-like sandbox tối giản của riêng bạn
+# Project 64 — Một ngày trong thế giới voxel: đi qua rừng, bão tuyết và bờ biển
 
-Ghép các phần voxel đã học thành một sandbox dựng khối có thể dùng được: ngắm, phá/đặt, chọn Grass/Dirt/Stone, đi xa rồi quay về, undo/redo và xuất/nhập bản lưu text. Mục tiêu là hiểu cách các subsystem phối hợp và kiểm chứng nhau, không làm một bản sao đầy đủ của Minecraft.
+Tự hoàn thiện chuyến đi bộ từ bãi cát qua hẻm tới rừng tuyết và bếp lửa. Khi buông chuột, cảnh vẫn sống.
 
-## Thử tự xây trước khi đọc lời giải
+Tuyết khuất sau thông, ngọn cỏ nghiêng, mây và sóng chuyển động, ánh chiều hắt sang mặt kia của vách đá.
 
-Trong 210–300 phút, mở rộng terrain của Project 63 để người dùng xây một công trình qua biên hai chunk. Sau khi đi xa đủ để chunk bị gỡ, quay lại phải thấy đúng phần đã sửa. Thử undo khi công trình đang ngoài vùng resident, rồi xuất bản lưu và nhập vào phiên mới. Nêu rõ những gì chỉ nằm trong cache và những gì thuộc dữ liệu world.
+## Học bằng bản C++ của mình
 
-Prerequisites: Project 58–63, đặc biệt picking Project 60, streaming Project 62 và terrain Project 63. C++ array/map/vector, optional và ownership. Thời gian học 16–23 giờ. ZIP mang toàn bộ nền để build độc lập.
+Đất, dòng sông, sóng, gió, streaming và các mốc đã chạy từ Project 63. Bạn bổ sung tuyết trong không gian, Mặt Trời, đi bộ có va chạm, bếp lửa và phép đo cả chuyến.
 
-## Mười bước, không phải mười chương trình rời nhau
-
-| Snapshot | Kết quả |
-| --- | --- |
-| starter | Terrain, greedy mesh, streaming, camera trực giao và Z-buffer từ P63 |
-| 01 | Tâm ngắm trên ảnh CPU, đọc tọa độ pixel từ input SDL |
-| 02 | Ray world đúng offset player, đi qua tâm pixel |
-| 03 | DDA nhiều chunk, hit/normal/path và Unknown chặn tia |
-| 04 | Phá/đặt một cell, vật liệu 1/2/3; chỉ sửa cache resident |
-| 05 | Delta theo world, tombstone Air, regenerate rồi phủ delta |
-| 06 | Gộp dirty mesh, xử lý biên và tách counter streaming/edit |
-| 07 | Undo/redo hữu hạn, địa chỉ world hoạt động cả sau unload |
-| 08 | VXL1 canonical, xuất/nhập có kiểm tra trước mutation |
-| 09 | Preset di chuyển giữ edit, IJKL ngắm, hoàn thiện tương tác |
-| 10/final | Oracle AABB/surface, snapshot fixture và bộ nghiệm thu |
-
-Trong repository website, source-template/ là nguồn chuẩn; npm run generate:course sinh CMake và snapshot. ZIP đã chứa starter, checkpoints/01…10, final, tests và README. Không cần chép code ở project khác.
-
-## Build/run/test
-
-```bash
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 20
-./build/Debug/project_64_final.exe
-```
-
-Windows dùng Visual Studio 2022 với Desktop development with C++. C++20, CMake ≥3.24, SDL3 khóa 3.4.8 qua FetchContent URL/checksum, link SDL3::SDL3. Không assets hoặc thư viện noise khác. Với single-config Ninja/Make, thêm CMAKE_BUILD_TYPE=Debug, executable ở build/. Final là target mặc định; BUILD_CHECKPOINTS thêm starter và project_64_checkpoint_1…10.
+Giải nén ZIP vào thư mục riêng. Ngay cạnh `CMakeLists.txt`, chạy:
 
 ```powershell
-$smoke = Start-Process -FilePath ".\build\Debug\project_64_final.exe" -ArgumentList "--smoke" -WindowStyle Hidden -PassThru
-if (-not $smoke.WaitForExit(30000)) {
-    $smoke.Kill()
-    throw "Smoke quá 30 giây."
-}
-if ($smoke.ExitCode -ne 0) { throw "Smoke thất bại." }
+cmake -S . -B build-work -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_64_work --parallel 1
+.\build-work\Release\project_64_work.exe
 ```
 
-Smoke mở window ẩn, vẽ một frame rồi thoát; không đọc/ghi clipboard. CTest thuần không mở window, check vẫn chạy trong Release. Automation cần deadline bên ngoài cho cả process tree. Tối đa hai compiler, không benchmark hoặc drain vô hạn.
+CMake chỉ tạo `work/` từ `starter/` khi thư mục này chưa tồn tại. Sửa `work/include/trail/` xuyên suốt các bài, rồi build lại **cùng target**. Với Ninja/Make, mở `./build-work/project_64_work`. Các mục **Vị trí sửa và mã cần viết** trong bài cho biết chỗ chèn, đoạn cần thay và đoạn mới. Những dòng `// [snippet …]` là chú thích của sách, không phải lệnh C++.
 
-## Điều khiển và bản lưu
+Nếu học liền từ Project 63, ZIP đã có mã nền tương đương bản cuối trước và các tệp khung mới cho mốc này. Muốn giữ phần tự viết, đối chiếu `work/include/trail/` cũ với `starter/include/trail/` mới và mang sang các header chung bạn đã sửa; giữ các header mới và `src/main.cpp` của ZIP này. Không chép đè cả thư mục. Nếu API của bạn khác, nối lại ở hàm được chỉ trong bài đầu.
 
-- WASD dịch vị trí quan sát 4 world units; arrow hoặc middle drag orbit; +/− zoom. Đây không phải FPS controller.
-- Mouse ngắm; IJKL ngắm bằng phím từ bài 09. Click trái/F phá, phải/G đặt từ bài 04; giữ/kéo không auto-paint. 1/2/3 chọn Grass/Dirt/Stone.
-- N xử lý một batch; Space chạy/dừng queue, không tự edit. Thao tác tay pause queue. P chuyển bốn vị trí mẫu từ bài 09, giữ delta; R xóa phiên và trở về terrain gốc, Escape thoát.
-- Z undo/Y redo từ bài 07; tối đa 32 lệnh mỗi phía lịch sử.
-- Từ bài 08: F5 copy VXL1 vào clipboard. Dán text ra file để giữ sau khi đóng chương trình. Shift+F9 nhập clipboard, thay phiên/config và xóa history; input lỗi giữ nguyên world.
-- V từ bài 10 kiểm dữ liệu/surface resident hiện tại, không thay toàn suite hành trình.
+Chỉ sau bài cuối mới build `project_64_tests` trong `build-work` rồi chạy `ctest --test-dir build-work -C Release --output-on-failure --timeout 30`. Ở cấu hình này tests đọc **work/include**, không đọc `final/`. Đừng lấy một lần chạy checkpoint hoặc CTest của bản mẫu làm kết quả bài làm.
 
-Canvas có các nút tương đương, nhập pixel X/Y, map chunk, hotbar, readout, preset, pause/reset và textarea VXL1. Nhập bản lưu khi phiên có edit cần chọn “Cho phép thay thế”. Không tự ghi clipboard hoặc file trong trình duyệt; người dùng sao chép text ra ngoài. DPR, capture/cancel, blur/visibility và reduced-motion được xử lý; giảm chuyển động vẫn dùng Một tick và edit tay được.
+## Chạy bản mẫu để đối chiếu
 
-Thay đổi chỉ ở RAM cho tới khi xuất text và tự giữ lại. LocalStorage tiến độ học không phải bản lưu sandbox. Reset/import là thao tác thay phiên có chủ đích. Không có backend, account hoặc autosave ngầm.
+Cần compiler C++20 và CMake 3.24 trở lên. Trên Windows, mở Developer PowerShell của Visual Studio 2022. Từ thư mục vừa giải nén:
 
-## Dữ liệu, picking và cache
-
-- Chunk 16³, x-fast index=x+16*(z+16*y). Air=0, Grass/Dirt/Stone=1/2/3 opaque. Một tầng Y=0..15; delta có thể tạo hốc/khối treo trong tầng dù terrain nền là heightfield.
-- Terrain giữ công thức P63, default seed42/scale32/octaves3. Khi không edit, chunk (0,0) checksum FNV-1a=4263195062.
-- Camera trực giao scale2/center8, ảnh CPU320×240. Ray qua (x+0.5,y+0.5). Near=max(64,ceil(depth lớn nhất của các góc chunk resident)+1), far=near−96; renderer chỉ giữ far<depth≤near. Cả refreshPick và action truyền cùng near cho cameraRay. World x/z cộng player−8 ngược phép dịch mesh; reach≤96 từ origin plane, không từ tay/mắt FPS. Chunk cũ sau teleport có thể tạm đẩy vùng mới ra ngoài lát nhìn cho tới khi unload.
-- Ray origin finite±4096, direction normalized; near hữu hạn 64..3072. Domain query [−1024,1024)×[0,16)×[−1024,1024), tolerance theo t=1e-9, tối đa256 DDA iterations. Qua tie step tất cả trục, normal ưu tiên X/Y/Z, bỏ tiếp xúc không có đoạn đi bên trong đủ dài.
-- Unknown là chunk chưa resident: ray dừng, không generate hoặc đi xuyên nó để chọn chunk phía sau. Mesher coi neighbor chưa tải là Air để đóng frontier; hai subsystem cố ý dùng hai quy tắc khác nhau.
-- Action luôn re-query state mới, không tin cached Hit. Phá thành Air; đặt ở hit+normal nếu Air resident, y hợp lệ, material1..3. Origin trong block có normal zero nên không đặt được. Overlay hit/ghost/path là debug, không quyết định picking bằng pixel/depth.
-- Base+delta là dữ liệu world; Entry.blocks/mesh là cache resident. Delta lưu cả Air tombstone khi phá; khôi phục đúng base thì xóa delta. Tối đa512 delta, reject trước mutation khi hết slot. Bài04 chưa delta nên unload có thể mất sửa; bài05 mới giữ session.
-- Edit một cell gắn dirty self và neighbor đúng cạnh X/Z, tối đa3 Key ở góc. Từ bài06 gộp nhiều action rồi flush trước frame. Bộ đếm lastMeshes thuộc batch streaming được giữ riêng; editRebuilds ghi việc edit. Bài04–05 remesh eager toàn resident để thấy cách đơn giản trước.
-- Undo/redo giữ cell/before/after, không Entry pointer. Undo offline cập nhật delta, không tải chunk. LIFO giới hạn32, edit mới xóa redo; kiểm expected value trước replay. Import/reset xóa cả hai stack.
-- Scheduler giữ player±512, resident≤49, pending≤74, 1–2 jobs/tick, keep ring r+1. Job budget không bảo đảm thời gian millisecond. UI chỉ dùng radius1; source scheduler vẫn hỗ trợ radius2.
-- Idle không query/rebuild/raster, aim chỉ query, camera chỉ query+raster. SDL present vẫn chạy. Dữ liệu đổi trước mesh nhưng flush xong trước frame; nhiều click trong cùng batch vẫn truy vấn buffer mới.
-
-## VXL1 và kiểm chứng
-
-```text
-VXL1 42 32 3
-3
--1 0 -1 0
-0 0 0 0
-16 14 0 3
+```sh
+cmake -S . -B build -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Release --parallel 1
+ctest --test-dir build -C Release --output-on-failure --timeout 30
 ```
 
-Header là version, seed, scale, octaves; tiếp theo số record và mỗi record x y z BlockID. ASCII≤32768 byte, tối đa512 record; x/z nguyên trong [−1024,1024), y0..15, ID0..3. Reject thiếu/dư, duplicate, redundant so với base, số không nguyên/overflow và config sai. Parser chấp nhận whitespace ASCII được quy định, output chuẩn sắp x/y/z và LF; native/Canvas có cùng fixture byte. Không serialize mesh, resident, player, camera hoặc history. Import giữ player hiện tại và chỉ bootstrap chunk dưới player, phần còn lại tải theo budget.
+Chạy `build/Release/project_64_final.exe`. Trên Linux/macOS với generator một cấu hình, thêm `-DCMAKE_BUILD_TYPE=Release` khi configure rồi chạy `./build/project_64_final`. Mặc định CMake dùng SDL 3.4.8 qua FetchContent và link SDL3::SDL3. Có thể chọn `-DCOURSE_USE_INSTALLED_SDL3=ON` nếu đã cài đúng phiên bản.
 
-Oracle picking quét AABB các block đặc và chunk Unknown, không dùng DDA step/tMax/tDelta; nó vẫn chia sẻ helper slab nên các fixture axis/tie/grazing phải kiểm riêng. Oracle surface từ global cell/sáu neighbor độc lập mesher. Kiểm thêm base+delta, snapshot round-trip/malformed, delta cap, offline undo, remesh counter và regeneration. Node và CTest có cùng fixture; test lỗi không được tắt bằng NDEBUG.
+## Thử ngay trong cửa sổ C++
 
-Audit có dòng kết quả riêng, không dùng chung với thông báo thao tác. Khi dữ liệu world đổi vì load/unload/edit/undo/redo/import, kết quả cũ chuyển sang cần kiểm lại; tick idle không làm mất kết quả hợp lệ. Canvas cũng vô hiệu hóa khi đổi mục tiêu streaming. Bài 03 có bảng DDA qua x=0 và biến thể Unknown; bài 08 chú giải từng dòng VXL1 trước khi viết parser. Gesture Canvas chỉ nhận up/cancel/lost capture của pointer đang sở hữu nó, không để pointer khác cướp hoặc kết thúc thao tác.
+WASD di chuyển, mũi tên hoặc nhấp chuột rồi di chuột để nhìn; Escape thả chuột. R về vị trí đầu, P dừng giờ, F1 mở số liệu. Phím 1 về cảnh quan; 2/3/4 lần lượt là một viên đá, khối đặc và cảnh rỗng.
 
-Chưa FPS/collision, survival/crafting, inventory theo số lượng, texture atlas, lighting, multiplayer, lưu vô hạn, streaming Y hoặc thread/network. Project 65 mở phần tự viết UI cho simulator. Các project chưa phát hành được ghi Sắp ra mắt trong roadmap.
+1. **Đứng giữa tuyết rơi, không đứng trước một tấm rèm** — Tới mốc F8, nhìn ngang thân thông, tắt rồi bật phát tuyết bằng T. Các hạt cũ vẫn hoàn thành quãng rơi, không biến mất cả màn hình trong một frame.
+2. **Một Mặt Trời cho cả trời, đá và sóng** — Dùng dấu trừ và dấu bằng để lùi/tới hai giờ. Quay nhìn cùng vách ở sáng, trưa, chiều, rồi tắt mây với C để loại ảnh hưởng che khuất bầu trời.
+3. **Đặt chân lên đất thay vì cho camera bay xuyên đồi** — Đi WASD, Space để nhảy và F để đổi chế độ đi bộ/khảo sát. Dùng bậc thấp, vách cao, chỗ có tán trên đầu và biên hai chunk làm bốn chướng ngại khác nhau.
+4. **Một bếp lửa nhỏ làm mốc giữa chiều xuống** — Đến F9, xoay về vòng đá, đổi sang ánh chiều rồi bước vòng quanh. Bếp nhỏ so với rừng; từ xa không cần tính từng đốm không còn nhìn thấy.
+5. **Tự đi mười phút để kiểm một thế giới sống** — Đi 10–20 phút từ biển men sông, qua hẻm, lên thông tuyết rồi về bếp. Thử dừng giờ khi camera còn quay, thay đổi hướng gió, tắt mây, nhảy qua bậc và quay về vị trí cũ. Không cần đào hay đặt một block nào.
+
+## Mã nguồn và phép kiểm
+
+`starter/` là điểm xuất phát; mỗi thư mục `checkpoints/NN/` và `final/` mang đủ source riêng. Xem `tests/tests.cpp` cho những ca không cần cửa sổ. Từ chương trình thật có thể chụp một khung hình bằng `--capture scene.png` và chọn mốc bằng `--landmark 0` tới `4`.
+
+Để lặp lại chuyến đi trên cùng seed, chạy `.\build\Release\project_64_final.exe --survey 600`. Nhân vật đi bằng đúng hàm di chuyển của người chơi, qua cả hẻm, rừng tuyết và bếp lửa; cửa sổ ẩn và chương trình tự dừng sau mười phút. Dòng `WALK` ghi quãng đường, số chunk, tuyết và thời gian từng phần. Muốn dò một bậc bị kẹt mà không đợi, dùng `--route-check`; phép thử rút gọn này không đo chi phí vẽ của chuyến đi thật.
+
+- Đi một phiên 10–20 phút, qua biên âm, về lại mốc cũ; ghi số hạt/chunk và chi phí từng khâu.
+- C++20/SDL3 độc lập; chỉ khám phá, không đào hoặc đặt block. Không mô phỏng khí quyển hay cháy lan.
+- Báo riêng ảnh C++, CTest, số đo của phiên chạy dài và thao tác chưa kiểm. Qua được test toán không tự chứng minh chuyến đi hay hoặc đồ họa đủ dễ đọc.

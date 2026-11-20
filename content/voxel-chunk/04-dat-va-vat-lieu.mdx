@@ -1,110 +1,97 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { VoxelWorkFile } from "@/components/voxel-work-file";
 
-# Tạo đất bậc thang và tô vật liệu
+# Khoét lòng suối bằng độ cao từng cột
 
 ## Vấn đề cần giải quyết
 
-Khối đặc xác nhận số lượng và kích thước, nhưng chưa giống một mảnh đất. Ta sẽ tạo bốn bậc cao dần, đặt Grass ở trên cùng, Dirt ngay bên dưới và Stone sâu hơn. Hình phải bắt nguồn từ Block ID, không phải vẽ thêm một mảng màu xanh lên màn hình cho giống cỏ.
-
-Bài này cũng thêm bốn preset. Preset toàn Air rất quan trọng: khi không còn geometry, ứng dụng vẫn phải xóa ảnh cũ và chạy bình thường.
+Thay khối đá đặc bằng một đoạn bờ có thể nhận ra: cát ở sát nước, cỏ trên bờ, đất nằm dưới cỏ và đá ở sâu. Không cần chờ đến bài noise để có một nơi đáng bước vào.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Mỗi cột `(x,z)` có chiều cao nguyên:
-
-$$h(x,z)=4+\left\lfloor\frac{x}{4}\right\rfloor.$$
-
-Với x từ 0 đến 15, bốn nhóm cột cao 4, 5, 6, 7. Ta lấp các ô từ y=0 đến `height-1`. Ô y=height là Air. Chiều cao chưa phụ thuộc z nên các bậc kéo dài suốt chiều z.
-
-Tổng số block có thể tính tay, độc lập với vòng lặp:
-
-$$N=16\times4\times(4+5+6+7)=1408,\qquad T=12N=16896.$$
-
-Đây là địa hình bậc thang **cố định**, không phải noise, không có seed và không giải quyết seam giữa chunks. Những vấn đề đó thuộc Project 63. Đặt một hàm nhỏ dễ đoán giúp ta kiểm layout và vật liệu trước.
+Hãy vẽ vài dòng trên giấy: mỗi hàng z có một vị trí giữa lòng suối. Khi x đi xa vị trí đó, nền đất tăng dần theo bậc. Dành một khoảng phẳng cho lòng suối để nước nối thành dòng chứ không thành các vũng cách nhau.
 
 <InteractiveLab demo="voxel-chunk" mode="voxel58-4" />
 
-Thử đổi qua “Khối đặc”, “Đất bậc thang”, “Một block”, “Toàn Air”. Camera bài này vẫn cố định để thay đổi bạn thấy chỉ đến từ dữ liệu.
-
 ## Viết code từng bước
 
-### Bước 1 — Lấp các cột đúng chiều cao
+Khối đặc là một phép đo tốt nhưng chẳng có gì để khám phá. Ta sẽ thay dữ liệu dưới chân bằng hai bờ có độ cao khác nhau, vẫn dùng nguyên bộ dựng mesh và camera.
 
-```cpp title="include/model.hpp"
-const int height = 4 + x / 4;
-if (y < height) {
+### Khoét một dòng suối có bờ
+
+Trong `bank.hpp`, tính vị trí giữa dòng ở mỗi hàng z, rồi lấy khoảng cách của x đến đó. Càng xa dòng thì bờ càng cao. Trong `makeBank`, lấp đá từ dưới lên, phủ hai lớp đất, chọn cỏ hoặc cát ở trên cùng; chỉ thêm nước từ trên nền thấp tới cao độ 3. Nếu lấp nước trước rồi ghi đất đè lên, khó biết sai ở phép tính hay thứ tự.
+
+{/* snippet include/trail/bank.hpp#bank-height */}
+
+```cpp title="include/trail/bank.hpp — Nắn lòng suối trong một section"
+inline int bankHeight(int x, int z) {
+    const double creek = 6.3 + 2.3 * std::sin(z * 0.29);
+    const double bank = std::max(0.0, std::abs(x - creek) - 1.35);
+    return std::clamp(2 + static_cast<int>(std::floor(bank * 0.82)), 2, 9);
+}
+```
+
+{/* snippet include/trail/bank.hpp#bank-material */}
+
+```cpp title="include/trail/bank.hpp — Từ mặt cắt đất đến bờ nước"
+for (int y = 0; y <= height; ++y) {
     Block block = Block::Stone;
-    if (y >= height - 3) {
-        block = Block::Dirt;
-    }
-    if (y == height - 1) {
+    if (y >= height - 2)
+        block = Block::Soil;
+    if (y == height)
         block = Block::Grass;
-    }
-    set(chunk, x, y, z, block);
+    if (height <= 4 && y == height)
+        block = Block::Sand;
+    column.put(x, y, z, block);
+}
+for (int y = height + 1; y <= 3; ++y) {
+    column.put(x, y, z, Block::Water);
 }
 ```
 
-Đặt đoạn này trong ba vòng y/z/x của preset 2. `x/4` là phép chia nguyên vì cả hai toán hạng là int. Không làm tròn số float rồi mới dùng làm số lớp.
+<VoxelWorkFile project="58" step={4} file="bank" />
 
-Thứ tự gán vật liệu có chủ đích: ban đầu Stone, ba lớp trên cùng tạm thành Dirt, rồi **lớp trên cùng ghi đè thành Grass**. Như vậy bên dưới Grass còn hai lớp Dirt, không phải ba. Ví dụ cột cao 4 có y=0 Stone, y=1–2 Dirt, y=3 Grass; y=4 Air.
+### Trồng hai cây làm mốc
 
-### Bước 2 — Đổi ID thành màu khi dựng mặt
+Trong cùng tệp, `plantTree` nhận gốc ở tọa độ world. Đổi về local trước khi ghi, dựng thân gỗ rồi thêm lá vào những ô còn trống trong giới hạn cột. Gọi nó sau khi lấp xong địa hình; đặt cây trước thì vòng lặp đất có thể vùi mất gốc.
 
-```cpp title="include/mesh.hpp"
-if (material == 1) {
-    color = {100, 190, 90, 255};
-}
-if (material == 2) {
-    color = {170, 115, 75, 255};
-}
-if (material == 3) {
-    color = {150, 160, 180, 255};
-}
-```
+### Bước tới đúng bờ vừa tạo
 
-Đây là phần chọn màu gốc trong `faceColor`. Sau đó nhân với hệ số của hướng mặt. Grass là cả block xanh, không chỉ một tấm cỏ trên mặt +Y; ta chưa dùng texture atlas hoặc vật liệu khác nhau cho từng mặt.
+Trong `scene.hpp`, cho preset bờ suối gọi `makeBank()` và chọn vị trí mắt nhìn dọc dòng. Trong `window.hpp`, ghép bốn phím số với bốn preset rồi gọi lại `generate()` khi đổi. Bộ lấy mẫu họa tiết đã nằm trong starter; vật liệu của mặt vừa sinh quyết định miếng cỏ, cát hay gỗ nào hiện ra.
 
-Giữ màu trong mesh, không đổi `Block` thành một struct chứa sáu màu. Dữ liệu vật liệu vẫn chỉ một ID và có thể được renderer khác đọc sau này.
+<VoxelWorkFile project="58" step={4} file="scene" />
 
-### Bước 3 — Tạo chunk mới khi đổi preset
+{/* snippet include/trail/window.hpp#bank-keys */}
 
-```cpp title="src/main.cpp"
-if (key == SDLK_P) {
-    preset = (preset + 1) % 4;
-    chunk = voxel::makeChunk(preset);
-    paused = true;
-    dragging = false;
-    SDL_CaptureMouse(false);
-    dirty = true;
+```cpp title="include/trail/window.hpp — Tạo lại cảnh theo phím vừa chọn"
+if (key >= SDLK_1 && key <= SDLK_4) {
+    const int choices[]{2, 0, 1, 3};
+    scene.preset = choices[key - SDLK_1];
+    scene.generate();
 }
 ```
 
-P đi lần lượt qua single/full/steps/empty. `makeChunk` khởi tạo mảng Air mới trước khi lấp preset; không đắp chồng lên dữ liệu preset cũ. `dirty=true` khiến lượt vẽ tới clear framebuffer, dựng mesh mới rồi upload lại. Empty không có triangles nhưng vẫn clear màu/depth, vì thế không để lại “bóng ma” của khối đất trước.
-
-R đưa về đất bậc thang, camera mặc định, slice=15 và depth bật. Ở checkpoint này chưa điều khiển camera; bài sau sẽ nối các phím đó vào cùng event loop.
+<VoxelWorkFile project="58" step={4} file="window" />
 
 ## Ghép các phần lại
 
-```bash title="Terminal — checkpoint 4"
-cmake --build build --config Debug --target project_58_checkpoint_4 --parallel 2
-.\build\Debug\project_58_checkpoint_4.exe
+Nhấn 1 để về bờ suối, 3 để so với khối đặc và 4 để nhìn cảnh trống. Ở preset 1, mặt nước chỉ nằm dưới bờ và phần thân cây chạm mặt đất. Nước đứng yên ở mốc này là đúng.
+
+```bash title="Terminal — chạy bản bạn vừa viết"
+cmake --build build-work --config Release --target project_58_work --parallel 1
+.\build-work\Release\project_58_work.exe
 ```
-
-Mở mặc định đất bậc thang: 1408 block, 16896 triangles. Bảng y=15 toàn Air là **đúng**, vì cột cao nhất chỉ đến y=6. Đừng vì bảng trống mà tăng chiều cao lên 16; ở Bài 06 bạn sẽ kéo lớp xuống để đọc phần đất.
-
-Preset “Một block” ở góc nhìn cả chunk trông nhỏ hơn cube Bài 01. Đó là khác biệt scale của camera, không phải kích thước block bị thay đổi theo preset.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi `y < height` thành `y <= height`. Mỗi cột thừa một block, tổng tăng 256; bậc thấp nhất cao 5 thay vì 4. Kiểm bằng số đếm trước khi nhìn màu.
-2. Chuyển nhánh Grass lên trước nhánh Dirt. Lớp trên cùng bị Dirt ghi đè, đất mất màu xanh. Đây là lỗi thứ tự gán dữ liệu, không phải shading.
+Đổi tạm độ rộng đáy suối về 0 rồi tăng cao độ đáy thêm một block. Nhìn từ chỗ đứng ban đầu: nếu dòng liền trở thành những vũng rời nhau thì nguyên nhân nằm ở nhánh sinh đất, không phải ở màu nước. Khôi phục đáy cũ trước khi chỉnh họa tiết.
 
 ## Tự kiểm tra kết quả
 
-Preset single/full/steps/empty lần lượt có 1/4096/1408/0 block và 12/49152/16896/0 triangles. Kiểm cột x=0 và x=15 cho đúng chiều cao 4 và 7. Đổi preset nhiều lần không tăng bộ đếm ngoài các giá trị này. Empty không giữ ảnh cũ; R khôi phục được đất.
+Mặt đất cao để lộ cỏ bên trên và đất ở sườn bậc; bãi thấp phủ cát, có nước nằm giữa hai bờ. Nước ở đây còn tĩnh. Sang bài 5 bạn mới tự bước sát các bề mặt này.
 
 ## Bài tập mở rộng
 
-Thêm một bảng chú giải ba màu bằng `SDL_RenderFillRect` và `SDL_RenderDebugText`. Bảng chỉ đọc màu vật liệu, không tác động vào chunk. Không thêm culling, texture hoặc noise để giải quyết một bài tập vốn chỉ cần nhãn rõ ràng.
+Tự thiết kế vân gỗ trong `work/include/trail/materials.hpp`. Tìm nhánh `Block::Wood` của `paintTexel`: hai đầu khúc gỗ dùng khoảng cách `ring` tới tâm, còn mặt bên dùng vân dọc. Đổi chu kỳ `ring % 3` thành `ring % 5`, build lại, so mặt cắt với vỏ cây. Chỉ mặt cắt được đổi. Bạn có thể giữ hoa văn riêng; để đối chiếu đúng ảnh mẫu thì trả chu kỳ về 3.
 
-[Bài tiếp theo](/projects/voxel-chunk/05-camera-va-do-sau) — Xoay khối đất và kiểm tra độ sâu.
+[Bài 5: Tự bước tới một thân cây](/projects/voxel-chunk/05-camera-va-do-sau).

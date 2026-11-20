@@ -1,0 +1,10 @@
+// Nhấn Pause để quan sát giới hạn độ sâu; F9 luôn trở về bộ điều khiển C++.
+function echo(value) {
+    return echo(value);
+}
+
+function onPause() { echo(1); }
+function onReset() { reset(); }
+function onObserve() { links(!showLinks()); }
+function onRadius(value) { radius(value); }
+function onSeparation(value) { separate(value); }

@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 import { loadProjectCatalog, workspace } from "./project-catalog.mjs";
+import { courseSourceTemplates } from "./course-source-templates.mjs";
 import { interactiveLabUsages } from "./mdx-contracts.mjs";
 import { validateLessonAliases } from "./lesson-aliases.mjs";
 import { assertSelfContainedModule } from "./typescript-module-contract.mjs";
@@ -144,7 +145,7 @@ function validateLearning(project, learning, lessons) {
   const sourceDirectory = path.join(workspace, "examples", project.sourceDirectory);
   const availableFiles = new Set([
     "CMakeLists.txt",
-    ...walkRelativeFiles(path.join(sourceDirectory, "source-template")),
+    ...[...courseSourceTemplates(workspace, project).keys()].map((name) => name.split(path.sep).join("/")),
     ...walkRelativeFiles(path.join(sourceDirectory, "tests")).map((file) => `tests/${file}`),
     ...(existsSync(path.join(sourceDirectory, "assets"))
       ? walkRelativeFiles(path.join(sourceDirectory, "assets")).map((file) => `assets/${file}`)
@@ -193,10 +194,35 @@ function validateLab(project, lab) {
       throw new Error(`Project ${project.id} lab.ts contains unused mode ${mode}`);
     }
   }
+  if (lab.native) {
+    const { directory, takes, overview, lessons } = lab.native;
+    if (!/^\/field-notes\/[a-z0-9-]+$/.test(directory))
+      throw new Error(`Invalid media directory: ${project.id}`);
+    const used = new Set();
+    for (const [mode, keys] of [["overview", overview], ...Object.entries(lessons)]) {
+      if ((mode !== "overview" && !usedModes.has(mode)) || !Array.isArray(keys) ||
+          !keys.length || new Set(keys).size !== keys.length || keys.some((key) => !Object.hasOwn(takes, key)))
+        throw new Error(`Invalid native take selection: ${project.id}/${mode}`);
+      for (const key of keys) used.add(key);
+    }
+    for (const [key, take] of Object.entries(takes)) {
+      if (!used.has(key)) throw new Error(`Unused native take: ${key}`);
+      for (const field of ["title", "source", "alt", "caption"])
+        assertString(take[field], `${project.id}/${key}.${field}`);
+      for (const [file, pattern] of [[take.poster, /^[\w-]+\.(png|webp|jpg)$/], ...(take.video ? [[take.video, /^[\w-]+\.(webm|mp4)$/]] : [])]) {
+        if (!pattern.test(file) || !existsSync(path.join(workspace, "public", directory.slice(1), file)))
+          throw new Error(`Missing/invalid native media: ${project.id}/${file}`);
+      }
+    }
+  }
   const componentPath = path.join(workspace, "components", "labs", `${project.demoId}-lab.tsx`);
-  if (!existsSync(componentPath)) {
+  if (needsCanvas(lab) && !existsSync(componentPath)) {
     throw new Error(`Project ${project.id} is missing components/labs/${project.demoId}-lab.tsx`);
   }
+}
+
+function needsCanvas(lab) {
+  return !lab.native || Object.keys(lab.modes).some((mode) => !lab.native.lessons[mode]);
 }
 
 const roadmapModule = await evaluateTypeScript(path.join("course", "roadmap.ts"));
@@ -266,7 +292,7 @@ for (const project of projects) {
   validateLab(project, lab);
   const roadmapItem = roadmapById.get(project.id);
   if (!roadmapItem) throw new Error(`Project ${project.id} does not exist in course/roadmap.ts`);
-  authoredProjects.push({ project, editorial, roadmapItem });
+  authoredProjects.push({ project, editorial, roadmapItem, usesCanvas: needsCanvas(lab) });
 }
 
 const catalogSource =
@@ -313,8 +339,8 @@ const loadersSource =
   `export const projectLearningLoaders: Record<string, () => Promise<LearningModule>> = {\n${learningEntries.join("\n")}\n};\n\n` +
   `export const labMetadataLoaders: Record<string, () => Promise<LabMetadataModule>> = {\n${labMetadataEntries.join("\n")}\n};\n`;
 
-const labComponentEntries = projects.map(
-  (project) =>
+const labComponentEntries = authoredProjects.filter((entry) => entry.usesCanvas).map(
+  ({ project }) =>
     `    "${project.demoId}": lazy(() => import("@/components/labs/${project.demoId}-lab")),`,
 );
 const labLoadersSource =

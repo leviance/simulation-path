@@ -1,0 +1,128 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Chọn màu và làm rõ cấu trúc trong sương
+
+## Vấn đề cần giải quyết
+
+Alpha đã tích lũy đúng nhưng ảnh trắng có thể khiến các vùng mật độ gần nhau khó phân biệt. Ta muốn tìm lõi đặc, khoảng rỗng và các dải sương mà không phải đoán từ một mảng sáng mờ. Bài này thêm cách trình bày dữ liệu; không thay công thức ray–box hay viết một fluid solver.
+
+Có ba thay đổi riêng: cutoff phân loại density, palette gán màu, và gradient lighting tùy chọn cho alpha. Tách chúng giúp trả lời đúng câu hỏi “tham số này đổi dữ liệu, đổi T hay chỉ đổi màu?”.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mảng scalar gốc không bị sửa. Mỗi sample được đổi thành `rho' = clamp((rho-cutoff)/(1-cutoff),0,1)` trước khi đưa vào reducer. MIP, average và alpha đều dùng cùng rho'. Vì vậy cutoff chủ động thay đại lượng đang được gộp; nó không chỉ là độ sáng màn hình.
+
+Phân loại trước average khác với phân loại sau average. Hai mẫu 0,1 và 0,9 với cutoff 0,5 thành 0 và 0,8, trung bình 0,4; còn trung bình raw 0,5 rồi phân loại sẽ thành 0. Đừng chuyển vị trí dòng code chỉ vì nhìn như một phép tối ưu vô hại.
+
+Palette chỉ gán RGB cho rho'. Đổi palette không đổi T. Gradient lighting cũng chỉ nhân màu trong mode alpha; nó không sửa extinction hay biến thành mô hình shadow/multiple scattering.
+
+<InteractiveLab demo="volume-ray-marching" mode="fog54-7" />
+
+## Viết code từng bước
+
+### 1. Chọn màu bằng nội suy giữa các mốc
+
+Đoạn này là thân `transferColor` CPU. Palette có năm màu mốc trong [0,1]; nội suy giữ màu bounded, điều sẽ quan trọng khi chặn sai số early termination.
+
+{/* snippet include/reference.hpp#transfer-color */}
+
+```cpp title="include/reference.hpp — Palette không sửa mật độ"
+constexpr std::array<Vec3, 5> warm{{{0.38, 0.49, 0.58}, {0.65, 0.72, 0.77}, {0.82, 0.86, 0.89}, {0.95, 0.96, 0.96}, {1, 0.98, 0.94}}};
+constexpr std::array<Vec3, 5> cool{{{0.07, 0.16, 0.24}, {0.08, 0.49, 0.57}, {0.35, 0.78, 0.74}, {1, 0.55, 0.22}, {1, 0.92, 0.72}}};
+if (palette == 2)
+    return {1, 1, 1};
+const double position = std::clamp(density, 0.0, 1.0) * 4;
+const int first = std::min(3, static_cast<int>(position));
+const double fraction = position - first;
+const auto* colors = &warm;
+if (palette == 1)
+    colors = &cool;
+return (*colors)[first] * (1 - fraction) + (*colors)[first + 1] * fraction;
+```
+
+Shader có cùng bảng màu. MIP/average gộp rho' trước rồi mới chọn màu từ scalar kết quả; alpha chọn màu của từng sample trước khi cộng front-to-back. Hai đường ấy không thể hoán đổi tùy ý.
+
+### 2. Thêm gradient lighting như một lựa chọn có thể tắt
+
+Vùng density thay đổi nhanh cho ta một gradient. Lấy central difference ở khoảng h=spacing, đổi dấu để có hướng normal xấp xỉ rồi dùng một diffuse term đơn giản. Khi gradient quá nhỏ, giữ nguyên màu thay vì normalize một vector gần zero.
+
+{/* snippet include/reference.hpp#gradient-light */}
+
+```cpp title="include/reference.hpp — Reference của ánh sáng cục bộ"
+inline Vec3 litColor(const Volume& volume, Vec3 point, double density, Settings settings) {
+    Vec3 color = transferColor(density, settings.palette);
+    if (!settings.lighting)
+        return color;
+    const double h = volume.spacing();
+    Vec3 gradient;
+    for (int axis = 0; axis < 3; ++axis) {
+        Vec3 offset;
+        offset[axis] = h;
+        gradient[axis] = (sampleDensity(volume, point + offset) - sampleDensity(volume, point - offset)) / (2 * h);
+    }
+    if (dot(gradient, gradient) < 1e-6)
+        return color;
+    const Vec3 normal = unit(gradient * -1);
+    const Vec3 light = unit({-0.6, 0.8, 0.5});
+    const double diffuse = std::max(0.0, dot(normal, light));
+    return color * (0.55 + 0.45 * diffuse);
+}
+```
+
+Phần này được cung cấp và giải thích như scaffold trình bày. Cốt lõi tự viết của project vẫn là volume shader/compositing. Nếu đang kiểm C/T cho medium hằng, chọn White và tắt lighting trước; không trộn hai câu hỏi vào một đáp số.
+
+### 3. Đọc cùng gradient từ texture
+
+GLSL lấy sáu mẫu lân cận với khoảng world `uSpacing=2/N`. Không lấy một pixel màn hình làm bước gradient: zoom camera không được làm normal của dữ liệu đổi.
+
+{/* snippet shaders/volume.frag#shader-light */}
+
+```glsl title="shaders/volume.frag — Sáu sample phụ cho gradient lighting"
+vec3 lightColor(vec3 point, float density) {
+    vec3 color = transferColor(density);
+    if (uLighting == 0) return color;
+    vec3 gradient;
+    for (int axis = 0; axis < 3; ++axis) {
+        vec3 offset = vec3(0.0);
+        offset[axis] = uSpacing;
+        gradient[axis] = (densityAt(point+offset)-densityAt(point-offset))/(2.0*uSpacing);
+    }
+    if (dot(gradient,gradient) < 1e-6) return color;
+    vec3 normal = normalize(-gradient);
+    float diffuse = max(0.0,dot(normal,normalize(vec3(-0.6,0.8,0.5))));
+    return color * (0.55+0.45*diffuse);
+}
+```
+
+Trong nhánh alpha đã có, emission dùng màu này trước khi nhân `T*alpha`. Cả lighting on/off vẫn dùng cùng density để cập nhật T. Vì cần thêm sáu texture reads cho mỗi sample, đây không phải hiệu ứng “miễn phí”; bảng đo ở Bài 9 cần giữ lựa chọn lighting cố định.
+
+## Ghép các phần lại
+
+```powershell
+cmake --build build --config Release --target project_54_checkpoint_7 --parallel 1
+.\build\Release\project_54_checkpoint_7.exe
+```
+
+Phím C đổi palette, L bật/tắt gradient lighting, [/] đổi cutoff. Chọn Alpha rồi chỉ thay palette: đối chiếu T bằng reference phải giữ nguyên. Tiếp đó tăng cutoff: T có thể đổi vì ta đã thay rho'. GUI không được âm thầm sửa mảng volume hoặc upload lại N³ cho hai thao tác ấy.
+
+Present cộng nền trong linear rồi mới gamma một lần. Không gamma density, segment alpha hay từng contribution trước khi cộng; làm vậy đổi phép tích lũy chứ không chỉ đổi cách hiển thị.
+
+## Thử làm sai để hiểu đúng
+
+1. Tạm đặt cutoff sau average. Dùng Ramp và so với công thức hai mẫu ở trên để giải thích khác biệt.
+2. Dùng offset gradient cố định 0,1 khi đổi 64³/128³. So cấu trúc nhòe đi; khôi phục h theo spacing và nêu rõ đây vẫn là xấp xỉ trên dữ liệu sampled.
+3. Đổi palette mà nhân luôn sigma theo màu. Tại sao ảnh thay T dù chỉ bấm nút chọn màu? Tách lại extinction và màu phát xạ.
+
+## Tự kiểm tra kết quả
+
+- [ ] Cả ba mode phân loại raw scalar ở cùng vị trí trước reducer.
+- [ ] Palette/lighting không đổi mảng density hoặc T của cùng ray.
+- [ ] Gradient nhỏ không tạo NaN; CPU và GPU dùng cùng h và hướng ánh sáng.
+- [ ] Lighting chỉ có nghĩa trong alpha và UI cho phép tắt.
+- [ ] Không gọi local gradient lighting là scattering hoặc ánh sáng vật lý hoàn chỉnh.
+
+## Bài tập mở rộng
+
+Tạo một palette giúp tìm vùng rho' trên 0,6 nhưng vẫn giữ màu trong [0,1]. Quan sát cả MIP và average, rồi viết lại câu hỏi mà mỗi mode đang trả lời. Đừng chọn một màu đẹp rồi mặc định nó có ý nghĩa vật liệu thật.
+
+[Bài 8](./08-chon-ray-va-doc-tung-mau) cho phép chọn chính một pixel khó hiểu và đọc dãy sample của nó.

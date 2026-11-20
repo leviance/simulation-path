@@ -56,6 +56,11 @@ export function loadProjectCatalog({ checkDirectories = true } = {}) {
       );
     }
     previousNumericId = numericId;
+    if (project.sourceSeries !== undefined) {
+      const inVoxel = project.sourceSeries === "voxel-expedition" && numericId >= 58 && numericId <= 64;
+      const inFlock = project.sourceSeries === "flock-workbench" && numericId >= 65 && numericId <= 72;
+      if (!inVoxel && !inFlock) fail(`project ${project.id} has an unknown source series`);
+    }
     if (
       project.shaderRuntimePerTarget !== undefined &&
       typeof project.shaderRuntimePerTarget !== "boolean"
