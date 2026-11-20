@@ -1,0 +1,71 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
+
+# Nếu chỉ còn số đo, ta vẽ lại khoanh gỗ bằng cách nào?
+
+## Vấn đề cần giải quyết
+
+Nhấn H để che vật mẫu. Bạn thấy một vệt sáng trong sinogram, nhưng vệt đó là mắt gỗ bên trái hay bên phải? Một tia riêng lẻ chỉ cho biết **tổng** vật liệu nó đã đi qua. Không có cách nào biết một cục gỗ đặc nằm ở đầu hay cuối tia nếu máy chỉ đo từ một góc.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hãy thử tưởng tượng tô lại bài toán bằng bút chì. Với một hàng đo, quệt màu của mỗi ô detector ngược dọc theo tia tương ứng. Sau một góc, phần lớn tờ giấy là những vệt dài. Xoay nguồn, đo một hàng mới rồi quệt thêm một lượt. Chỗ nhiều vệt sáng gặp nhau dần hiện ra.
+
+Trong chương trình, ta làm ngược thao tác tay cho tiện: với từng điểm $P$ của bức ảnh, hỏi “nếu có một tia đi từ nguồn qua điểm này, nó sẽ rơi vào đâu trên detector?”. Bài 7 đã trả lời câu đó. Vẫn phải dùng hình học chùm tia hình quạt cũ: khoảng cách từ nguồn tới $P$ ảnh hưởng vị trí trên detector.
+
+<InteractiveLab demo="ct-sinogram" mode="ct56-10" />
+
+## Viết code từng bước
+
+### Bước 1 — Dành một ô nhớ cho mỗi điểm trên mặt cắt
+
+Tiếp tục từ bài kiểm máy quét, đừng mở thư mục final. Trong `work/include/backprojection.hpp`, cấp một mảng $112\times112$ bằng 0 và một bộ đếm số hàng đã dùng. Hàm `slicePoint` đặt tọa độ tại **tâm** texel. Cạnh trên của ảnh là phía $+y$ của khoanh gỗ; lật trục ở đây thêm lần nữa sẽ làm mắt gỗ hiện sai phía.
+
+### Bước 2 — Trải một hàng số đo lên mặt cắt
+
+Tại góc 0°, một điểm ngay giữa rơi vào khe giữa ô 63 và 64 của detector 128 ô. Nếu hàng đo có ô 64 bằng 1 và những ô còn lại bằng 0, kết quả ở khe phải là 0,5. Đây là lý do `readDetector` nội suy hai số đo cạnh nhau trước khi cộng.
+
+{/* snippet include/backprojection.hpp#backproject-row */}
+
+```cpp title="include/backprojection.hpp — Từ một góc tới toàn bộ ảnh"
+inline void backproject(Reconstruction& image, double angle, std::span<const double, detectorCount> detector) {
+    const Point radial{std::cos(angle), std::sin(angle)};
+    const Point tangent{-radial[1], radial[0]};
+    for (int y = 0; y < sliceSide; ++y) {
+        for (int x = 0; x < sliceSide; ++x) {
+            const Point p = slicePoint(x, y);
+            const double depth = sourceRadius - dot(p, radial);
+            const double offset = (sourceRadius + detectorRadius) * dot(p, tangent) / depth;
+            image.sum[x + sliceSide * y] += readDetector(detector, offset);
+        }
+    }
+    ++image.rows;
+}
+```
+
+Hàm trên không nhận `Scene` hay texture gỗ; nguồn thông tin duy nhất là hàng `detector` có $p=-\ln(I/I_0)$. Đừng cộng màu của sinogram: kéo thang tương phản chỉ nên đổi màn hình, không thay vật đang dựng.
+
+### Bước 3 — Nối với lượt quét
+
+Trong `work/src/main.cpp`, chỉ xử lý các hàng từ `image.rows` tới `scan.acquired`. Nếu đã đo 23 góc mà người dùng chỉ kéo chuột đọc ô 15, số góc dùng dựng ảnh **vẫn là 23**. Khi đổi vật mẫu, xóa cả số đo lẫn ảnh tích lũy. Chia tổng cho số hàng thực sự đã nhận trước khi tô ô ảnh bên phải.
+
+<CourseWorkFile project="56" step={10} path="include/backprojection.hpp" />
+<CourseWorkFile project="56" step={10} path="include/controls.hpp" />
+<CourseWorkFile project="56" step={10} path="include/timber-station.hpp" />
+<CourseWorkFile project="56" step={10} path="src/main.cpp" />
+
+## Ghép các phần lại
+
+Build `project_56_work` và chạy. Nhấn R để xóa lượt cũ, H để giấu vật mẫu rồi N để đo đúng một góc. Trước khi quét tiếp, thử chỉ bằng tay hướng của những dải sáng. Nhấn Space; khi có đủ 180 góc, thử tìm mắt gỗ rồi mới nhấn H để đối chiếu.
+
+## Thử làm sai để hiểu đúng
+
+Đổi dấu `tangent` chỉ ở bộ tái dựng. Sinogram vẫn y nguyên và mắt gỗ vẫn sáng, nhưng nằm sai chỗ. Hoàn nguyên rồi thử bỏ phép chia cho số hàng: cùng một vật sẽ sáng dần đến bão hòa dù các đo đạc vẫn đúng.
+
+## Tự kiểm tra kết quả
+
+Không có hàng thì không có ảnh. Một hàng cho các dải; thêm góc mới làm vị trí mắt gỗ rõ hơn. Đặt strength về 0, đo lại, ảnh phải tối. Mép vòng gỗ vẫn mờ khi quét đủ góc: trải ngược không lọc **không phải** phép nghịch đảo chính xác.
+
+## Bài tập mở rộng
+
+Đo 30 góc và 180 góc trên cùng vật. Hãy ghi riêng một chi tiết bớt vệt sọc và một chi tiết vẫn mờ. Bài sau sẽ cho bạn cách so sánh hai ảnh mà không lẫn độ sáng hiển thị với sai số phép đo.

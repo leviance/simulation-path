@@ -18,7 +18,7 @@ export interface Camera {
   pitch: number;
   distance: number;
 }
-export const defaultCamera: Camera = { yaw: 0.88, pitch: 0.55, distance: 320 };
+export const defaultCamera: Camera = { yaw: 0.58, pitch: 0.36, distance: 300 };
 export function limitCamera(camera: Camera): Camera {
   if (![camera.yaw, camera.pitch, camera.distance].every(Number.isFinite))
     throw new RangeError("Finite camera required");
@@ -46,7 +46,7 @@ export function cameraFrame(input: Camera, width: number, height: number) {
     up: cross(right, forward),
     width,
     height,
-    focal: height / (2 * Math.tan(0.48)),
+    focal: height / (2 * Math.tan(0.35)),
   };
 }
 export type CameraFrame = ReturnType<typeof cameraFrame>;

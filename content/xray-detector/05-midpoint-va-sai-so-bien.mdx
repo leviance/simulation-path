@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # So lấy mẫu theo bước với kết quả giải tích
 
@@ -24,6 +25,11 @@ Với mỗi chord có hai biên, một bound bảo thủ là |tauNum−tauExact|
 
 ## Viết code từng bước
 
+Một tia đi sượt một thanh gân loa dễ bị bỏ sót nếu đi từng bước quá dài. Hãy giữ lại chiều dài chính xác của hộp làm mốc, rồi thử tích lũy bằng cách lấy mẫu giữa từng đoạn.
+
+<CourseWorkFile project="55" step={5} path="include/projection.hpp" />
+<CourseWorkFile project="55" step={5} path="include/materials.hpp" />
+
 ### Bước 1 — Hỏi một điểm thuộc những medium nào
 
 contains kiểm cả ba trục:
@@ -44,6 +50,8 @@ Midpoint trong vùng overlap cộng mu của mọi box chứa điểm đó. Khô
 ### Bước 2 — Tích phân có ds và giới hạn
 
 midpointDepth trong projection.hpp:
+
+{/* snippet include/projection.hpp#midpoint-depth */}
 
 ```cpp title="include/projection.hpp"
 inline Depth midpointDepth(Beam beam, const Scene& scene, double strength, double stepLength) {
@@ -98,6 +106,12 @@ inline Measurement measure(Beam beam, const Scene& scene, Settings settings) {
 ```
 
 validate settings/scene/beam trước khi làm việc. Hai đường dùng cùng angle, strength và transmission. N đổi phương pháp trong C++; Q đổi step. Canvas bật Midpoint sampling rồi nhấn M/Xem một mẫu để đọc t, ds, muLow và tau đã cộng.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="55" step={5} path="src/main.cpp" />
+
+Giảm bước lấy mẫu trên một tia cố định. Sai số ở biên thường nhỏ đi nhưng không bắt buộc giảm đều theo từng lần chỉnh; đừng đặt điều kiện kiểm sai quy luật.
 
 ## Ghép các phần lại
 

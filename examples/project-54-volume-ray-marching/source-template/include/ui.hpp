@@ -147,7 +147,7 @@ inline void drawProfile(Overlay& ui, const State& state, int width, int height) 
 inline void drawUi(Overlay& ui, const State& state, const Benchmark& benchmark, const Renderer& renderer, int width, int height) {
     const int viewWidth = sceneWidth(width, state.showcase);
     ui.begin();
-    ui.text(24, 24, "CLOUD / SEE THROUGH", ink, 2.8F);
+    ui.text(24, 24, "ANVIL OBSERVATORY", ink, 2.8F);
     ui.text(26, 54, "PROJECT 54  /  FRAGMENT SHADER  /  LESSON " + std::to_string(lessonStage), teal, 1.4F);
     std::string explanation = "MAXIMUM DENSITY ALONG THE RAY";
     if (state.settings.mode == Mode::Average)

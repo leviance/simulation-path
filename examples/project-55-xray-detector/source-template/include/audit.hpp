@@ -4,6 +4,7 @@
 namespace xray {
 #if LAB_CHECKPOINT >= 8
 // A small independent analytic fixture; not a medical or driver certification.
+// [snippet slab-audit]
 inline double audit() {
     const Beam beam{{0, 0, -6}, {0, 0, 1}, 12};
     const Scene slab{{{-1, -1, -0.55}, {1, 1, 0.55}, 0.55, 0.18}};
@@ -28,5 +29,6 @@ inline double audit() {
 
     return maximumError;
 }
+// [/snippet slab-audit]
 #endif
 } // namespace xray

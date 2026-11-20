@@ -3,6 +3,7 @@
 
 namespace photon {
 #if LAB_CHECKPOINT >= 6
+// [snippet tank-counts]
 struct Counts {
     int completed = 0;
     int absorbed = 0;
@@ -11,8 +12,12 @@ struct Counts {
     int ballistic = 0;
     int scatteredPhotons = 0;
     int scatterEvents = 0;
+    std::array<int, 24> detectorBins{};
+    std::array<int, 48 * 32> absorptionMap{};
+    std::array<int, 48 * 32> scatterMap{};
     bool operator==(const Counts&) const = default;
 };
+// [/snippet tank-counts]
 
 struct Experiment {
     Settings settings;
@@ -25,11 +30,31 @@ inline Experiment makeExperiment(Settings settings) {
     return {settings, {}, {}};
 }
 
+// Tọa độ biên phải và biên trên thuộc ô cuối chứ không nằm ngoài mảng.
+inline int binAt(double coordinate, double minimum, double maximum, int bins) {
+    return std::clamp(static_cast<int>((coordinate - minimum) * bins / (maximum - minimum)), 0, bins - 1);
+}
+
 inline void tally(Counts& counts, const Trace& trace) {
     if (trace.status == Status::Alive) {
         throw std::invalid_argument("Cannot tally an unfinished preview");
     }
     ++counts.completed;
+    // [snippet tank-events]
+    for (const Vertex& vertex : trace.vertices) {
+        const int x = binAt(vertex.position[0], left, right, 48);
+        const int y = binAt(vertex.position[1], bottom, top, 32);
+        const int cell = x + 48 * y;
+        if (vertex.event == Event::Absorption) {
+            ++counts.absorptionMap[cell];
+        } else if (vertex.event == Event::Scatter) {
+            ++counts.scatterMap[cell];
+        } else if (vertex.event == Event::Escape && std::abs(vertex.position[0] - right) < 1e-9) {
+            const int strip = binAt(vertex.position[1], bottom, top, 24);
+            ++counts.detectorBins[strip];
+        }
+    }
+    // [/snippet tank-events]
     if (trace.status == Status::Absorbed) {
         ++counts.absorbed;
     }
@@ -81,9 +106,11 @@ inline std::array<double, 2> wilson(int successes, int count) {
     return {std::max(0.0, centre - halfWidth), std::min(1.0, centre + halfWidth)};
 }
 
+// [snippet no-event-probability]
 inline double expectedBallistic(Settings settings) {
     validate(settings);
     return std::exp(-(settings.muA + settings.muS) * (right - left));
 }
+// [/snippet no-event-probability]
 #endif
 } // namespace photon

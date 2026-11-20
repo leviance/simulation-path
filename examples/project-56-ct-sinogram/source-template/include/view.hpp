@@ -6,9 +6,9 @@
 #include <string>
 
 namespace ct {
-constexpr int viewWidth = 1080;
-constexpr int viewHeight = 720;
-inline const SDL_FRect sinogramRect{550, 70, 480, 520};
+constexpr int viewWidth = 1224;
+constexpr int viewHeight = 714;
+inline const SDL_FRect sinogramRect{443, 166, 338, 338};
 
 inline void require(bool success) {
     if (!success) {
@@ -17,20 +17,22 @@ inline void require(bool success) {
 }
 
 inline SDL_FPoint screen(Point point) {
-    return {static_cast<float>(260 + 45 * point[0]), static_cast<float>(310 - 45 * point[1])};
+    return {static_cast<float>(210 + 12 * point[0]), static_cast<float>(568 - 12 * point[1])};
 }
 
 #if LAB_CHECKPOINT >= 1
 // Fill horizontal spans so beginners can see the phantom before ray mathematics.
+// [snippet scanner-disk]
 inline void drawDisk(SDL_Renderer* renderer, const Disk& disk) {
     const auto centre = screen(disk.centre);
-    const float radius = static_cast<float>(45 * disk.radius);
+    const float radius = static_cast<float>(12 * disk.radius);
     for (int y = -static_cast<int>(radius); y <= static_cast<int>(radius); ++y) {
         const float halfWidth = std::sqrt(std::max(0.0f, radius * radius - y * static_cast<float>(y)));
         const SDL_FRect span{centre.x - halfWidth, centre.y + y, 2 * halfWidth, 1};
         require(SDL_RenderFillRect(renderer, &span));
     }
 }
+// [/snippet scanner-disk]
 
 inline void drawScene(SDL_Renderer* renderer, const Scene& scene) {
     for (const auto& disk : scene) {
@@ -68,7 +70,7 @@ inline void drawProjection(SDL_Renderer* renderer, const Projection& row) {
     for (int column = 0; column < detectorCount; ++column) {
         const auto gray = static_cast<Uint8>(std::lround(255 * row[column].ratio));
         require(SDL_SetRenderDrawColor(renderer, gray, gray, gray, 255));
-        const SDL_FRect cell{40 + column * 3.5f, 610, 3.5f, 35};
+        const SDL_FRect cell{443 + column * (338.0f / detectorCount), 560, 338.0f / detectorCount, 19};
         require(SDL_RenderFillRect(renderer, &cell));
     }
 }
@@ -119,9 +121,10 @@ inline std::optional<std::array<int, 2>> pickCell(float x, float y, int views) {
 
 #if LAB_CHECKPOINT >= 8
 // Chỉ thay tài nguyên cũ sau khi tạo và cấu hình texture mới thành công.
+// [snippet resize-scan]
 inline void resizeSinogramTexture(SDL_Renderer* renderer, SDL_Texture*& texture, int& textureViews, int views) {
-    if (views != 30 && views != 60 && views != 120) {
-        throw std::invalid_argument("views must be 30, 60 or 120");
+    if (!supportedViews(views)) {
+        throw std::invalid_argument("Unsupported view count");
     }
     if (textureViews == views) {
         return;
@@ -141,6 +144,7 @@ inline void resizeSinogramTexture(SDL_Renderer* renderer, SDL_Texture*& texture,
     texture = replacement;
     textureViews = views;
 }
+// [/snippet resize-scan]
 #endif
 
 #if LAB_CHECKPOINT >= 7

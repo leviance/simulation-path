@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Quét từng phần và giữ dữ liệu nhất quán
 
@@ -26,7 +27,14 @@ Mỗi frame xử lý **tối đa hai hàng**, tổng 256 ray. Không tính “s�
 
 ## Viết code từng bước
 
+Thử dừng giữa lượt quét rồi thay mẫu gỗ bằng đĩa tròn. Nếu chỉ xóa hình mà giữ hàng đo cũ, sinogram có nửa trên của một vật và nửa dưới của vật khác. Gom cấu hình vật lý cùng dữ liệu của một lượt.
+
+<CourseWorkFile project="56" step={6} path="include/scan.hpp" />
+<CourseWorkFile project="56" step={6} path="include/controls.hpp" />
+
 ### Bước 1 — Đặt giới hạn ngay trong hàm thu nhận
+
+{/* snippet include/scan.hpp#row-budget */}
 
 ```cpp title="include/scan.hpp"
 inline int advance(Scan& scan, int budget) {
@@ -41,7 +49,7 @@ inline int advance(Scan& scan, int budget) {
 }
 ```
 
-Budget là số hàng, không số millisecond. Giới hạn theo lượng công việc dễ kiểm chứng hơn một lời hứa “luôn dưới 8ms” phụ thuộc máy. Scene cũng bị giới hạn ba đĩa. Nếu đổi sang model tốn hơn, cần đo thời gian thực tế và giảm batch; hai hàng không phải bảo đảm tuyệt đối về độ trễ.
+Budget là số hàng, không số millisecond. Giới hạn theo lượng công việc dễ kiểm chứng hơn một lời hứa “luôn dưới 8ms” phụ thuộc máy. Vật mẫu có tối đa 16 vùng; khoanh gỗ đang dùng bảy. Nếu đổi sang model tốn hơn, cần đo thời gian thực tế và giảm batch; hai hàng không phải bảo đảm tuyệt đối về độ trễ.
 
 ### Bước 2 — Đưa pause vào vòng lặp ứng dụng
 
@@ -73,6 +81,12 @@ Scan chứa bản sao scene/settings; các hàm acquire không đọc nhầm gia
 Canvas dùng requestAnimationFrame, mỗi callback advance(scan,2) rồi mới lên lịch callback kế. Cleanup cancel frame, stop hạ cờ running ngay và hủy pointer capture. Blur, document.hidden và prefers-reduced-motion chuyển sang reduce đều gọi stop. Bỏ reduced-motion không tự resume.
 
 Reduced-motion vẫn cho N hoặc nút Đo một hàng: người học kiểm mô hình được mà không phải xem animation. Resize chỉ vẽ lại, không cấp sinogram lớn hơn.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="56" step={6} path="src/main.cpp" />
+
+Đo vài hàng, đổi riêng bảng màu rồi đổi strength. Chỉ lần thay đổi thứ hai phải xóa lượt đo; mỗi khung tương tác vẫn có ngân sách cố định.
 
 ## Ghép các phần lại
 

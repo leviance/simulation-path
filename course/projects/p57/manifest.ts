@@ -1,7 +1,7 @@
 import type { PublishedProjectEditorial } from "../../types";
 const data = {
   summary:
-    "Theo dõi từng photon trong môi trường 2D: lấy mẫu quãng đường tự do, hấp thụ, đổi hướng khi tán xạ và thoát qua biên. Gom nhiều đường đi thành thống kê có seed tái lập, đối chiếu Beer–Lambert và phân biệt sai số Monte Carlo với photon bị dừng bởi giới hạn tính toán.",
+    "Cho 16.384 photon đi qua một bể quang học rồi đọc kết quả ngay trên màn thu. Có hạt đi thẳng, có hạt đổi hướng nhiều lần, có hạt biến mất giữa bể. Bản đồ sự kiện và khoảng bất định cho biết điều vài vệt sáng riêng lẻ không thể trả lời.",
   duration: "12–16 giờ",
   prerequisites: [
     "Project 01–05 — SDL3, input và hệ tọa độ",
@@ -21,9 +21,9 @@ const data = {
   challenge: {
     timebox: "120–180 phút tự thử trước khi đọc lời giải",
     mission:
-      "Tự xây dựng một mô phỏng 2D phát photon từ cạnh trái của một môi trường đồng nhất. Photon có thể bị hấp thụ, đổi hướng nhiều lần khi tán xạ hoặc thoát qua bất kỳ cạnh nào. Cho người học xem từng đường đi và thống kê kết quả của nhiều photon.",
+      "Tự xây một bể 2D với nguồn bên trái và màn thu ở mặt phải. Hãy dự đoán khi làm nước đục hơn, bao nhiêu hạt còn đi thẳng, bao nhiêu hạt tới màn theo đường vòng và bao nhiêu hạt thoát mặt trên hoặc mặt dưới.",
     outcome:
-      "Cửa sổ SDL3 có đường đi được tô màu theo sự kiện, thanh xem từng đỉnh và bảng đếm. Seed/ID cho phép dựng lại đúng photon; các mẫu thống kê được so với nghiệm lý thuyết phù hợp.",
+      "Bể kính có thước, đường của từng ID, màn thu 24 ô và hai bản đồ cho cả lượt chạy: chỗ photon bị hấp thụ và chỗ chúng đổi hướng. Có thể phát lại cùng seed, so lượt khác và đọc độ bất định.",
     requirements: [
       "C++20, CMake 3.24+, SDL3 3.4.8; ZIP có starter, 8 checkpoint, final, tests và README, không cần website để chạy.",
       "Miền XY=[-1.5,1.5]×[-1,1], photon phát ở x=-1.5, y ngẫu nhiên trong (-.75,.75), hướng ban đầu (1,0).",
@@ -31,9 +31,9 @@ const data = {
       "Xorshift32, U=(nextUint32+.5)/2^32, trộn seed cùng photon ID; một photon không phụ thuộc số RNG draw của photon trước.",
       "S=-log1p(-U)/muT, chỉ đi min(S,dBoundary). Nếu S>=dBoundary thì thoát, không tương tác thêm ở ngoài biên.",
       "Analog transport: tại tương tác, hấp thụ với xác suất muA/muT; còn lại tán xạ với angle=2πU. Mỗi photon mang một đơn vị, không weighted attenuation.",
-      "Giới hạn 1–64 tương tác/photon, 1–8192 photon/lượt; photon chạm giới hạn được ghi Censored, không gán hấp thụ hoặc loại khỏi mẫu số.",
+      "Giới hạn 1–64 tương tác/photon, 1–16.384 photon/lượt; photon chạm giới hạn được ghi Censored, không gán hấp thụ hoặc loại khỏi mẫu số.",
       "Đếm completed=absorbed+escaped+censored; ballistic là tập con escaped không từng tán xạ. Scatter events không phải một nhóm kết thúc độc lập.",
-      "Mở paused; thêm 1 hoặc 32 photon, từ Bài 08 chạy tự động tối đa 32 photon mới/frame. Chỉ giữ tối đa 24 trace gần nhất và một preview.",
+      "Thêm 1 hoặc 32 photon để kiểm từng bước. Bản native hoàn chỉnh bắt đầu chạy, Canvas chờ người học nhấn Chạy; mỗi frame thêm tối đa 32 photon. Chỉ giữ tối đa 24 trace gần nhất và một preview.",
       "Đổi hệ số, seed, count hoặc eventLimit tạo lượt mới; xem ID/đỉnh không sửa thống kê. Pause/blur/reset hủy capture, không tự resume.",
       "Canvas có preset, reset, keyboard, pointer capture, DPR và reduced-motion; reduced motion chỉ thêm mẫu thủ công.",
     ],

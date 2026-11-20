@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Theo dõi vệt của một điểm lệch tâm
 
@@ -26,14 +27,26 @@ Do p_r thay đổi theo góc, mẫu số không phải hằng số. Vệt fan-be
 
 ## Viết code từng bước
 
+Dõi theo một chấm lệch tâm khi nguồn vòng quanh: nó không chạy trên detector hệt một đường sin của chùm song song. Chiếu điểm từ nguồn hiện tại qua detector phẳng, rồi đối chiếu với vị trí vệt sáng trong sinogram.
+
+<CourseWorkFile project="56" step={7} path="include/geometry.hpp" />
+<CourseWorkFile project="56" step={7} path="include/view.hpp" />
+
 ### Bước 1 — Đổi cơ sở của điểm, không xoay lại phantom
 
+{/* snippet include/geometry.hpp#fan-detector-offset */}
+
 ```cpp title="include/geometry.hpp"
+inline double pointOffset(double angle, Point point) {
+    if (!std::isfinite(angle) || !std::isfinite(point[0]) || !std::isfinite(point[1]) || length(point) > 1.5) {
+        throw std::invalid_argument("Point outside supported field of view");
+    }
     const Point radial{std::cos(angle), std::sin(angle)};
     const Point tangent{-std::sin(angle), std::cos(angle)};
     const double radialDistance = dot(point, radial);
     const double tangentDistance = dot(point, tangent);
     return (sourceRadius + detectorRadius) * tangentDistance / (sourceRadius - radialDistance);
+}
 ```
 
 Hàm pointOffset kiểm angle/point finite và point nằm trong vùng được hỗ trợ. Không gọi screen trong phép chiếu. Trong sơ đồ, P không di chuyển; chỉ tọa độ của nó trong cơ sở quay thay đổi.
@@ -60,7 +73,14 @@ Chọn phantom **Đĩa nhỏ lệch tâm**, rồi quét. Tâm đĩa là `(0.65,0
 
 Không bắt buộc marker phải trùng pixel sáng nhất. Với chùm tia phân kỳ, ray gần tâm nhất theo khoảng cách vuông góc không luôn đi đúng qua tâm; lấy mẫu hữu hạn còn tạo sai lệch giữa marker liên tục và pixel centre.
 
-Nếu chọn phantom nền và hai insert, đường hồng vẫn theo P cố định trên sơ đồ, dù P không phải tâm của một đĩa trong preset đó. Hãy dùng preset đĩa lệch tâm cho thí nghiệm chính.
+Nếu chọn khoanh gỗ, đường hồng vẫn theo P cố định trên sơ đồ, dù P không phải tâm của một đĩa trong preset đó. Hãy dùng preset đĩa lệch tâm cho thí nghiệm chính.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="56" step={7} path="include/controls.hpp" />
+<CourseWorkFile project="56" step={7} path="src/main.cpp" />
+
+Dùng đĩa nhỏ lệch tâm để kiểm trước, sau đó mới nhìn vệt rộng hơn do mắt gỗ. Một đường lý thuyết đi qua tâm vệt không mô tả bề dày của vệt.
 
 ## Ghép các phần lại
 

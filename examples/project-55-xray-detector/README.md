@@ -1,8 +1,22 @@
 # Project 55 — Máy X-ray ảo
 
-Tự xây forward projection tổng hợp: nguồn điểm → tia hữu hạn → các box vật liệu → ảnh detector. C++20/SDL3, không cần OpenGL shader. Dự kiến 11–15 giờ; thử challenge 120–150 phút trước khi đọc lời giải.
+## Từ starter tới chương trình của bạn
 
-## Tám bài học
+Soi chiếc radio từ phía trước, tìm hai viên pin và năm gân loa trong ảnh detector bên cạnh mô hình 3D. Bài 9 dùng fragment shader OpenGL 3.3 trả T vào R32F; Bài 10 so trực tiếp T với CPU trước khi đổi tương phản. Với góc 0 và mặc định mono, T ở (32,42) khoảng 0,436; ở (40,40) khoảng 0,951.
+
+Giải nén ZIP vào một thư mục riêng, mở terminal cạnh CMakeLists.txt. CMake sẽ tạo thư mục work từ starter đúng một lần. Bạn viết tiếp trong đó qua tất cả các bài; không chép final lên bài làm.
+
+```bash
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_55_work --parallel 1
+```
+
+Với Visual Studio, mở build-work/Release/project_55_work.exe; với generator một cấu hình, mở build-work/project_55_work. Cuối học phần, build thêm target project_55_tests và chạy ctest --test-dir build-work -C Release --output-on-failure --timeout 20. Lần này CTest đọc header trong work/include, không đọc đáp án final/include.
+
+
+Tự xây forward projection tổng hợp: nguồn điểm → tia hữu hạn → các box vật liệu → ảnh detector. C++20/SDL3, OpenGL 3.3 là yêu cầu từ Bài 9. Dự kiến 11–15 giờ; thử challenge 120–150 phút trước khi đọc lời giải.
+
+## Mười bài học
 
 1. Ảnh kiểm RGBA → streaming texture SDL3, chưa physics.
 2. Source–detector, ray normalized ở pixel centre và finite segment.
@@ -11,7 +25,9 @@ Tự xây forward projection tổng hợp: nguồn điểm → tia hữu hạn �
 5. Midpoint có ds/tail; đối chiếu chord analytic và error bound.
 6. Flat-field, raw I/ratio/log, display range và đảo palette.
 7. Hai thành phần năng lượng: cộng intensity trước log.
-8. Audit nhỏ, pure CTest và source hoàn chỉnh.
+8. Kiểm bộ đo CPU bằng một tấm phẳng có nghiệm tính tay.
+9. Đưa hình học radio vào fragment shader, giữ số đo float trước khi tô màu.
+10. So bốn vật mẫu trên GPU với CPU rồi chạy toàn bộ bàn soi.
 
 Prerequisites: Project 01–05 (SDL texture/input),52 (ray/slab),54 (transmittance). Không cần dataset y khoa; mu/energy là tổng hợp, không keV/hệ số vật liệu thật. Đây không phải công cụ chẩn đoán, mô phỏng thiết bị đã hiệu chuẩn hoặc hướng dẫn vận hành nguồn bức xạ.
 
@@ -21,9 +37,9 @@ CMake 3.24+, compiler C++20, SDL3 khóa 3.4.8 bằng FetchContent/checksum, link
 
 ```bash
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
+cmake --build build --config Debug --parallel 1
 ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
+cmake --build build --config Release --parallel 1
 ctest --test-dir build -C Release --output-on-failure --timeout 20
 ```
 
@@ -59,7 +75,7 @@ Không tự lặp lại khi timeout. Process timeout không preempt graphics wor
 
 Title đọc measurement của pixel chọn. Sơ đồ XZ là hình chiếu ray 3D, không lát cắt y=0. Geometry hit xét đủ ba trục. Native target 80×60 giữ cố định; render ảnh khi dirty, resize chỉ logical presentation/letterbox. Không assets ngoài source/SDL runtime.
 
-Canvas CPU40×30 preview target 80×60, tính tối đa3 hàng/frame với soft budget10ms và cancel khi input đổi. Tự quay chỉ đổi angle sau khi preview trước xong, cách ít nhất250ms, dt≤0.5; không benchmark C++/GPU. M xem một mẫu midpoint, pointer capture/keyboard/DPR/reduced-motion. Reduced motion dừng persistent, không tự resume.
+Canvas minh họa bằng CPU ở 80×60 cho radio, 40×30 cho vật thử, tính tối đa3 hàng/frame với soft budget10ms và cancel khi input đổi. Tự quay chỉ đổi angle sau khi preview trước xong, cách ít nhất250ms, dt≤0.5; không benchmark C++/GPU. M xem một mẫu midpoint, pointer capture/keyboard/DPR/reduced-motion. Reduced motion dừng persistent, không tự resume.
 
 ## Geometry và tín hiệu
 

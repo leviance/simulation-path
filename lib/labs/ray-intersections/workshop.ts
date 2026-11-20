@@ -4,10 +4,31 @@ import {
   multiply,
   cameraBasis,
   presetCamera,
+  inRange,
   type Camera,
+  type Ray,
   type Scene,
   type Vec3,
 } from "./model.ts";
+import { boxInterval, sphereInterval } from "./intersections.ts";
+
+// The solid's geometric roots remain untouched in the inspector. Clip only
+// the portion painted on the bench/ruler, and never invent a slab for a sheet.
+export function measuredChord(ray: Ray, geometry: Scene, selected: number, stage: number) {
+  let roots = null;
+  if (selected === 1 && stage >= 4) roots = sphereInterval(ray, geometry.sphere);
+  if (selected === 2 && stage >= 5) roots = boxInterval(ray, geometry.box);
+  if (!roots) return null;
+  const from = Math.max(roots.entry, ray.tMin);
+  const until = Math.min(roots.exit, ray.tMax);
+  if (from > until) return null;
+  return {
+    from,
+    until,
+    entry: inRange(ray, roots.entry) ? roots.entry : null,
+    exit: inRange(ray, roots.exit) ? roots.exit : null,
+  };
+}
 
 export const aimAspect = 280 / 190;
 export interface Orbit {
@@ -17,10 +38,10 @@ export interface Orbit {
   distance: number;
 }
 export const initialOrbit = (): Orbit => ({
-  target: { x: 0, y: 0.1, z: -1.5 },
-  yaw: 0.3,
-  pitch: 0.3,
-  distance: 10,
+  target: { x: 0.12, y: 0.42, z: -1.82 },
+  yaw: -0.24,
+  pitch: 0.35,
+  distance: 8.55,
 });
 const clamp = (n: number, low: number, high: number) => Math.max(low, Math.min(high, n));
 export function orbitCamera(orbit: Orbit): Camera {

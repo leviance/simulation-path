@@ -5,16 +5,27 @@ import {
   advance,
   at,
   audit,
+  averageAt,
+  backproject,
   chordLength,
   detectorRay,
+  defaultSettings,
+  densityAt,
+  makeReconstruction,
   makeScan,
   makeScene,
   measure,
   pointOffset,
   project,
+  readDetector,
+  shapeError,
+  slicePoint,
+  sliceSide,
+  validateScene,
   samplingAngle,
   viewAngle,
 } from "../lib/labs/ct-sinogram.ts";
+import { specimenField } from "../lib/labs/ct-sinogram/specimen.ts";
 const close = (a, b, epsilon = 1e-10) =>
   assert.ok(Number.isFinite(a) && Math.abs(a - b) <= epsilon, `${a} vs ${b}`);
 const disk = { centre: [0, 0], radius: 1, mu: 0.5 };
@@ -121,4 +132,59 @@ test("CT rejects unsafe allocation, nonfinite input and excessive work budgets",
     RangeError,
   );
   assert.throws(() => measure(detectorRay(0, 0.5), [{ ...disk, radius: 2 }], 1), RangeError);
+});
+
+test("CT timber is actual annuli, a hollow heart and an off-centre knot, not a painted slice", () => {
+  const wood = makeScene(2);
+  validateScene(wood);
+  assert.equal(defaultSettings.views, 180);
+  close(chordLength(detectorRay(0, 0.5), { ...disk, innerRadius: 0.25 }), 1.5);
+  close(densityAt(wood, [-0.17, 0.08]), 0);
+  assert.ok(densityAt(wood, [0.52, -0.33]) > 1);
+  for (const innerRadius of [-1, 1, NaN])
+    assert.throws(() => validateScene([{ ...disk, innerRadius }]));
+  assert.equal(
+    makeScan(defaultSettings).image,
+    undefined,
+    "early checkpoints do not allocate a reconstruction",
+  );
+});
+
+test("CT backprojection accepts only detector rows, interpolates column centres and ignores unacquired data", () => {
+  const line = new Float64Array(128).fill(0.75);
+  const image = makeReconstruction();
+  const centre = sliceSide * (sliceSide / 2) + sliceSide / 2;
+  backproject(image, 0, line);
+  backproject(image, Math.PI / 3, line);
+  assert.equal(image.rows, 2);
+  close(averageAt(image, centre), 0.75);
+  line.fill(0);
+  line[64] = 1;
+  close(readDetector(line, 0), 0.5);
+  close(readDetector(line, 8), 0);
+  const zero = makeReconstruction();
+  line.fill(0);
+  backproject(zero, 0, line);
+  close(shapeError(zero, specimenField(makeScene(2), 0)), 0);
+  line[3] = NaN;
+  assert.throws(() => backproject(zero, 0, line));
+  assert.equal(zero.rows, 1);
+  close(slicePoint(0, 0)[0], -1.55 + 1.55 / 112);
+  close(slicePoint(0, 0)[1], 1.55 - 1.55 / 112);
+});
+
+test("CT: 180 measured rows locate the knot without reading ground truth while rebuilding", () => {
+  const scan = makeScan(defaultSettings, true);
+  for (let i = 0; i < 90; i++) {
+    assert.equal(advance(scan, 2), 2);
+    assert.equal(scan.image.rows, scan.acquired);
+  }
+  const copy = scan.image.sum.slice();
+  assert.equal(advance(scan, 2), 0);
+  assert.deepEqual(scan.image.sum, copy, "no new row, no repeated contribution");
+  const index = (x, y) =>
+    Math.floor(((x + 1.55) / 3.1) * 112) + 112 * Math.floor(((1.55 - y) / 3.1) * 112);
+  assert.ok(averageAt(scan.image, index(0.52, -0.33)) > averageAt(scan.image, index(-0.17, 0.08)));
+  const rmse = shapeError(scan.image, specimenField(scan.scene, 1));
+  assert.ok(rmse > 0 && rmse < 0.7, `unfiltered shape error: ${rmse}`);
 });

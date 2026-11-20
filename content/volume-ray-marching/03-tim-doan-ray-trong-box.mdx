@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Tìm đúng đoạn tia nằm trong khối
 
@@ -19,6 +20,11 @@ Ray song song với một slab cần xử lý riêng. Origin ở ngoài slab th�
 <InteractiveLab demo="volume-ray-marching" mode="fog54-3" />
 
 ## Viết code từng bước
+
+Không cần lần từng bước từ chỗ đứng đến tận chân trời. Hãy tìm nơi tia đi vào hộp chứa mây và nơi nó ra khỏi hộp; mọi mẫu ngoài khoảng đó đều không thuộc dữ liệu.
+
+<CourseWorkFile project="54" step={3} path="include/model.hpp" />
+<CourseWorkFile project="54" step={3} path="shaders/volume.frag" />
 
 ### 1. Viết bản CPU dễ kiểm trước
 
@@ -97,6 +103,14 @@ close(hit.exit, 4, 0, "front exit");
 close(boxInterval({{0, 0, 0}, {1, 0, 0}})->entry, 0, 0, "camera inside starts at zero");
 close(boxInterval({{0, 0, 0}, {1, 0, 0}})->exit, 1, 0, "inside exit");
 ```
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="54" step={3} path="include/renderer.hpp" />
+<CourseWorkFile project="54" step={3} path="include/stage.hpp" />
+<CourseWorkFile project="54" step={3} path="include/ui.hpp" />
+
+Đặt camera vào trong hộp. Lúc này điểm bắt đầu hợp lệ là ngay trước mắt, không phải giao điểm phía sau lưng.
 
 ## Ghép các phần lại
 

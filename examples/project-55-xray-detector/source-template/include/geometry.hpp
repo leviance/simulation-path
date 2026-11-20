@@ -22,6 +22,7 @@ inline void validateBeam(Beam beam) {
     }
 }
 
+// [snippet finite-beam]
 inline Beam detectorRay(double u, double v) {
     if (!std::isfinite(u) || !std::isfinite(v) || u < 0 || u > 1 || v < 0 || v > 1) {
         throw std::invalid_argument("Detector coordinates must be in [0,1]");
@@ -32,6 +33,7 @@ inline Beam detectorRay(double u, double v) {
     const double distance = length(delta);
     return {origin, multiply(delta, 1 / distance), distance};
 }
+// [/snippet finite-beam]
 
 inline Beam objectBeam(Beam beam, double angle) {
     return {rotateY(beam.origin, -angle), rotateY(beam.direction, -angle), beam.maximum};

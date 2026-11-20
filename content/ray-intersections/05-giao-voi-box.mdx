@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Thu hẹp khoảng tia qua ba slab của box
 
@@ -35,6 +36,11 @@ Ví dụ box=[−1,1]³, origin=(−2,0,−3), direction=(1,0,1)/√2. Slab x ch
 Ngắm box màu vàng, đọc entry/exit và t hit. Interval trong inspector chưa bị cắt bởi range. Giảm tMax để quan sát khi interval còn tồn tại nhưng hit thành MISS. Preset camera inside sẽ được mở ở Bài 07.
 
 ## Viết code từng bước
+
+Hãy coi mỗi cặp mặt của hộp là một cửa kiểm: cửa nào cũng cho tia đi qua trong một khoảng riêng. Đoạn nằm trong cả khối là phần chung của ba khoảng, không phải tổng ba quãng đường.
+
+<CourseWorkFile project="52" step={5} path="include/box.hpp" />
+<CourseWorkFile project="52" step={5} path="include/query.hpp" />
 
 ### Bước 1 — Giữ interval cùng normal của hai mặt
 
@@ -128,6 +134,14 @@ inline std::optional<Hit> intersectBox(const Ray& ray, const Box& box) {
 ```
 
 Nếu entry ở phía trước và hợp lệ thì chọn entry. Nếu entry đã ở sau origin hoặc trước tMin, thử exit. Nếu cả hai nằm ngoài range thì miss, dù đoạn ray có thể đang nằm hoàn toàn trong box. Việc test overlap thể tích và việc chọn bề mặt là hai API khác nhau.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="52" step={5} path="include/instrument-hud.hpp" />
+<CourseWorkFile project="52" step={5} path="include/panel.hpp" />
+<CourseWorkFile project="52" step={5} path="include/view.hpp" />
+
+Lần lượt ngắm một mặt, một cạnh và khe ngoài mép hộp. Dấu vào và dấu ra phải nằm trên hai mặt thật; mặt không hướng về camera không vì vậy mà biến mất khỏi phép đo.
 
 ## Ghép các phần lại
 

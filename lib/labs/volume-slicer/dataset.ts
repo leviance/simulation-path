@@ -51,7 +51,7 @@ export async function createDataset(
   if (context) {
     const { meshSlabs } = await import("./context-mesh.ts");
     guard();
-    const job = meshSlabs(volume);
+    const job = meshSlabs(volume, preset === "specimen");
     try {
       let step = job.next();
       while (!step.done) {

@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as r from "../lib/labs/ray-intersections.ts";
+import { Raster } from "../components/labs/ray-intersections/raster.ts";
+import { drawScene } from "../components/labs/ray-intersections/mesh.ts";
+import { drawBeam } from "../components/labs/ray-intersections/beam.ts";
 
 test("Ray record validator catches forged geometry but does not certify empty miss", () => {
   const value = r.cameraRay(r.presetCamera(), 0.5, 0.5, 1.5);
@@ -27,12 +30,116 @@ const hitAt = (hit, t) => {
   return hit;
 };
 
+test("The independent Canvas depth buffer and analytic picking agree on the four physical samples", () => {
+  const observer = r.orbitCamera(r.initialOrbit());
+  const width = 300,
+    height = 250;
+  const raster = new Raster(width, height, observer);
+  raster.begin(observer);
+  drawScene(raster, r.scene, 1, true);
+  const forward = r.cameraBasis(observer).forward;
+  const anchors = [
+    r.add(r.scene.plane.point, vec(-3.2, 0, 0.75)),
+    r.scene.sphere.center,
+    r.objectCenter(r.scene, 2),
+    r.objectCenter(r.scene, 3),
+  ];
+  for (const [id, anchor] of anchors.entries()) {
+    const pixel = r.project(anchor, observer, width, height);
+    assert.ok(pixel);
+    const x = Math.floor(pixel.x),
+      y = Math.floor(pixel.y);
+    const sight = r.cameraRay(observer, (x + 0.5) / width, (y + 0.5) / height, width / height);
+    const hit = r.nearestHit(r.candidates(sight, r.scene));
+    assert.equal(hit?.objectId, id);
+    const z = r.dot(r.subtract(hit.point, observer.origin), forward);
+    // The displayed sphere is tessellated, not computed from the picking routine.
+    near(1 / raster.inverseDepth[y * width + x], z, id === 1 ? 0.008 : 1e-8);
+  }
+});
+
+test("The amber exit diamond is painted at the projected geometric exit, not at the clamped end of a short ray", () => {
+  const camera = r.orbitCamera(r.initialOrbit()),
+    width = 440,
+    height = 380;
+  const raster = new Raster(width, height, camera);
+  const ray = r.cameraRay(r.presetCamera(), 0.37, 0.5, r.aimAspect, 14);
+  function render(query) {
+    raster.begin(camera);
+    drawScene(raster, r.scene, 1, true);
+    const hits = r.candidates(query, r.scene);
+    drawBeam(
+      raster,
+      query,
+      hits,
+      r.nearestHit(hits),
+      r.measuredChord(query, r.scene, 1, 8),
+      1,
+      true,
+    );
+    return raster.pixels;
+  }
+  const interval = r.sphereInterval(ray, r.scene.sphere);
+  assert.ok(interval);
+  const exit = r.project(r.at(ray, interval.exit), camera, width, height);
+  assert.ok(exit);
+  const diamondAround = (pixels) => {
+    let matches = 0;
+    for (let dy = -7; dy <= 7; dy++)
+      for (let dx = -7; dx <= 7; dx++) {
+        if (Math.abs(dx) + Math.abs(dy) !== 7) continue;
+        const i = 4 * ((Math.round(exit.y) + dy) * width + Math.round(exit.x) + dx);
+        if (pixels[i] === 255 && pixels[i + 1] === 194 && pixels[i + 2] === 109) matches++;
+      }
+    return matches;
+  };
+  assert.ok(diamondAround(render(ray)) >= 18);
+  assert.equal(diamondAround(render({ ...ray, tMax: (interval.entry + interval.exit) / 2 })), 0);
+});
+
 test("Sphere exposes uncut geometric entry/exit, including tangent and inside intervals", () => {
   const sphere = { center: vec(), radius: 1 };
   assert.deepEqual(r.sphereInterval(ray(), sphere), { entry: 2, exit: 4 });
   assert.deepEqual(r.sphereInterval(ray(vec()), sphere), { entry: -1, exit: 1 });
   assert.deepEqual(r.sphereInterval(ray(vec(1, 0, -3)), sphere), { entry: 3, exit: 3 });
   assert.equal(r.intersectSphere(ray(vec(), vec(0, 0, 1), 0.1, 0.5), sphere), null);
+});
+
+test("Optical bench and its distance ruler show only the part of a selected solid within range", () => {
+  const geometry = {
+    ...r.scene,
+    sphere: { center: vec(), radius: 1 },
+    box: { minimum: vec(-1, -1, -1), maximum: vec(1, 1, 1) },
+  };
+  const outside = ray(vec(0, 0, -3), vec(0, 0, 1), 0.1, 3.5);
+  const inside = ray(vec(), vec(0, 0, 1), 0.1, 0.5);
+  for (const [id, stage] of [
+    [1, 4],
+    [2, 5],
+  ]) {
+    assert.deepEqual(r.measuredChord(outside, geometry, id, stage), {
+      from: 2,
+      until: 3.5,
+      entry: 2,
+      exit: null,
+    });
+    assert.deepEqual(r.measuredChord(inside, geometry, id, stage), {
+      from: 0.1,
+      until: 0.5,
+      entry: null,
+      exit: null,
+    });
+    assert.equal(r.measuredChord(outside, geometry, id, stage - 1), null);
+    assert.equal(r.measuredChord({ ...outside, tMax: 1 }, geometry, id, stage), null);
+  }
+  for (const surface of [0, 3]) assert.equal(r.measuredChord(outside, geometry, surface, 8), null);
+  const tangent = ray(vec(1, 0, -3), vec(0, 0, 1));
+  assert.deepEqual(r.measuredChord(tangent, geometry, 1, 8), {
+    from: 3,
+    until: 3,
+    entry: 3,
+    exit: 3,
+  });
 });
 
 test("Observer controls preserve the held ray; translation preserves AABB dimensions and source orientation", () => {

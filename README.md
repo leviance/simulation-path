@@ -41,27 +41,29 @@ Khi hoàn thành các phần tương ứng, người học có thể:
 
 Các project được xếp theo dependency. Mỗi phần dùng trực tiếp công cụ và trực giác đã xây ở phần trước, thay vì bắt đầu lại bằng một bộ khung không được giải thích.
 
-| Phần                                     | Project | Trọng tâm                                                                    |
-| ---------------------------------------- | ------: | ---------------------------------------------------------------------------- |
-| SDL3, pixel và tương tác cơ bản          |   01–05 | Window, input, framebuffer, raster 2D và đổi hệ tọa độ                       |
-| Học toán bằng chương trình tương tác     |   06–10 | Vector, lượng giác, dot product, transform và normal 3D                      |
-| Tự dựng đồ họa 3D trên CPU               |   11–21 | Camera, projection, clipping, rasterizer, Z-buffer, lighting, texture và OBJ |
-| Vật lý và numerical methods              |   22–26 | Projectile, integrator, collision, spring và chaos                           |
-| Cấu trúc không gian và hiệu năng         |   27–32 | Brute force, spatial grid, quadtree, octree, Barnes–Hut, AoS/SoA             |
-| Chuyển từ renderer CPU sang OpenGL/GLSL  |   33–36 | Đối chiếu CPU/GPU, shader và ray marching                                    |
-| GPU compute và hàng triệu phần tử        |   37–40 | Compute, buồng hạt tích điện, thành phố triệu vật thể và xưởng vải 3D        |
-| Toán cho đồ họa 3D, giả lập và hiệu năng |   41–45 | Tạo mesh, biến hình hạt, fractal, điêu khắc thể tích và Atomic Playground    |
-| Từ ô lưới đến chất lỏng                  |   46–51 | Cellular automata, heat, vector field, Stable Fluids và SPH                  |
-| Ray, volume và giả lập X-ray             |   52–57 | Intersection, volume ray marching, detector, CT và Monte Carlo               |
+| Phần                                     | Project | Trọng tâm                                                                                              |
+| ---------------------------------------- | ------: | ------------------------------------------------------------------------------------------------------ |
+| SDL3, pixel và tương tác cơ bản          |   01–05 | Window, input, framebuffer, raster 2D và đổi hệ tọa độ                                                 |
+| Học toán bằng chương trình tương tác     |   06–10 | Vector, lượng giác, dot product, transform và normal 3D                                                |
+| Tự dựng đồ họa 3D trên CPU               |   11–21 | Camera, projection, clipping, rasterizer, Z-buffer, lighting, texture và OBJ                           |
+| Vật lý và numerical methods              |   22–26 | Projectile, integrator, collision, spring và chaos                                                     |
+| Cấu trúc không gian và hiệu năng         |   27–32 | Brute force, spatial grid, quadtree, octree, Barnes–Hut, AoS/SoA                                       |
+| Chuyển từ renderer CPU sang OpenGL/GLSL  |   33–36 | Đối chiếu CPU/GPU, shader và ray marching                                                              |
+| GPU compute và hàng triệu phần tử        |   37–40 | Compute, buồng hạt tích điện, thành phố triệu vật thể và xưởng vải 3D                                  |
+| Toán cho đồ họa 3D, giả lập và hiệu năng |   41–45 | Tạo mesh, biến hình hạt, fractal, điêu khắc thể tích và Atomic Playground                              |
+| Từ ô lưới đến chất lỏng                  |   46–51 | Cellular automata, heat, vector field, Stable Fluids và SPH                                            |
+| Ray, volume và giả lập X-ray             |   52–57 | Intersection, volume ray marching, detector, CT và Monte Carlo                                         |
 | Khám phá thế giới voxel                  |   58–64 | Đi từ biển tới rừng tuyết: chunk, ống ngắm chỉ đọc, greedy mesh, streaming, địa hình, gió và nước động |
-| Tự xây UI cho simulator                  |   65–72 | Từ bảng điều khiển đàn Boids đến HTML, CSS, layout, event và script tự viết |
-| Các project cầu nối tùy chọn             |   73–78 | Quaternion, BVH, thread pool, Fourier, Monte Carlo và floating point         |
+| Tự xây UI cho simulator                  |   65–72 | Từ bảng điều khiển đàn Boids đến HTML, CSS, layout, event và script tự viết                            |
+| Các project cầu nối tùy chọn             |   73–78 | Quaternion, BVH, thread pool, Fourier, Monte Carlo và floating point                                   |
 
 [Product Specification v4 — 78 project](./docs/specifications/cpp-sdl3-simulation-roadmap-agent-product-spec-v4-complete.md) là tài liệu tham chiếu chuẩn cho roadmap: sản phẩm cuối, phạm vi, quy mô, tương tác và tiêu chí nghiệm thu của từng project. Project 01–72 thuộc lộ trình chính; Project 73–78 là các nhánh cầu nối tùy chọn.
 
 Tám project cuối của lộ trình chính cùng dùng **đàn chim ở Project 28**. Ở Project 65, bạn tự vẽ thanh Radius rồi dừng đàn để xem con chim đang chọn nhìn thấy những hàng xóm nào. Ở Project 72, vẫn là thanh kéo ấy nhưng bạn có thể sửa một file script để cùng vị trí giữa thanh cho bán kính 80 hoặc 50 px, không cần biên dịch lại. [Xem tám bước xây bàn quan sát](./docs/reviews/flock-workbench-65-72.md).
 
 Website hiển thị roadmap tại `/roadmap` khi chạy local. Metadata nằm trong [`course/roadmap.ts`](./course/roadmap.ts), còn catalog đã phát hành nằm trong [`course/projects.json`](./course/projects.json). Nội dung hiện có cần được đối chiếu với đặc tả khi review; trạng thái phát hành không đồng nghĩa đã đáp ứng toàn bộ yêu cầu sản phẩm.
+
+Với Project 52–57, [Sáu thí nghiệm với tia sáng](docs/reviews/optics-workshop-52-57.md) giải thích vì sao soi một bộ đàm, quét một khúc gỗ và theo dõi photon trong bể nước lại cho ba loại ảnh khác nhau. Mỗi bài chỉ rõ cần sửa gì trong bản C++ của chính bạn.
 
 Với Project 58–64, [Sổ thực địa thế giới voxel](docs/reviews/voxel-expedition-58-64.md) chỉ đường từ bờ biển lên rừng tuyết, kèm các phím điều khiển, ảnh chụp từ C++/SDL3 và số đo của một chuyến đi mười phút.
 

@@ -43,6 +43,7 @@ inline double brightness(int x, int y, [[maybe_unused]] const Settings& settings
 #endif
 }
 
+// [snippet fill-detector]
 inline Image makeImage(Settings settings) {
     validate(settings);
     Image image;
@@ -66,5 +67,6 @@ inline Image makeImage(Settings settings) {
     }
     return image;
 }
+// [/snippet fill-detector]
 #endif
 } // namespace xray

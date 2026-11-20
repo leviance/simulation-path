@@ -41,14 +41,19 @@ export function validateBeam(beam: Beam) {
     throw new RangeError("Expected a finite normalized beam");
 }
 // Low-level chord calculation assumes a validated beam and disk.
-export function chordLength(beam: Beam, disk: Disk) {
-  const delta = subtract(disk.centre, beam.origin);
+function diskChord(beam: Beam, centre: Point, radius: number) {
+  const delta = subtract(centre, beam.origin);
   const along = dot(delta, beam.direction);
   const perpendicularSquared = Math.max(0, dot(delta, delta) - along * along);
-  const halfChordSquared = disk.radius ** 2 - perpendicularSquared;
+  const halfChordSquared = radius ** 2 - perpendicularSquared;
   if (halfChordSquared <= 0) return 0;
   const halfChord = Math.sqrt(halfChordSquared);
   return Math.max(0, Math.min(beam.maximum, along + halfChord) - Math.max(0, along - halfChord));
+}
+export function chordLength(beam: Beam, disk: Disk) {
+  const outer = diskChord(beam, disk.centre, disk.radius);
+  if (!disk.innerRadius) return outer;
+  return Math.max(0, outer - diskChord(beam, disk.centre, disk.innerRadius));
 }
 export function measure(beam: Beam, scene: readonly Disk[], strength: number) {
   validateBeam(beam);

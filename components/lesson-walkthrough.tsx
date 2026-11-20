@@ -2,7 +2,7 @@ import type { LessonMeta, ProjectMeta } from "@/lib/course";
 import type { LessonCodeGuide } from "@/course/learning/types";
 import { getProjectChangedPaths, getProjectSourceBundle } from "@/lib/project-sources";
 import { SourceFile } from "@/components/source-file";
-import { hasVoxelWorkbook } from "@/lib/voxel-workbook";
+import { workbookOption } from "@/lib/voxel-workbook";
 
 export async function LessonWalkthrough({
   project,
@@ -14,7 +14,7 @@ export async function LessonWalkthrough({
   guide: LessonCodeGuide;
 }) {
   const previous = project.lessons[lesson.order - 2];
-  const workbook = hasVoxelWorkbook(project.id);
+  const workbook = workbookOption(project.id);
   const startTarget = previous
     ? `project_${Number(project.id)}_checkpoint_${previous.order}`
     : `project_${Number(project.id)}_starter`;
@@ -57,16 +57,14 @@ export async function LessonWalkthrough({
               ) : (
                 <>
                   Giải nén ZIP, mở terminal cạnh CMakeLists.txt và chạy{" "}
-                  <code>
-                    cmake -S . -B build-work -DVOXEL_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
-                  </code>
-                  . CMake tạo <code>work/</code> từ starter đúng một lần. Chạy{" "}
+                  <code>cmake -S . -B build-work -D{workbook}=ON -DCMAKE_BUILD_TYPE=Release</code>.
+                  CMake tạo <code>work/</code> từ starter đúng một lần. Chạy{" "}
                   <code>
                     cmake --build build-work --config Release --target project_{project.id}_work
                     --parallel 1
                   </code>{" "}
                   để thử trước khi sửa.
-                  {project.id !== "58" && (
+                  {workbook === "VOXEL_WORKBOOK" && project.id !== "58" && (
                     <>
                       {" "}
                       ZIP đã mang theo các phần của Project {Number(project.id) - 1}. Muốn giữ họa

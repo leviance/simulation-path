@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Đi giữa các tâm voxel bằng trilinear
 
@@ -21,6 +22,10 @@ Tám trọng số đều không âm và cộng lại bằng một. Vì vậy k�
 Mở bảng tám voxel, chọn Ramp và dời từng slider. Trước khi chạy, thử dự đoán mẫu nào có trọng số lớn nhất khi điểm đo tiến gần một góc ô.
 
 ## Viết code từng bước
+
+Kéo lát thật chậm qua rìa một vòng mã não. Với nearest, màu giữ nguyên rồi nhảy ở giữa hai tâm voxel. Trilinear không phát hiện thêm tinh thể: nó kết hợp tám số lân cận để chuyển tiếp liên tục.
+
+<CourseWorkFile project="53" step={4} path="include/sampling.hpp" />
 
 ### 1. Giữ nearest để có thứ so sánh
 
@@ -131,6 +136,15 @@ near(sampleLinear(fixture, middle).value(), 50.5, 1e-12, "known half-cell result
 ```
 
 Phép kiểm không hỏi chính sampler xem đáp số đúng là gì. Ta đã có đáp số từ cấu trúc fixture; sampler chỉ là phần bị kiểm tra.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="53" step={4} path="include/input.hpp" />
+<CourseWorkFile project="53" step={4} path="include/stage.hpp" />
+<CourseWorkFile project="53" step={4} path="include/state.hpp" />
+<CourseWorkFile project="53" step={4} path="include/ui.hpp" />
+
+Kiểm ngay tại một tâm mẫu, hai cách đọc phải đồng ý. Ra nửa đường giữa hai tâm của trường tuyến tính, giá trị phải nằm giữa hai mẫu đúng theo tỉ lệ.
 
 ## Ghép các phần lại
 

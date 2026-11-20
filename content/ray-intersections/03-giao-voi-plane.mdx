@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Tìm điểm chạm mặt phẳng và nhận ra tia song song
 
@@ -25,6 +26,11 @@ Tia nằm hẳn trên plane có vô số điểm chung, không có một surface
 Chọn Plane trên bảng rồi ngắm xuống sàn, đọc t và point.y. Point.y phải là −1. Chọn thí nghiệm “Song song plane”: kết quả MISS là chủ động, không phải NaN. Hướng gần ngang có thể chạm rất xa; tMax có thể loại nghiệm dù đường thẳng vẫn cắt plane.
 
 ## Viết code từng bước
+
+Bắt đầu với mặt bàn vì có thể đoán kết quả bằng mắt. Viết chỗ lưu khoảng cách trước, sau đó mới tìm giao điểm; phép giao có quyền trả về «không chạm». Đừng dùng tọa độ (0,0,0) để thay kết quả rỗng.
+
+<CourseWorkFile project="52" step={3} path="include/hit.hpp" />
+<CourseWorkFile project="52" step={3} path="include/query.hpp" />
 
 ### Bước 1 — Trả đủ thông tin bằng Hit
 
@@ -86,23 +92,38 @@ inline std::optional<Hit> intersectPlane(const Ray& ray, const Plane& plane) {
 {/* snippet include/view.hpp#draw-hit */}
 ```cpp title="include/view.hpp — vẽ hit và normal trong world"
 inline void drawHit(Raster& raster, const Hit& hit, bool selected) {
-    Color color{164, 182, 202};
-    if (selected) {
-        color = {139, 255, 162};
+    // Vẫn đánh dấu giao điểm phụ, nhưng chỉ vẽ mũi tên cho pháp tuyến đang xét.
+    if (!selected) {
+        raster.ring(hit.point, {161, 183, 191}, 3);
+        return;
     }
+    const Color color{169, 254, 139};
     const Vec3 end = add(hit.point, multiply(hit.normal, 0.65));
-    raster.marker(hit.point, color, 4);
-    raster.line(hit.point, end, color, true, 1);
-    const Vec3 side = cameraBasis(raster.camera).right;
+    raster.line(hit.point, end, color, true, 1, 0.76);
+    // Chọn hướng vuông góc với mũi tên ngay trên màn hình, kể cả
+    // khi pháp tuyến của vật gần song song với trục ngang của camera.
+    Vec3 side = normalize(cross(hit.normal, raster.basis.forward));
+    if (length(side) < 0.001) {
+        side = raster.basis.right;
+    }
     const Vec3 base = subtract(end, multiply(hit.normal, 0.14));
     raster.line(end, add(base, multiply(side, 0.08)), color, true);
     raster.line(end, subtract(base, multiply(side, 0.08)), color, true);
+    raster.marker(hit.point, {245, 255, 231}, 3);
 }
 ```
 
 `makeHit` ở bước trước lấy point=at(ray,t) và frontFace từ dot; không tự lật normal. Hàm `drawHit` vừa thêm nhận point/normal ấy trong world. Nó vẽ từ point tới point+0.65*normal rồi thêm hai cánh mũi tên; không cộng normal world vào pixel màn hình.
 
 Trong `query.hpp`, `candidates` gọi `intersectPlane(ray,scene.plane)` vào slot ID 0. `drawWorkshop` gọi candidates sau khi lấy `state.ray()`, duyệt các kết quả có giá trị rồi gọi `drawHit`. `drawPanel` đọc cùng kết quả để hiện t/point/normal bên phải. Đó là chỗ nối hàm mới vào ứng dụng đang chạy. Bài 07 mới chọn một hit gần nhất; ở checkpoint này chưa được gọi marker là kết quả chọn giữa cả bốn vật.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="52" step={3} path="include/instrument-hud.hpp" />
+<CourseWorkFile project="52" step={3} path="include/panel.hpp" />
+<CourseWorkFile project="52" step={3} path="include/view.hpp" />
+
+Cho tia gần song song với mặt bàn. Nếu một chấm trắng nhảy ra xa khi đã vượt tầm đo, hãy kiểm mẫu số và điều kiện tMax trước khi sửa code vẽ.
 
 ## Ghép các phần lại
 

@@ -6,6 +6,7 @@ struct Interaction {
     bool running = true;
     bool aimDrag = false;
     bool orbitDrag = false;
+    bool redraw = true;
 };
 
 inline void releasePointer(Interaction& input) {
@@ -30,6 +31,9 @@ inline void aimInput(Workshop& state, float x, float y) {
 inline bool readInput(SDL_Renderer* renderer, Workshop& state, Interaction& input) {
     SDL_Event event{};
     while (SDL_PollEvent(&event)) {
+        if (event.type != SDL_EVENT_MOUSE_MOTION || input.aimDrag || input.orbitDrag) {
+            input.redraw = true;
+        }
         if (event.type == SDL_EVENT_QUIT) {
             input.running = false;
         }
@@ -80,6 +84,9 @@ inline bool readInput(SDL_Renderer* renderer, Workshop& state, Interaction& inpu
             }
 #endif
 #if LAB_CHECKPOINT >= 7
+            if (event.button.button == SDL_BUTTON_LEFT && (inside(stripRect, x, y) || inside(aimHeading, x, y))) {
+                continue;
+            }
             // Screen picking uses the OBSERVER camera, not the emitter camera.
             // [snippet observer-picking]
             if (event.button.button == SDL_BUTTON_LEFT && !inside(aimRect, x, y) && x >= 0 && x < sceneWidth && y >= 0 && y < viewHeight) {

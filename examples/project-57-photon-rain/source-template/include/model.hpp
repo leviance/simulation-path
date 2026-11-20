@@ -18,7 +18,7 @@ constexpr double left = -1.5;
 constexpr double right = 1.5;
 constexpr double bottom = -1;
 constexpr double top = 1;
-constexpr int maximumPhotons = 8192;
+constexpr int maximumPhotons = 16384;
 constexpr int maximumEvents = 64;
 
 // Hình học dùng world XY; chỉ hàm vẽ mới đảo chiều trục y.
@@ -62,7 +62,7 @@ struct Settings {
     double muS = 0;
 #endif
     std::uint32_t seed = 42;
-    int count = 2048;
+    int count = 16384;
     int eventLimit = 64;
     bool operator==(const Settings&) const = default;
 };

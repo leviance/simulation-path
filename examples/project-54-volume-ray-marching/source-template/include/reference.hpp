@@ -9,7 +9,7 @@ inline double classifiedDensity(double density, double cutoff) {
 inline Vec3 transferColor(double density, int palette) {
 #if LAB_CHECKPOINT >= 7
     // [snippet transfer-color]
-    constexpr std::array<Vec3, 5> warm{{{0.38, 0.49, 0.58}, {0.65, 0.72, 0.77}, {0.82, 0.86, 0.89}, {0.95, 0.96, 0.96}, {1, 0.98, 0.94}}};
+    constexpr std::array<Vec3, 5> warm{{{0.42, 0.55, 0.70}, {0.68, 0.78, 0.88}, {0.88, 0.91, 0.95}, {0.98, 0.97, 0.93}, {1, 0.98, 0.90}}};
     constexpr std::array<Vec3, 5> cool{{{0.07, 0.16, 0.24}, {0.08, 0.49, 0.57}, {0.35, 0.78, 0.74}, {1, 0.55, 0.22}, {1, 0.92, 0.72}}};
     if (palette == 2)
         return {1, 1, 1};
@@ -29,7 +29,7 @@ inline Vec3 transferColor(double density, int palette) {
 }
 
 #if LAB_CHECKPOINT >= 7
-// Optional local gradient lighting, NOT a scattering/shadow solver.
+// The gradient orients the billows. Two density readings approximate sunlight reaching this sample.
 // [snippet gradient-light]
 inline Vec3 litColor(const Volume& volume, Vec3 point, double density, Settings settings) {
     Vec3 color = transferColor(density, settings.palette);
@@ -42,12 +42,14 @@ inline Vec3 litColor(const Volume& volume, Vec3 point, double density, Settings 
         offset[axis] = h;
         gradient[axis] = (sampleDensity(volume, point + offset) - sampleDensity(volume, point - offset)) / (2 * h);
     }
-    if (dot(gradient, gradient) < 1e-6)
-        return color;
-    const Vec3 normal = unit(gradient * -1);
     const Vec3 light = unit({-0.6, 0.8, 0.5});
-    const double diffuse = std::max(0.0, dot(normal, light));
-    return color * (0.55 + 0.45 * diffuse);
+    const double facing = std::max(0.0, -dot(gradient, light) / std::sqrt(dot(gradient, gradient) + 0.25));
+    const double nearDensity = sampleDensity(volume, point + light * 0.13);
+    const double farDensity = sampleDensity(volume, point + light * 0.32);
+    const double sun = std::exp(-2.3 * (0.64 * nearDensity + 0.36 * farDensity));
+    const double direct = sun * (0.55 + 0.45 * facing);
+    const Vec3 shade = Vec3{0.21, 0.34, 0.53} * (1 - direct) + Vec3{1, 0.98, 0.86} * direct;
+    return {color.x * shade.x, color.y * shade.y, color.z * shade.z};
 }
 
 // [/snippet gradient-light]
@@ -115,7 +117,7 @@ inline Result integrate(const Ray& ray, const Volume& volume, Settings settings,
         // [/snippet projection-loop]
 #if LAB_CHECKPOINT >= 6
         // [snippet alpha-loop]
-        if (settings.mode == Mode::Alpha) {
+        if (settings.mode == Mode::Alpha && density > 0 && settings.sigma > 0) {
             const double alpha = segmentAlpha(density, settings.sigma, ds);
             Vec3 color = transferColor(density, settings.palette);
 #if LAB_CHECKPOINT >= 7

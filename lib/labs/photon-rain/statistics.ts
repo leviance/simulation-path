@@ -1,4 +1,13 @@
-import { maximumPhotons, right, left, validate, type Settings, type Trace } from "./model.ts";
+import {
+  maximumPhotons,
+  right,
+  left,
+  bottom,
+  top,
+  validate,
+  type Settings,
+  type Trace,
+} from "./model.ts";
 import { tracePhoton } from "./transport.ts";
 export interface Counts {
   completed: number;
@@ -8,6 +17,9 @@ export interface Counts {
   ballistic: number;
   scatteredPhotons: number;
   scatterEvents: number;
+  detectorBins: Uint32Array;
+  absorptionMap: Uint32Array;
+  scatterMap: Uint32Array;
 }
 export interface Experiment {
   settings: Readonly<Settings>;
@@ -27,6 +39,9 @@ export function makeExperiment(settings: Settings): Experiment {
       ballistic: 0,
       scatteredPhotons: 0,
       scatterEvents: 0,
+      detectorBins: new Uint32Array(24),
+      absorptionMap: new Uint32Array(48 * 32),
+      scatterMap: new Uint32Array(48 * 32),
     },
     recent: [],
     convergence: [],
@@ -35,6 +50,18 @@ export function makeExperiment(settings: Settings): Experiment {
 export function tally(counts: Counts, trace: Trace) {
   if (trace.status === "alive") throw new RangeError("Cannot tally an unfinished preview");
   counts.completed++;
+  const bin = (value: number, lo: number, hi: number, size: number) =>
+    Math.min(size - 1, Math.max(0, Math.floor(((value - lo) * size) / (hi - lo))));
+  for (const {
+    event,
+    position: [x, y],
+  } of trace.vertices) {
+    const cell = bin(x, left, right, 48) + 48 * bin(y, bottom, top, 32);
+    if (event === "absorption") counts.absorptionMap[cell]++;
+    if (event === "scatter") counts.scatterMap[cell]++;
+    if (event === "escape" && Math.abs(x - right) < 1e-9)
+      counts.detectorBins[bin(y, bottom, top, 24)]++;
+  }
   if (trace.status === "absorbed") counts.absorbed++;
   if (trace.status === "escaped") {
     counts.escaped++;
@@ -52,7 +79,7 @@ export function advance(experiment: Experiment, budget: number) {
     const id = experiment.counts.completed,
       trace = tracePhoton(experiment.settings, id);
     tally(experiment.counts, trace);
-    // Mốc 1,2,4,...,8192 và N cuối: tối đa 15 điểm, không lấy thêm mẫu RNG.
+    // Ghi ở các mốc lũy thừa hai và N cuối; không lấy thêm mẫu ngẫu nhiên để vẽ biểu đồ.
     const n = experiment.counts.completed;
     if ((n & (n - 1)) === 0 || n === experiment.settings.count) {
       const [low, high] = wilson(experiment.counts.ballistic, n);

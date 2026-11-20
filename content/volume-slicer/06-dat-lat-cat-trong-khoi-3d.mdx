@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Đặt ba lát cắt trở lại trong khối 3D
 
@@ -20,6 +21,11 @@ Camera chỉ thay projection. Probe là điểm đo trong world; quay camera kh�
 
 ## Viết code từng bước
 
+Cắt đôi viên đá ngay tại lát XY đang xem rồi đặt ảnh đó vào đúng mặt cắt trong cảnh 3D. Vỏ nằm phía sau phải bị che, tinh thể trong hốc phải ở đúng chỗ trên cả ảnh phẳng lẫn viên đá.
+
+<CourseWorkFile project="53" step={6} path="include/context-mesh.hpp" />
+<CourseWorkFile project="53" step={6} path="include/raster.hpp" />
+
 ### 1. Nhận diện phần camera được cung cấp
 
 `cameraFrame` dựng eye, forward/right/up và focal từ các tham số orbit. Nó chỉ nhận camera cùng kích thước vùng vẽ, không nhận volume để xoay lại dữ liệu.
@@ -33,7 +39,7 @@ inline CameraFrame cameraFrame(Camera camera, int width, int height) {
     const Vec3 eye{camera.distance * std::cos(camera.pitch) * std::sin(camera.yaw), camera.distance * std::sin(camera.pitch), camera.distance * std::cos(camera.pitch) * std::cos(camera.yaw)};
     const Vec3 forward = unit(eye * -1);
     const Vec3 right = unit(cross(forward, {0, 1, 0}));
-    return {eye, right, cross(right, forward), forward, height / (2 * std::tan(0.48)), width, height};
+    return {eye, right, cross(right, forward), forward, height / (2 * std::tan(0.35)), width, height};
 }
 ```
 
@@ -46,7 +52,7 @@ Source của bộ dựng vỏ được cung cấp để project tự chạy đ�
 {/* snippet include/context-mesh.hpp#context-build */}
 
 ```cpp title="include/context-mesh.hpp — Scaffold dựng vỏ từ dữ liệu thực"
-inline Mesh buildContextMesh(const Volume& volume) {
+inline Mesh buildContextMesh(const Volume& volume, bool showMinerals = false) {
     // Two-voxel stride is explicitly a presentation approximation, never a measurement.
     std::array<std::vector<int>, 3> coordinates;
     for (int axis = 0; axis < 3; ++axis) {
@@ -72,6 +78,8 @@ inline Mesh buildContextMesh(const Volume& volume) {
                     if (ix >= 0 && iy >= 0 && iz >= 0 && ix < volume.grid().size[0] && iy < volume.grid().size[1] && iz < volume.grid().size[2])
                         scalar[corner] = volume.at(ix, iy, iz);
                 }
+                const auto limits = std::minmax_element(scalar.begin(), scalar.end());
+                if (*limits.second < contextIso || *limits.first >= contextIso) continue;
                 for (const auto& tetrahedron : tetrahedra) {
                     std::array<Vec3, 4> positions;
                     std::array<double, 4> values;
@@ -79,7 +87,7 @@ inline Mesh buildContextMesh(const Volume& volume) {
                         positions[vertex] = points[tetrahedron[vertex]];
                         values[vertex] = scalar[tetrahedron[vertex]];
                     }
-                    meshTetrahedron(volume, positions, values, mesh);
+                    meshTetrahedron(volume, positions, values, mesh, showMinerals);
                 }
             }
         }
@@ -99,13 +107,18 @@ Sau khi clip vỏ, mỗi cap dùng trục fixed và hai trục nằm trên mặt
 ```cpp title="include/raster.hpp — Ba cap dùng đúng ba ảnh đang xem"
 const Vec3 upper = grid.origin + grid.extent();
 for (int view = 0; view < 3; ++view) {
+    if (sectionAxis >= 0 && view != sectionView) continue;
     const Axes axes = axesFor(view);
     Vec3 normal;
     normal[axes.fixed] = 1;
     Vec3 a = probe;
-    Vec3 b = probe;
-    Vec3 c = probe;
-    Vec3 d = probe;
+    if (sectionAxis >= 0) {
+        a[axes.horizontal] = grid.origin[axes.horizontal];
+        a[axes.vertical] = grid.origin[axes.vertical];
+    }
+    Vec3 b = a;
+    Vec3 c = a;
+    Vec3 d = a;
     b[axes.horizontal] = upper[axes.horizontal];
     c[axes.horizontal] = upper[axes.horizontal];
     c[axes.vertical] = upper[axes.vertical];
@@ -126,11 +139,42 @@ Nhìn nhánh view XY: z giữ bằng probe.z, x/y đi từ probe tới các mặ
 ```cpp title="include/state.hpp — Dựng ảnh phối cảnh sau khi có các lát"
 if (!scene) scene = std::make_unique<Raster>(820, 620);
 const auto started = std::chrono::steady_clock::now();
-drawContext(*scene, cameraFrame(camera, 820, 620), mesh, grid(), probe, slices, window, colored, cut);
+int sectionView = -1;
+if (preset == Preset::Specimen) sectionView = activeView;
+drawContext(*scene, cameraFrame(camera, 820, 620), mesh, grid(), probe, slices, window, colored, cut, sectionView);
 sceneMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
 ```
 
 `sceneMs` là thời gian CPU dựng ảnh context ở lần refresh, không phải một benchmark FPS chuẩn. GPU chỉ trình bày texture qua SDL; không có compute shader hay phép tích lũy thể tích dọc tia ở đây.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="53" step={6} path="include/input.hpp" />
+<CourseWorkFile project="53" step={6} path="include/stage.hpp" />
+<CourseWorkFile project="53" step={6} path="include/state.hpp" />
+<CourseWorkFile project="53" step={6} path="include/ui.hpp" />
+<CourseWorkFile project="53" step={6} path="src/main.cpp" />
+
+Đổi sang YZ rồi xoay viên đá. Vẫn phải nhìn ra phần cắt dọc như trong ô YZ; không xoay cả ba ảnh để làm cho hai hình ngẫu nhiên giống nhau.
+
+Đá chỉ bị bỏ đi ở nửa trước của mặt đang chọn. Đối chiếu hướng XY/XZ/YZ với trục cố định trước khi nghĩ rằng ảnh bên trái bị lật.
+
+{/* snippet include/raster.hpp#geode-section */}
+
+```cpp title="include/raster.hpp — Chọn đúng mặt đang cưa"
+if (sectionAxis >= 0) {
+    // Saw the rock on the same plane as the selected XY, XZ or YZ image.
+    const double a = triangle[0].point[sectionAxis], b = triangle[1].point[sectionAxis], c = triangle[2].point[sectionAxis];
+    if (std::max({a, b, c}) <= sectionPlane) raster.triangle(frame, triangle, grid, nullptr, 0, window, colored);
+    else if (std::min({a, b, c}) < sectionPlane) {
+        const std::vector<Vertex> face(triangle.begin(), triangle.end());
+        const auto visible = clipPolygon(face, sectionAxis, sectionPlane, true);
+        for (std::size_t i = 1; i + 1 < visible.size(); ++i)
+            raster.triangle(frame, {visible[0], visible[i], visible[i + 1]}, grid, nullptr, 0, window, colored);
+    }
+    continue;
+}
+```
 
 ## Ghép các phần lại
 

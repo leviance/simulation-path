@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Kiểm chứng hình học và chạy project hoàn chỉnh
 
@@ -27,6 +28,11 @@ Box phải có mọi thành phần point nằm trong bounds và ít nhất một
 Inspector hiện các quan hệ số để bạn quan sát, nhưng CTest mới giữ các ca hồi quy. Residual point−ray.at(t) trong Canvas chỉ kiểm quan hệ lưu record, không phải oracle độc lập vì point vốn được dựng bằng chính at. Residual plane và các test phương trình hình mới kiểm thêm một điều khác.
 
 ## Viết code từng bước
+
+Trước khi tin các dấu trên mặt bàn, tự chuẩn bị bốn ca: tia song song mặt bàn, tia bắt đầu trong cầu, tia dọc mặt hộp và tia đi cạnh tam giác. Ghi đáp án có thể tính tay, sau đó mới chạy bộ kiểm.
+
+<CourseWorkFile project="52" step={8} path="include/validation.hpp" />
+<CourseWorkFile project="52" step={8} path="include/panel.hpp" />
 
 ### Bước 1 — Dùng test runner không bị Release bỏ qua
 
@@ -134,6 +140,8 @@ inline ValidationReport validateHits(const Ray& ray, const Scene& scene, const s
 ```
 
 `drawPanel` gọi validateHits cho dữ liệu đang hiển thị và đọc report ngay trong cửa sổ C++. Nút “Kiểm hit hiện tại” ở Canvas chốt một lần kiểm, dừng scan; nếu ray hoặc geometry đổi, nhãn yêu cầu kiểm lại thay vì giữ PASS cũ. Một tia miss có thể chỉ có một check valid(ray) và không có lỗi. Vì thế PASS chỉ nói các record được báo là nhất quán, không chứng minh query không bỏ sót hit. Các ca nghiệm biết trước trong CTest vẫn cần thiết.
+
+Đối chiếu phím kiểm với ảnh: chấm trắng ở điểm chạm, pháp tuyến xanh lá và hình thoi tại điểm ra của vật đặc không phải ba tên gọi cho một đại lượng.
 
 ## Ghép các phần lại
 

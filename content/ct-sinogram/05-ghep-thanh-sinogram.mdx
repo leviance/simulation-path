@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Ghép các góc đo thành sinogram
 
@@ -22,15 +23,29 @@ Một scan chưa hoàn tất còn nhiều hàng chưa đo. Không điền 0 vào
 
 ## Viết code từng bước
 
+Sau khi có một hàng số đo, ta cần biết đâu là hàng đã đo và đâu là hàng chưa có. Một tia chỉ đi qua không khí cho p=0 thật; nếu dùng 0 để đánh dấu cả hàng trống, bản đồ sẽ nói dối.
+
+<CourseWorkFile project="56" step={5} path="include/scan.hpp" />
+<CourseWorkFile project="56" step={5} path="include/view.hpp" />
+
 ### Bước 1 — Tạo bộ dữ liệu chưa đo
 
+{/* snippet include/scan.hpp#store-row */}
+
 ```cpp title="include/scan.hpp"
-struct Scan {
-    Settings settings;
-    Scene scene;
-    std::vector<double> values;
-    int acquired = 0;
-};
+inline bool acquireOne(Scan& scan) {
+    if (scan.acquired >= scan.settings.views) {
+        return false;
+    }
+    const double angle = viewAngle(scan.acquired, scan.settings.views);
+    const auto row = project(angle, scan.scene, scan.settings.strength);
+    for (int column = 0; column < detectorCount; ++column) {
+        const int index = column + detectorCount * scan.acquired;
+        scan.values[index] = row[column].projection;
+    }
+    ++scan.acquired;
+    return true;
+}
 ```
 
 makeScan validate settings, chụp scene theo preset và cấp 128*views phần tử NaN. Settings và scene thuộc lượt quét này; không đọc trực tiếp một biến giao diện có thể đổi giữa chừng.
@@ -155,6 +170,13 @@ inline std::optional<std::array<int, 2>> pickCell(float x, float y, int views) {
 Trừ góc vùng ảnh để được vị trí local, chia chiều rộng/cao để đưa về [0,1), rồi nhân số cột/hàng. Mép phải/dưới bị loại để không sinh column 128 hoặc row=views. Trong nhánh mouse-down/motion của main, gọi SDL_ConvertEventToRenderCoordinates trước khi lấy x/y và gọi pickCell. Khi có kết quả, cập nhật controls.column/row, paused và dirty; không gọi acquireOne. Pointer capture giữ thao tác kéo, mouse-up/blur hủy capture. Phần letterbox ngoài ảnh không phải dữ liệu.
 
 Chọn hàng chưa đo vẫn có thể dựng preview từ phantom. Readout phải ghi rõ **chưa đo**; preview không được lén ghi thêm hàng vào scan.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="56" step={5} path="include/controls.hpp" />
+<CourseWorkFile project="56" step={5} path="src/main.cpp" />
+
+Giấu các hàng chưa đo bằng một màu khác. Chọn một ô trong vùng đó: sơ đồ được phép xem trước tia nhưng bộ đếm hàng đã đo không được tăng.
 
 ## Ghép các phần lại
 

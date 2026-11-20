@@ -1,7 +1,7 @@
 import type { PublishedProjectEditorial } from "../../types";
 const data = {
   summary:
-    "Tự xây công cụ chọn hình 3D bằng tia từ chuột: nhìn cảnh trước, tìm giao plane/sphere/AABB/triangle rồi chọn bề mặt gần nhất. Đọc t, point, normal, entry/exit và barycentric để kiểm được cả những lần tia không chạm.",
+    "Bàn đo quang học đặt một quả cầu, hộp, mặt phẳng và tấm tam giác cạnh các vạch cách nhau một đơn vị. Hãy tự viết công cụ tìm chỗ tia đi vào, đi ra, lướt qua mép hoặc dừng trước khi chạm.",
   duration: "11–14 giờ, chưa tính cài đặt/build lần đầu",
   prerequisites: [
     "Project 01–05 — SDL window, renderer, input và đổi hệ tọa độ",
@@ -22,9 +22,9 @@ const data = {
   challenge: {
     timebox: "90–120 phút tự thử trước khi đọc lời giải",
     mission:
-      "Tự xây một công cụ C++20/SDL3 để khảo sát tia trong cảnh 3D có mặt phẳng, quả cầu, hộp song song các trục và tam giác. Người dùng ngắm bắn, di chuyển nguồn tia hoặc vật thể, rồi đổi góc nhìn để xem điểm chạm và hướng pháp tuyến.",
+      "Dựng một bàn đo 3D. Di chuyển đầu dò cho tia lần lượt đi qua hai vật, rồi rút ngắn tầm đo để xem còn những điểm chạm nào. Chứng minh mỗi dấu trên màn hình đến từ hình học thực.",
     outcome:
-      "Một cảnh có bề mặt, ánh sáng và chiều sâu; cửa sổ ngắm nhỏ cho biết tia đi qua pixel nào, còn góc nhìn quan sát cho thấy cả đường tia. Bảng ngay trong ứng dụng đọc được t, point, normal, frontFace và khoảng vào/ra của sphere/AABB, không phải mở console để dùng công cụ.",
+      "Mặt bàn có vạch, thân nguồn, bốn vật và một ô ngắm độc lập với camera quan sát. Chấm trắng chỉ lần chạm gần nhất, mũi tên xanh lá là pháp tuyến, hình thoi hổ phách là điểm ra của vật đặc.",
     requirements: [
       "World x sang phải, y lên, z xa camera ban đầu; camera (0,1.5,−7) nhìn (0,0.3,0), vertical FOV 55°.",
       "Vẽ cảnh trước khi thêm picking: plane y=−1, sphere tâm (−1.5,0,0) bán kính 0.85, box min=(0.3,−0.9,0), max=(1.7,0.7,1.4), triangle A=(−0.9,0.4,2.5), B=(1,0.4,2.5), C=(0.1,2.3,2.5). Tam giác được nâng lên để không bị hộp che hết ở góc nhìn ban đầu.",

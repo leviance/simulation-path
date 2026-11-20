@@ -1,4 +1,5 @@
 #pragma once
+#include "geode.hpp"
 #include "volume.hpp"
 #include <string_view>
 
@@ -10,7 +11,7 @@ inline std::string_view presetName(Preset preset) {
     if (preset == Preset::Gaussian) return "GAUSSIAN";
     if (preset == Preset::Layers) return "LAYERS";
     if (preset == Preset::Ramp) return "XYZ RAMP";
-    return "DRILLED SPECIMEN";
+    return "AGATE GEODE";
 }
 
 #if LAB_CHECKPOINT >= 1
@@ -38,22 +39,7 @@ inline double fieldValue(Preset preset, Vec3 point) {
     if (preset == Preset::Ramp)
         return 0.1 + 0.2 * (point.x + 80) / 160 + 0.3 * (point.y + 96) / 192 + 0.4 * (point.z + 112) / 224;
 
-    const double q = std::sqrt(std::pow(point.x / 70, 2) + std::pow(point.y / 82, 2) + std::pow(point.z / 96, 2));
-    if (q > 1.0) return 0.0;
-    const double boreX = point.x - 15 * std::sin(point.z / 26);
-    const double boreY = point.y - 0.22 * point.z - 8;
-    if (boreX * boreX + boreY * boreY < 7.5 * 7.5) return 0.02;
-    const double transverse = std::pow((point.y + 27) / 10, 2) + std::pow((point.z - 15) / 13, 2);
-    if (transverse < 1.0) return 0.02;
-    if (q > 0.87) {
-        const double t = std::clamp((1.0 - q) / 0.08, 0.0, 1.0);
-        return 0.58 * t * t * (3.0 - 2.0 * t);
-    }
-    const double coreA = std::pow((point.x + 24) / 19, 2) + std::pow((point.y - 21) / 28, 2) + std::pow((point.z + 24) / 31, 2);
-    const double coreB = std::pow((point.x - 25) / 22, 2) + std::pow((point.y + 10) / 20, 2) + std::pow((point.z - 26) / 27, 2);
-    if (coreA < 1.0) return 0.93 - 0.12 * coreA;
-    if (coreB < 1.0) return 0.70 - 0.12 * coreB;
-    return 0.25 + 0.055 * std::cos(5 * q);
+    return geodeField(point);
 }
 
 // [snippet fill-volume]

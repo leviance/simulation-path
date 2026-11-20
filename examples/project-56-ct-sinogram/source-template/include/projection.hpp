@@ -27,6 +27,7 @@ inline Measurement measure(const Beam& beam, const Scene& scene, double strength
     return result;
 }
 
+// [snippet one-row]
 inline Projection project(double angle, const Scene& scene, double strength) {
     Projection row;
     for (int column = 0; column < detectorCount; ++column) {
@@ -35,5 +36,6 @@ inline Projection project(double angle, const Scene& scene, double strength) {
     }
     return row;
 }
+// [/snippet one-row]
 #endif
 } // namespace ct

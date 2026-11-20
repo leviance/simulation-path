@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Cộng tín hiệu của hai năng lượng trước khi lấy log
 
@@ -32,9 +33,15 @@ Nhân đôi chiều dài của cả hai thành phần thì tauLow=2, tauHigh=0.4
 
 ## Viết code từng bước
 
+Giả sử đầu phát cho hai thành phần, vỏ cho chúng đi qua gần như nhau nhưng pin thì không. Detector cộng tín hiệu đến nơi, không cộng hai sắc xám đã lấy log. Viết phép trộn đúng ở chỗ tạo số đo.
+
+<CourseWorkFile project="55" step={7} path="include/projection.hpp" />
+
 ### Bước 1 — Tổng hợp transmission của từng thành phần
 
 Nhánh spectral mới trong transmission:
+
+{/* snippet include/projection.hpp#two-bands */}
 
 ```cpp title="include/projection.hpp"
 inline double transmission(Depth depth, [[maybe_unused]] Settings settings) {
@@ -69,9 +76,11 @@ Trong midpoint cũng cộng hai mu*ds riêng. Không dùng mu trung bình trư�
 
 validate kiểm lowWeight trong [0,1] và các tham số khác:
 
+{/* snippet include/model.hpp#measurement-settings */}
+
 ```cpp title="include/model.hpp"
 inline void validate(Settings settings) {
-    if (!std::isfinite(settings.angle) || std::abs(settings.angle) > pi || !std::isfinite(settings.strength) || settings.strength < 0 || settings.strength > 3 || settings.preset < 0 || settings.preset > 2) {
+    if (!std::isfinite(settings.angle) || std::abs(settings.angle) > pi || !std::isfinite(settings.strength) || settings.strength < 0 || settings.strength > 3 || settings.preset < 0 || settings.preset > 3) {
         throw std::invalid_argument("Invalid angle, strength or preset");
     }
     if (!std::isfinite(settings.stepLength) || settings.stepLength < 0.05 || settings.stepLength > 0.5 || !std::isfinite(settings.logRange) || settings.logRange < 0.5 || settings.logRange > 12) {
@@ -84,6 +93,12 @@ inline void validate(Settings settings) {
 ```
 
 Weight âm hoặc tổng không1 có thể làm ratio không còn trong [0,1]. Hàm transmission không tự đoán normalization của một spectrum tùy ý; ta chỉ hỗ trợ hai weights w và1−w.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="55" step={7} path="src/main.cpp" />
+
+Chỉnh toàn bộ trọng số về một đầu để quay lại phép đo đơn thành phần. Nếu hai đầu đều như nhau ở vùng có pin, đọc lại hai hệ số vật liệu đã truyền vào.
 
 ## Ghép các phần lại
 

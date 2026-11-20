@@ -1,5 +1,19 @@
 # Project 54 — Volume Lightbox
 
+## Từ starter tới chương trình của bạn
+
+Nhìn giữa hai tháp của đám mây dông hình đe, sau đó so cùng tia ở ba chế độ MIP, average và alpha. Ở camera mặc định và 128³, tia giữa đi qua hai vùng có mật độ trên 0,10: t xấp xỉ 2,50–2,81 và 3,17–3,57. Màu bầu trời không tham gia phép đo.
+
+Giải nén ZIP vào một thư mục riêng, mở terminal cạnh CMakeLists.txt. CMake sẽ tạo thư mục work từ starter đúng một lần. Bạn viết tiếp trong đó qua tất cả các bài; không chép final lên bài làm.
+
+```bash
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_54_work --parallel 1
+```
+
+Với Visual Studio, mở build-work/Release/project_54_work.exe; với generator một cấu hình, mở build-work/project_54_work. Cuối học phần, build thêm target project_54_tests và chạy ctest --test-dir build-work -C Release --output-on-failure --timeout 20. Lần này CTest đọc header trong work/include, không đọc đáp án final/include.
+
+
 **Nhìn xuyên khối sương 3D bằng fragment shader.** Xoay góc nhìn quanh khối dữ liệu, chuyển MIP/average/alpha, chọn một tia để đọc từng mẫu và đo chất lượng–chi phí khi đổi step. Đây là ứng dụng C++/SDL3/OpenGL độc lập; không cần chạy website hoặc ghép source project khác.
 
 ## Mục đích và cách học
@@ -42,7 +56,7 @@ Ví dụ Bài 5: target `project_54_checkpoint_5`, thư mục source `checkpoint
 
 - Final mặc định **128³ = 2.097.152 Float32 / 8 MiB** CPU, texture **GL_R32F** tương ứng trên GPU. N=64 dùng 262.144 mẫu / 1 MiB để học/so sánh; không thay mức nghiệm thu 128³.
 - Box **[-1,1]³**, spacing **2/N**, tâm i = -1+(i+0.5)*spacing; x-fastest `x+N*(y+N*z)`. World unit tùy chọn, không phải mm/HU.
-- Dataset: sương xoắn tổng hợp, hai lõi, slab, constant 0.25, ramp XYZ, empty. Đây là dữ liệu tĩnh, **không phải fluid solver**.
+- Dataset mặc định: mây dông có hai tháp và tán hình đe. Mẫu đối chứng: hai lõi, slab, constant 0.25, ramp XYZ, empty. Đây là dữ liệu tĩnh, **không phải fluid solver**.
 - Viewer perspective dùng drawable thật, không phóng ảnh 240×180 thành sản phẩm cuối. Tab mở toàn cửa sổ; số ray pixels thực luôn hiện ở Tools. Target tối đa **4 Mi pixels**, 4096 mỗi chiều, RGBA32F tối đa 64 MiB payload; quá ngân sách phải giảm và công bố kích thước thật.
 - Volume chỉ fill/upload khi đổi dataset/N. Có candidate mới trước khi commit; thất bại giữ dữ liệu trước. Camera/transfer không sửa raw density.
 

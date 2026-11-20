@@ -1,4 +1,5 @@
 #include "audit.hpp"
+#include "gpu-detector.hpp"
 #include "view.hpp"
 #include <cstdlib>
 #include <iomanip>
@@ -8,9 +9,12 @@
 
 int main(int argc, char** argv) {
     bool smoke = false;
+    const char* capture = nullptr;
     for (int i = 1; i < argc; ++i) {
         if (std::string_view(argv[i]) == "--smoke") {
             smoke = true;
+        } else if (std::string_view(argv[i]) == "--capture" && i + 1 < argc) {
+            capture = argv[++i];
         }
     }
     // Khởi tạo SDL và renderer; starter chỉ có event loop và nền tối.
@@ -19,7 +23,7 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-    if (smoke) {
+    if (smoke || capture != nullptr) {
         flags |= SDL_WINDOW_HIDDEN;
     }
     SDL_Window* window = SDL_CreateWindow("Toy X-ray detector", xray::viewWidth, xray::viewHeight, flags);
@@ -43,8 +47,31 @@ int main(int argc, char** argv) {
         }
         SDL_SetRenderVSync(renderer, 1);
         [[maybe_unused]] xray::Settings settings;
+#if LAB_CHECKPOINT >= 9
+        xray::GpuDetector detector;
+        detector.open();
+        xray::Settings measuredSettings;
+        bool hasMeasurement = false;
+#endif
+#if LAB_CHECKPOINT >= 10
+        if (capture != nullptr) {
+            for (int fixture = 0; fixture < 4; ++fixture) {
+                auto test = settings;
+                test.preset = fixture;
+                test.angle = 0.23;
+                test.spectral = fixture == 2;
+                test.numeric = fixture == 1;
+                const auto scene = xray::makeScene(fixture);
+                detector.integrate(scene, test);
+                const double difference = xray::detectorError(detector, scene, test);
+                if (!(difference < 0.0001)) throw std::runtime_error("GPU transmission differs from CPU");
+                std::cout << "GPU/CPU fixture " << fixture << " max abs(T) " << difference << '\n';
+            }
+        }
+#endif
         [[maybe_unused]] bool imageDirty = true;
         [[maybe_unused]] bool inspectorDirty = true;
+        [[maybe_unused]] std::string reading;
         [[maybe_unused]] int pixelX = 40;
         [[maybe_unused]] int pixelY = 30;
 #if LAB_CHECKPOINT >= 1
@@ -158,7 +185,7 @@ int main(int argc, char** argv) {
                     }
 #if LAB_CHECKPOINT >= 4
                     if (event.key.key == SDLK_P) {
-                        settings.preset = (settings.preset + 1) % 3;
+                        settings.preset = (settings.preset + 1) % 4;
                     }
                     if (event.key.key == SDLK_W) {
                         settings.strength = std::min(3.0, settings.strength + 0.1);
@@ -206,6 +233,11 @@ int main(int argc, char** argv) {
 #if LAB_CHECKPOINT >= 8
                     if (event.key.key == SDLK_V) {
                         std::cout << "Audit PASS; max boundary optical-depth error=" << xray::audit() << '\n';
+#if LAB_CHECKPOINT >= 10
+                        const auto scene = xray::makeScene(settings.preset);
+                        detector.integrate(scene, settings);
+                        std::cout << "GPU/CPU max abs(T)=" << xray::detectorError(detector, scene, settings) << '\n';
+#endif
                     }
 #endif
                     imageDirty = imageDirty || xray::imageChanged(before, settings);
@@ -234,7 +266,21 @@ int main(int argc, char** argv) {
 #if LAB_CHECKPOINT >= 1
             // Rebuild the whole image only when image parameters change.
             if (imageDirty) {
+#if LAB_CHECKPOINT >= 9
+                // Chỉ thay thang màu thì tô lại raw, không gửi tia qua vật lần nữa.
+                measuredSettings.logView = settings.logView;
+                measuredSettings.logRange = settings.logRange;
+                measuredSettings.invert = settings.invert;
+                measuredSettings.exposure = settings.exposure;
+                if (!hasMeasurement || measuredSettings != settings) {
+                    detector.integrate(xray::makeScene(settings.preset), settings);
+                    measuredSettings = settings;
+                    hasMeasurement = true;
+                }
+                xray::upload(texture, detector.display(settings));
+#else
                 xray::upload(texture, xray::makeImage(settings));
+#endif
                 imageDirty = false;
             }
 #if LAB_CHECKPOINT >= 4
@@ -242,6 +288,9 @@ int main(int argc, char** argv) {
             if (inspectorDirty) {
                 const auto measurement = xray::measure(xray::detectorRay((pixelX + 0.5) / xray::imageWidth, (pixelY + 0.5) / xray::imageHeight), xray::makeScene(settings.preset), settings);
                 std::ostringstream title;
+                std::ostringstream cell;
+                cell << std::fixed << std::setprecision(3) << "Cell (" << pixelX << "," << pixelY << ")  |  tau=" << measurement.depth.low << "  T=" << measurement.ratio << "  I=" << measurement.intensity;
+                reading = cell.str();
                 title << std::fixed << std::setprecision(5) << "Toy X-ray | pixel " << pixelX << ',' << pixelY << " | tauLow=" << measurement.depth.low << " T=" << measurement.ratio << " I=" << measurement.intensity;
 #if LAB_CHECKPOINT >= 6
                 title << " p=" << measurement.logProjection;
@@ -249,7 +298,9 @@ int main(int argc, char** argv) {
 #if LAB_CHECKPOINT >= 7
                 title << " tauHigh=" << measurement.depth.high;
 #endif
-                title << " | XZ projection";
+#if LAB_CHECKPOINT >= 9
+                title << " | GPU raw T=" << detector.raw[pixelX + xray::imageWidth * pixelY];
+#endif
                 if (!SDL_SetWindowTitle(window, title.str().c_str())) {
                     throw std::runtime_error(SDL_GetError());
                 }
@@ -261,6 +312,7 @@ int main(int argc, char** argv) {
                 throw std::runtime_error(SDL_GetError());
             }
 #if LAB_CHECKPOINT >= 1
+            xray::benchHeading(renderer, reading, settings.logView);
             if (!SDL_RenderTexture(renderer, texture, nullptr, &xray::imageRect)) {
                 throw std::runtime_error(SDL_GetError());
             }
@@ -268,6 +320,14 @@ int main(int argc, char** argv) {
 #if LAB_CHECKPOINT >= 2
             xray::drawGeometry(renderer, settings, pixelX, pixelY);
 #endif
+            if (capture != nullptr) {
+                SDL_Surface* frame = SDL_RenderReadPixels(renderer, nullptr);
+                if (!frame) throw std::runtime_error(SDL_GetError());
+                const bool saved = SDL_SavePNG(frame, capture);
+                SDL_DestroySurface(frame);
+                if (!saved) throw std::runtime_error(SDL_GetError());
+                running = false;
+            }
             if (!SDL_RenderPresent(renderer)) {
                 throw std::runtime_error(SDL_GetError());
             }

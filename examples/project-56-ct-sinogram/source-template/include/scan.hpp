@@ -4,7 +4,7 @@
 namespace ct {
 #if LAB_CHECKPOINT >= 5
 inline double viewAngle(int row, int views) {
-    if ((views != 30 && views != 60 && views != 120) || row < 0 || row >= views) {
+    if (!supportedViews(views) || row < 0 || row >= views) {
         throw std::invalid_argument("Invalid view index");
     }
     return 2 * pi * row / views;
@@ -24,6 +24,7 @@ inline Scan makeScan(Settings settings) {
     return {settings, makeScene(settings.preset), std::vector<double>(count, std::numeric_limits<double>::quiet_NaN()), 0};
 }
 
+// [snippet store-row]
 inline bool acquireOne(Scan& scan) {
     if (scan.acquired >= scan.settings.views) {
         return false;
@@ -37,9 +38,11 @@ inline bool acquireOne(Scan& scan) {
     ++scan.acquired;
     return true;
 }
+// [/snippet store-row]
 
 #if LAB_CHECKPOINT >= 6
 // Never catch up an unbounded number of views after a slow frame.
+// [snippet row-budget]
 inline int advance(Scan& scan, int budget) {
     if (budget < 0 || budget > 2) {
         throw std::invalid_argument("At most two views per frame");
@@ -50,6 +53,7 @@ inline int advance(Scan& scan, int budget) {
     }
     return completed;
 }
+// [/snippet row-budget]
 #endif
 
 #if LAB_CHECKPOINT >= 8

@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Cho photon tán xạ nhiều lần
 
@@ -18,17 +19,25 @@ Nếu tán xạ, project chọn angle=2πU và direction=(cos angle,sin angle). 
 
 ## Viết code từng bước
 
+Tăng tán xạ trong nước: một photon có thể đổi hướng nhiều lần mà vẫn chỉ có **một** kết cục. Sau mỗi lần tán xạ, tính lại khoảng cách từ vị trí và hướng mới tới biên.
+
+<CourseWorkFile project="57" step={5} path="include/transport.hpp" />
+<CourseWorkFile project="57" step={5} path="include/model.hpp" />
+
 ### Bước 1 — Dùng đúng xác suất tại collision
 
 Ta tiếp tục sửa `advancePhoton` của bài trước. Hàm này trả về `void` và cập nhật Photon/Trace qua reference; `return;` chỉ kết thúc **một bước**, không trả về lịch sử cho caller.
 
+{/* snippet include/transport.hpp#turn-after-event */}
+
 ```cpp title="include/transport.hpp"
-        const double absorptionProbability = settings.muA / (settings.muA + settings.muS);
-        if (random.uniform() < absorptionProbability) {
-            trace.vertices.push_back({value.position, Event::Absorption});
-            trace.status = Status::Absorbed;
-            return;
-        }
+inline Point scatterDirection(double u) {
+    if (!std::isfinite(u) || u <= 0 || u >= 1) {
+        throw std::invalid_argument("Invalid scattering sample");
+    }
+    const double angle = 2 * std::numbers::pi * u;
+    return {std::cos(angle), std::sin(angle)};
+}
 ```
 
 Nhánh thoát vẫn được xử lý trước đoạn này. Chỉ vào đây khi có tương tác trong medium, nên muT>0 và phép chia hợp lệ. MuS=0 cho xác suất1, muA=0 cho xác suất0. Không tung thêm một đồng xu “50/50” khi hai hệ số khác nhau.
@@ -91,6 +100,14 @@ Giới hạn thấp có ích để thấy vấn đề ngay. Chọn preset chỉ 
 Mỗi Trace có Emission rồi các Scatter, cuối cùng có thể Absorption/Escape. Nếu Censored, vertex cuối vẫn là Scatter; không thêm một sự kiện hấp thụ giả. Canvas có Về điểm phát/Xem đỉnh kế và thanh kéo; native Left/Right hoặc kéo timeline.
 
 Đường đi đã được tính hữu hạn trước khi xem. Timeline chỉ lộ dần các vertex đã ghi, không tung RNG thêm ở mỗi lần bấm. Màu marker theo sự kiện tại **đỉnh đang xem**, không lấy màu kết cục cuối để tô mọi đỉnh trước đó.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="57" step={5} path="include/controls.hpp" />
+<CourseWorkFile project="57" step={5} path="include/view.hpp" />
+<CourseWorkFile project="57" step={5} path="src/main.cpp" />
+
+Giới hạn một lần tương tác rồi tìm một đường bị dừng vì chạm giới hạn. Nó chưa được tính là hấp thụ hay đã tới màn; giữ nó ở nhóm riêng.
 
 ## Ghép các phần lại
 

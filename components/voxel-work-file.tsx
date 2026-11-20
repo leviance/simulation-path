@@ -6,12 +6,18 @@ import { voxelWorkEdits } from "@/lib/voxel-work-edits";
 import { HighlightedCode } from "./highlighted-code";
 
 type WorkFileProps = { project: string; step: number; file: string };
-export function VoxelWorkFile(props: WorkFileProps) {
-  return <WorkFile key={props.project + ":" + props.step + ":" + props.file} {...props} />;
+type WorkPathProps = { project: string; step: number; path: string };
+
+export function VoxelWorkFile({ project, step, file }: WorkFileProps) {
+  return <CourseWorkFile project={project} step={step} path={`include/trail/${file}.hpp`} />;
 }
 
-function WorkFile({ project, step, file }: WorkFileProps) {
-  const path = "include/trail/" + file + ".hpp";
+export function CourseWorkFile(props: WorkPathProps) {
+  return <WorkFile key={props.project + ":" + props.step + ":" + props.path} {...props} />;
+}
+
+function WorkFile({ project, step, path }: WorkPathProps) {
+  const language = /\.(vert|frag|glsl|comp)$/.test(path) ? "glsl" : "cpp";
   const [open, setOpen] = useState(false);
   const [edits, setEdits] = useState<ReturnType<typeof voxelWorkEdits>>();
   const [error, setError] = useState("");
@@ -89,11 +95,11 @@ function WorkFile({ project, step, file }: WorkFileProps) {
             {edit.remove.length > 0 && (
               <details>
                 <summary>Đoạn cũ cần bỏ ({edit.remove.length} dòng)</summary>
-                <HighlightedCode code={edit.remove.join("\n")} language="cpp" />
+                <HighlightedCode code={edit.remove.join("\n")} language={language} />
               </details>
             )}
             {edit.write.length > 0 && (
-              <HighlightedCode code={edit.write.join("\n")} language="cpp" />
+              <HighlightedCode code={edit.write.join("\n")} language={language} />
             )}
           </section>
         ))}

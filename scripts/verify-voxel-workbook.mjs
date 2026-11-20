@@ -16,12 +16,13 @@ import { installShutdownHandlers, ProcessSupervisor } from "./process-supervisor
 import { replayLesson, snapshot, textAt, workPaths } from "./voxel-workbook-replay.mjs";
 
 const [id, sdlDirectory] = process.argv.slice(2);
+const science = /^5[2-7]$/.test(id);
 const project = loadProjectCatalog().find(
-  (p) => p.id === id && p.sourceSeries === "voxel-expedition",
+  (p) => p.id === id && (science || p.sourceSeries === "voxel-expedition"),
 );
 if (!project || !sdlDirectory || !existsSync(path.join(sdlDirectory, "SDL3Config.cmake")))
   throw Error(
-    "Usage: node --experimental-strip-types scripts/verify-voxel-workbook.mjs <58..64> <installed SDL3 3.4.8 CMake directory>",
+    "Usage: node --experimental-strip-types scripts/verify-voxel-workbook.mjs <52..64> <installed SDL3 3.4.8 CMake directory>",
   );
 const sdl = realpathSync(sdlDirectory);
 const archive = path.join(workspace, "public", "downloads", project.sourceDirectory + ".zip");
@@ -67,7 +68,7 @@ const configure = (dir, conf) =>
       ".",
       "-B",
       dir,
-      "-DVOXEL_WORKBOOK=ON",
+      science ? "-DCOURSE_WORKBOOK=ON" : "-DVOXEL_WORKBOOK=ON",
       "-DCOURSE_USE_INSTALLED_SDL3=ON",
       "-DSDL3_DIR=" + sdl,
       "-DCMAKE_BUILD_TYPE=" + conf,
@@ -98,7 +99,12 @@ try {
   let previous = snapshot(path.join(scratch, "starter"));
   assert.deepEqual(learner, previous);
   await build("build-work", "Release", "_work");
-  assert.match(await run(app, ["--smoke"], "starter"), /PASS native frame:/);
+  const flags = ["52", "53", "54"].includes(id) ? ["--frames", "3"] : ["--smoke"];
+  if (id === "53" || id === "54") flags.push("--hidden");
+  const observed = science
+    ? /SDL smoke PASS|Completed 3 frame|"frames":3|frames=3/
+    : /PASS native frame:/;
+  assert.match(await run(app, flags, "starter", 15000), observed);
   for (const [index, file] of lessons.entries()) {
     const step = index + 1;
     const changed = workPaths(textAt(lessonDir, file), id, step);
@@ -111,8 +117,8 @@ try {
       assert.deepEqual(snapshot(workDir), learner);
     }
     await build("build-work", "Release", "_work");
-    const smoke = await run(app, ["--smoke"], "run learner step " + step, 15_000);
-    assert.match(smoke, /PASS native frame:/);
+    const smoke = await run(app, flags, "run learner step " + step, 15_000);
+    assert.match(smoke, observed);
     if (id === "58" && step === 1) assert.match(smoke, /1 blocks, 6 quads/);
     console.log(id + "." + step + " " + smoke.trim().split("\n").at(-1));
     previous = after;

@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Lưu 128³ mẫu rồi đưa lên texture 3D
 
@@ -19,6 +20,12 @@ Trong texture coordinate, tâm i nằm ở `(i+0.5)/N`. Mapping `uvw=(world+1)/2
 <InteractiveLab demo="volume-ray-marching" mode="fog54-4" />
 
 ## Viết code từng bước
+
+Điều tạo nên hai tháp mây không phải màu của bầu trời, mà là mảng 128³ mật độ tĩnh. Ghi trường mẫu theo cùng một thứ tự x/y/z, kiểm bằng số trên CPU rồi mới nạp texture 3D.
+
+<CourseWorkFile project="54" step={4} path="include/volume.hpp" />
+<CourseWorkFile project="54" step={4} path="include/renderer.hpp" />
+<CourseWorkFile project="54" step={4} path="shaders/volume.frag" />
 
 ### 1. Giữ storage và hình học thống nhất
 
@@ -42,7 +49,7 @@ Không dùng N-1 để tính spacing của box này: các mẫu ở tâm ô, kh�
 
 ### 2. Điền mọi mẫu thật
 
-`fieldValue` được cung cấp như bộ tạo dữ liệu tổng hợp. Sương xoắn là các dải mật độ tĩnh, không phải fluid solver. Ramp, constant, slab và empty là các preset để kiểm thuật toán, không chỉ để đổi hình cho đẹp.
+`fieldValue` gọi trường mật độ mà ta vừa viết trong cloud.hpp. Hình đe là một mẫu tĩnh, không cần giải chuyển động không khí. Ramp, constant, slab và empty là các preset để kiểm thuật toán, không chỉ để đổi hình cho đẹp.
 
 {/* snippet include/volume.hpp#build-volume */}
 
@@ -122,6 +129,29 @@ float densityAt(vec3 point) {
 ```
 
 Ảnh midpoint có thể thay đổi đẹp khi orbit nhưng vẫn **chưa phải ray marching đầy đủ**. Một cấu trúc nằm trước hoặc sau midpoint có thể biến mất; đây chính là hạn chế mà bài kế tiếp sẽ giải quyết.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="54" step={4} path="include/input.hpp" />
+<CourseWorkFile project="54" step={4} path="include/stage.hpp" />
+<CourseWorkFile project="54" step={4} path="include/state.hpp" />
+<CourseWorkFile project="54" step={4} path="include/ui.hpp" />
+<CourseWorkFile project="54" step={4} path="src/main.cpp" />
+
+Hỏi volume tại tâm khe (0,0,0) và tại tháp (−0,25; 0,26; 0,12). Ở lưới 128³ chúng lần lượt xấp xỉ 0 và 0,741. Bầu trời phía sau không tham gia hai số này.
+
+<CourseWorkFile project="54" step={4} path="include/cloud.hpp" />
+
+Hình đe trải rộng sang phía gió thổi. Ở đây tán và các tháp hợp thành một vùng mật độ liên tục; nhiễu chỉ gọt rìa sau khi hình lớn đã đúng.
+
+{/* snippet include/cloud.hpp#join-anvil */}
+
+```cpp title="include/cloud.hpp — Nối tán mây với hai tháp"
+const double capHeight = 0.42 + 0.13 * downwind;
+const double capThickness = 0.22 - 0.12 * downwind;
+const double anvil = lobeField(point, {{0.13, capHeight, -0.04}, {0.83, capThickness, 0.43}});
+const double envelope = joinBillows(anvil, towers);
+```
 
 ## Ghép các phần lại
 

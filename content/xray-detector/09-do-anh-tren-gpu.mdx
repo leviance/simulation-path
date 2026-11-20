@@ -1,0 +1,69 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
+
+# Soi chiếc radio bằng fragment shader
+
+## Vấn đề cần giải quyết
+
+Ở ảnh thử bằng CPU, bạn đã thấy hai vùng tối ở chỗ có pin. Bây giờ hãy giao cho GPU công việc mà ta vừa hiểu rõ: với mỗi ô detector, tính lượng ánh sáng còn lại sau khi đi xuyên qua vỏ radio và linh kiện. Hình vẽ cái radio chỉ giúp ta đoán bên trong có gì; **ảnh detector không được lấy màu từ hình vẽ đó**.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mỗi fragment nhận một tâm ô. Ta nối nguồn với điểm ấy, xoay tia về hệ tọa độ của radio rồi tìm đoạn nằm trong từng hộp vật liệu. Qua hai lớp nối tiếp, hai độ sâu quang học cộng nhau chứ không phải hai sắc xám. Với một thành phần năng lượng, $T=\exp(-\sum_i \mu_i L_i)$. Nhìn qua khe không có vật liệu, $L_i=0$ với mọi lớp nên $T=1$.
+
+<InteractiveLab demo="xray-detector" mode="xray55-9" />
+
+## Viết code từng bước
+
+### Bước 1 — Cho detector một nơi chứa số thực
+
+Giữ lại bộ nạp OpenGL và tam giác phủ màn hình đã học ở Project 54; ZIP đã mang theo hai tệp đó. Trong `work/include/gpu-detector.hpp`, tạo texture `GL_R32F`, gắn vào framebuffer và kiểm `GL_FRAMEBUFFER_COMPLETE`. Ta cần số thực vì một mức xám 8-bit không đủ để so hai phép đo gần nhau. Dùng context riêng cho phép giữ nguyên cửa sổ SDL và các thao tác chọn tia đã viết từ đầu học phần.
+
+### Bước 2 — Tích lũy vật liệu trước khi đổi ra cường độ
+
+{/* snippet shaders/attenuation.frag#gpu-attenuation */}
+
+```glsl title="shaders/attenuation.frag — Cộng quãng đường trong từng vật liệu"
+vec2 exactDepth(vec3 origin, vec3 direction, float distance) {
+    vec2 tau = vec2(0);
+    for (int i = 0; i < uCount; ++i) {
+        float inside = materialLength(origin, direction, distance, uMin[i], uMax[i]);
+        tau += uStrength * uMu[i] * inside;
+    }
+    return tau;
+}
+```
+
+Cả vỏ, bảng mạch lẫn pin đều đến từ `makeScene`. Không chọn hộp gần nhất rồi dừng như bài chọn vật bằng tia: phần **phía sau** hộp đầu tiên cũng ảnh hưởng detector. Nếu muốn kiểm chế độ nhiều năng lượng, hãy đổi từng tổng riêng thành cường độ **trước** khi trộn tín hiệu.
+
+### Bước 3 — Đưa số đo về giao diện
+
+{/* snippet include/gpu-detector.hpp#read-detector */}
+
+```cpp title="include/gpu-detector.hpp — Đọc số đo, không đọc màu màn hình"
+gl.BindVertexArray(triangle);
+gl.DrawArrays(GL_TRIANGLES, 0, 3);
+gl.ReadPixels(0, 0, imageWidth, imageHeight, GL_RED, GL_FLOAT, raw.data());
+```
+
+`gl_FragCoord` đã ở tâm pixel; đừng cộng nửa ô lần nữa. Quy ước hàng 0 là phía trên của radio được áp dụng cả lúc tính tia lẫn khi sao chép về SDL. Với detector nhỏ dùng cho bài học, một lần đọc sau khi đổi góc giúp ta dùng ngay số thực cho inspector. Đây không phải lời hứa rằng đọc dữ liệu GPU về CPU sẽ nhanh ở mọi độ phân giải.
+
+<CourseWorkFile project="55" step={9} path="shaders/attenuation.frag" />
+<CourseWorkFile project="55" step={9} path="include/gpu-detector.hpp" />
+<CourseWorkFile project="55" step={9} path="src/main.cpp" />
+
+## Ghép các phần lại
+
+Build `project_55_work`. Chọn radio, giữ góc bằng 0, lần lượt soi phần pin, khe giữa hai pin và không khí phía ngoài. Đổi góc rồi quan sát: vỏ và pin chồng lên nhau theo hướng mới. Nhấn L/I; ảnh đổi màu nhưng số `GPU raw T` của ô đang chọn không được đổi.
+
+## Thử làm sai để hiểu đúng
+
+Tạm thay phép cộng các độ sâu bằng phép gán. Vùng chỉ có một lớp vẫn có vẻ đúng, nhưng ở chỗ vỏ che pin kết quả sẽ phụ thuộc thứ tự các hộp trong mảng. Hoàn nguyên rồi đảo thứ tự hai hộp: lúc này số đo phải giữ nguyên.
+
+## Tự kiểm tra kết quả
+
+Ở cấu hình mặc định, detector $80\times60$, góc 0 và một thành phần năng lượng, ô (0,0) nhìn vào không khí nên T bằng 1. Ô (32,42) nhìn xuyên vỏ và pin cho khoảng 0,436. Đổi độ tương phản không được làm hai số đó thay đổi.
+
+## Bài tập mở rộng
+
+Đo hai ô liền kề (29,23) và (29,24). Hãy dự đoán ô nào đi qua gân loa trước khi xem số. Bài cuối sẽ kiểm shader bằng chính một tập tia như vậy.

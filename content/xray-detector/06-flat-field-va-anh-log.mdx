@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Tách tín hiệu thô khỏi ảnh mức xám và ảnh log
 
@@ -25,6 +26,11 @@ Log dùng floor1e-12 để tránh log(0), nhưng ratio raw không bị sửa. Kh
 <InteractiveLab demo="xray-detector" mode="xray55-6" />
 
 ## Viết code từng bước
+
+Thử đổi từ ảnh T sang ảnh −ln(T): chỗ pin màu đổi rõ trong khi radio không hề dịch chuyển. Tách dữ liệu đo khỏi cách tô màu để thao tác này không làm máy phát «bắn thêm tia».
+
+<CourseWorkFile project="55" step={6} path="include/projection.hpp" />
+<CourseWorkFile project="55" step={6} path="include/detector.hpp" />
 
 ### Bước 1 — Tính log từ measurement thay vì từ byte
 
@@ -80,9 +86,11 @@ Log/invert không đi vào exactDepth/midpointDepth. Nếu ảnh trắng vì p v
 
 Settings được kiểm trước measurement/render:
 
+{/* snippet include/model.hpp#measurement-settings */}
+
 ```cpp title="include/model.hpp"
 inline void validate(Settings settings) {
-    if (!std::isfinite(settings.angle) || std::abs(settings.angle) > pi || !std::isfinite(settings.strength) || settings.strength < 0 || settings.strength > 3 || settings.preset < 0 || settings.preset > 2) {
+    if (!std::isfinite(settings.angle) || std::abs(settings.angle) > pi || !std::isfinite(settings.strength) || settings.strength < 0 || settings.strength > 3 || settings.preset < 0 || settings.preset > 3) {
         throw std::invalid_argument("Invalid angle, strength or preset");
     }
     if (!std::isfinite(settings.stepLength) || settings.stepLength < 0.05 || settings.stepLength > 0.5 || !std::isfinite(settings.logRange) || settings.logRange < 0.5 || settings.logRange > 12) {
@@ -95,6 +103,12 @@ inline void validate(Settings settings) {
 ```
 
 Exposure phải dương để I/I0 có nghĩa. Các giới hạn logRange/exposure là phạm vi UI của project, không quy tắc thiết bị thật. C++ L đổi ảnh log, I đảo palette, +/− đổi I0; Canvas có cùng controls và readout.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="55" step={6} path="src/main.cpp" />
+
+Tăng exposure khi đang chọn cùng một ô. Cường độ I phải tăng, tỷ số I/I₀ không đổi; đảo màu cũng không được đổi hai giá trị ấy.
 
 ## Ghép các phần lại
 

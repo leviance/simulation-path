@@ -280,11 +280,11 @@ test("P54 step comparison reports four finite CPU samples on fixed input, not GP
   assert.deepEqual(volume.values, before);
 });
 
-test("P54 cloud has deterministic billows, a genuinely thin edge and an empty channel matching native landmark readouts", () => {
+test("P54 anvil has a dense near tower, a thin downwind tip and two separate banks on the default probe", () => {
   close(cloudHash(0, 0, 0), 0, 0);
   close(cloudNoise(0, 0, 0), 0, 0);
   close(cloudDensity(-1, -1, -1), 0, 0);
-  close(cloudDensity(0.32, -0.2, 0.07), 0, 0);
+  close(cloudDensity(0, 0, 0), 0, 0);
   const volume = makeVolume("cloud", 128);
   assert.equal(volume.values.length, 2097152);
   const values = cloudLandmarks.map((item) => sampleDensity(volume, item.point));
@@ -292,8 +292,21 @@ test("P54 cloud has deterministic billows, a genuinely thin edge and an empty ch
   assert.ok(values[2] < 1e-8);
   assert.deepEqual(
     values.map((value) => value.toFixed(3)),
-    ["0.689", "0.106", "0.000"],
+    ["0.741", "0.104", "0.000"],
   );
+  const ray = cameraRay(defaultCamera, 0.5, 0.5, 16 / 9);
+  const profile = march(ray, volume, { ...white, stepLength: 0.01 }, true).profile;
+  const banks = [];
+  let inBank = false;
+  for (const sample of profile) {
+    const dense = sample.raw > 0.1;
+    if (dense !== inBank) banks.push(sample.distance);
+    inBank = dense;
+  }
+  assert.equal(banks.length, 4, "enter, leave, enter, leave");
+  assert.ok(banks[1] - banks[0] > 0.25 && banks[2] - banks[1] > 0.3 && banks[3] - banks[2] > 0.3);
+  const dryInterval = profile.filter((sample) => sample.distance > 2.96 && sample.distance < 3.04);
+  assert.ok(dryInterval.length > 4 && dryInterval.every((sample) => sample.raw === 0));
   for (const item of cloudLandmarks) {
     const screen = projectLandmark(item.point, defaultCamera, 1000, 900);
     assert.ok(screen && screen.x >= 0 && screen.x <= 1000 && screen.y >= 0 && screen.y <= 900);

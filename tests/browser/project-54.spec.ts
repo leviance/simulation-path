@@ -74,9 +74,9 @@ test("P54 cloud meaning and three comparison views remain linked to actual curre
   page,
 }) => {
   await ready(page);
-  await expect(page.locator('[data-density="Vùng đậm"]')).toHaveText("0.689");
-  await expect(page.locator('[data-density="Rìa loãng"]')).toHaveText("0.106");
-  await expect(page.locator('[data-density="Khe mật độ thấp"]')).toHaveText("0.000");
+  await expect(page.locator('[data-density="Lõi tháp mây gần"]')).toHaveText("0.741");
+  await expect(page.locator('[data-density="Mép tán mây cuối gió"]')).toHaveText("0.104");
+  await expect(page.locator('[data-density="Khoảng trống giữa hai lớp"]')).toHaveText("0.000");
   const comparison = page.getByRole("region", {
     name: "So sánh ba cách nhìn cùng dữ liệu",
     exact: true,
@@ -91,7 +91,12 @@ test("P54 cloud meaning and three comparison views remain linked to actual curre
   await page.getByLabel("Dataset", { exact: true }).selectOption("constant");
   await expect(lab(page)).toHaveAttribute("data-dataset", "constant", { timeout: 20000 });
   const switchMs = Date.now() - switchStarted;
-  console.log("P54 constant dataset switch ms:", switchMs, "generation ms:", await lab(page).getAttribute("data-generation-ms"));
+  console.log(
+    "P54 constant dataset switch ms:",
+    switchMs,
+    "generation ms:",
+    await lab(page).getAttribute("data-generation-ms"),
+  );
   expect(switchMs).toBeLessThan(5000);
   await expect(page.locator("[data-cloud-landmarks]")).toHaveCount(0);
   await expect(comparison).toHaveAttribute("data-comparison-ready", "true", { timeout: 20000 });

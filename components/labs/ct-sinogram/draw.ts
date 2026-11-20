@@ -11,12 +11,14 @@ import {
   type Disk,
 } from "@/lib/labs/ct-sinogram";
 import { setupCanvas, type CanvasSize } from "../lab-shared";
+import { drawTimberStation, stationLayout } from "./timber-station";
+import { sinogramRaster } from "./rasters";
 
 export function sinogramRect(size: CanvasSize) {
   return { x: size.width * 0.53, y: 42, w: size.width * 0.44, h: size.height - 85 };
 }
-export function pickCell(x: number, y: number, size: CanvasSize, views: number) {
-  const r = sinogramRect(size);
+export function pickCell(x: number, y: number, size: CanvasSize, views: number, stage = 5) {
+  const r = stage >= 10 ? stationLayout(size).sino : sinogramRect(size);
   if (x < r.x || y < r.y || x >= r.x + r.w || y >= r.y + r.h) return null;
   return {
     column: Math.floor(((x - r.x) / r.w) * detectorCount),
@@ -34,9 +36,24 @@ export function draw(
   displayRange: number,
   invert: boolean,
   trace: boolean,
+  hideReference = false,
 ) {
   setupCanvas(ctx, size);
   ctx.font = "12px system-ui";
+  if (stage >= 10) {
+    drawTimberStation(
+      ctx,
+      size,
+      scan,
+      selection,
+      preview,
+      displayRange,
+      invert,
+      trace,
+      hideReference,
+    );
+    return;
+  }
   ctx.fillStyle = "#d8e2f5";
   ctx.fillText("Lát cắt XY — nguồn và detector quay", 12, 22);
   const scale = Math.min((size.width * 0.49 - 24) / 12, (size.height - 100) / 12);
@@ -54,8 +71,12 @@ export function draw(
   for (const disk of scene) {
     ctx.beginPath();
     ctx.arc(...toScreen(disk.centre), disk.radius * scale, 0, 2 * Math.PI);
-    ctx.fillStyle = "#7384ab";
-    ctx.fill();
+    if (disk.innerRadius) {
+      ctx.moveTo(toScreen(disk.centre)[0] + disk.innerRadius * scale, toScreen(disk.centre)[1]);
+      ctx.arc(...toScreen(disk.centre), disk.innerRadius * scale, 0, 2 * Math.PI, true);
+    }
+    ctx.fillStyle = `rgb(${72 + 110 * disk.mu},${67 + 69 * disk.mu},${46 + 36 * disk.mu})`;
+    ctx.fill("evenodd");
     ctx.strokeStyle = "#b5c7f2";
     ctx.stroke();
   }
@@ -108,15 +129,8 @@ export function draw(
   // Draw only acquired rows. A palette change never overwrites raw values.
   const cellW = r.w / detectorCount,
     cellH = r.h / scan.settings.views;
-  for (let row = 0; row < scan.acquired; row++)
-    for (let column = 0; column < detectorCount; column++) {
-      const value = scan.values[column + detectorCount * row];
-      let gray = Math.max(0, Math.min(1, value / displayRange));
-      if (invert) gray = 1 - gray;
-      const byte = Math.round(255 * gray);
-      ctx.fillStyle = `rgb(${byte},${byte},${byte})`;
-      ctx.fillRect(r.x + column * cellW, r.y + row * cellH, cellW + 0.5, cellH + 0.5);
-    }
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(sinogramRaster(scan, displayRange, invert), r.x, r.y, r.w, r.h);
   ctx.strokeStyle = "#f8c667";
   ctx.strokeRect(r.x, r.y + selection.row * cellH, r.w, Math.max(1, cellH));
   ctx.strokeRect(

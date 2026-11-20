@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Đi dọc tia: giữ cực đại hay lấy trung bình?
 
@@ -19,6 +20,12 @@ Ví dụ slab density 0,65 dày 0,75 trong box dài 2: MIP gần 0,65, average g
 <InteractiveLab demo="volume-ray-marching" mode="fog54-5" />
 
 ## Viết code từng bước
+
+Một tia có thể gặp tháp gần, đi qua khoảng trời trống rồi gặp tháp xa. MIP chỉ nhớ mẫu lớn nhất; average còn phụ thuộc lượng không khí trên cả đoạn. Hai ảnh không nên giống nhau chỉ vì dùng cùng volume.
+
+<CourseWorkFile project="54" step={5} path="include/reference.hpp" />
+<CourseWorkFile project="54" step={5} path="shaders/volume.frag" />
+<CourseWorkFile project="54" step={5} path="include/comparison.hpp" />
 
 ### 1. Viết loop tham chiếu có đủ phần đuôi
 
@@ -110,6 +117,18 @@ gl_.Uniform1f(uniform(gl_, program_, "uStep"), static_cast<float>(settings.stepL
 `uMode` là số nguyên chọn nhánh trong shader; `uStep` là độ dài theo world units, không phải số pixel. Hai giá trị được gửi khi program volume đang được bind bằng `UseProgram`, trước lệnh `DrawArrays`. Bấm nút chỉ đổi state; shader phải nhận state mới ở lần vẽ tiếp theo thì ảnh mới thực sự đổi.
 
 Giữ phần present như một lớp hiển thị. Nó ánh xạ scalar ra ảnh, không được tính lại average từ các byte RGB đã gamma.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="54" step={5} path="include/input.hpp" />
+<CourseWorkFile project="54" step={5} path="include/renderer.hpp" />
+<CourseWorkFile project="54" step={5} path="include/stage.hpp" />
+<CourseWorkFile project="54" step={5} path="include/state.hpp" />
+<CourseWorkFile project="54" step={5} path="include/ui.hpp" />
+<CourseWorkFile project="54" step={5} path="shaders/present.frag" />
+<CourseWorkFile project="54" step={5} path="src/main.cpp" />
+
+Dùng trường hằng để kiểm hai kết quả phải trùng, rồi nhìn khe mây để tìm tình huống chúng tách nhau.
 
 ## Ghép các phần lại
 

@@ -107,6 +107,8 @@ int main(int argc, char** argv) {
         release(drag, state);
 #if LAB_CHECKPOINT >= 2
         std::cout << "{\"side\":" << state.side << ",\"voxels\":" << state.volume->values().size() << ",\"bytes\":" << state.volume->values().size() * sizeof(float) << ",\"buildMs\":" << state.buildMs << ",\"sceneMs\":" << state.sceneMs << ",\"frames\":" << frames << "}\n";
+#else
+        std::cout << "Completed " << frames << " frame(s)\n";
 #endif
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

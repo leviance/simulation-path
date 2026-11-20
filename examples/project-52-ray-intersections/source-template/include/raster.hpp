@@ -27,28 +27,48 @@ struct ScreenVertex {
     double inverseDepth;
 };
 
+struct PaintVertex {
+    Vec3 point;
+    Color color;
+};
+
+inline Color colorBetween(Color a, Color b, double t) {
+    return {a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t};
+}
+
+inline std::uint32_t inkOver(std::uint32_t paper, std::uint32_t ink, int opacity) {
+    const auto channel = [paper, ink, opacity](int shift) {
+        const int a = (paper >> shift) & 255;
+        const int b = (ink >> shift) & 255;
+        return static_cast<std::uint32_t>((a * (255 - opacity) + b * opacity) / 255) << shift;
+    };
+    return 0xff000000u | channel(16) | channel(8) | channel(0);
+}
+
 struct Raster {
     int width;
     int height;
     std::vector<std::uint32_t> pixels;
     std::vector<double> inverseDepth;
     Camera camera;
+    Basis basis;
 
     Raster(int w, int h)
         : width(w), height(h), pixels(w * h), inverseDepth(w * h) {}
 
     void begin(const Camera& value) {
         camera = value;
+        basis = cameraBasis(camera);
         std::fill(inverseDepth.begin(), inverseDepth.end(), 0);
         for (int y = 0; y < height; ++y) {
             const double gradient = static_cast<double>(y) / height;
-            const auto color = packed({12 + 9 * gradient, 20 + 12 * gradient, 35 + 16 * gradient});
+            const double sky = 1 - std::abs(2 * gradient - 0.85);
+            const auto color = packed({17 + 12 * sky, 26 + 20 * sky, 36 + 22 * sky});
             std::fill(pixels.begin() + y * width, pixels.begin() + (y + 1) * width, color);
         }
     }
 
     Vec3 toCamera(Vec3 point) const {
-        const auto basis = cameraBasis(camera);
         const Vec3 relative = subtract(point, camera.origin);
         return {dot(relative, basis.right), dot(relative, basis.up), dot(relative, basis.forward)};
     }
@@ -62,10 +82,10 @@ struct Raster {
         return (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
     }
 
-    void rasterTriangle(Vec3 a, Vec3 b, Vec3 c, Color color) {
-        const auto p = toScreen(a);
-        const auto q = toScreen(b);
-        const auto r = toScreen(c);
+    void rasterTriangle(PaintVertex a, PaintVertex b, PaintVertex c, int opacity, bool smooth) {
+        const auto p = toScreen(a.point);
+        const auto q = toScreen(b.point);
+        const auto r = toScreen(c.point);
         const double area = edge(p, q, r.x, r.y);
         if (!std::isfinite(area) || std::abs(area) < 1e-9) {
             return;
@@ -75,7 +95,7 @@ struct Raster {
         const int x1 = static_cast<int>(std::clamp(std::ceil(std::max({p.x, q.x, r.x})), 0.0, static_cast<double>(width - 1)));
         const int y0 = static_cast<int>(std::clamp(std::floor(std::min({p.y, q.y, r.y})), 0.0, static_cast<double>(height - 1)));
         const int y1 = static_cast<int>(std::clamp(std::ceil(std::max({p.y, q.y, r.y})), 0.0, static_cast<double>(height - 1)));
-        const auto value = packed(color);
+        const auto value = packed(a.color);
         for (int y = y0; y <= y1; ++y) {
             for (int x = x0; x <= x1; ++x) {
                 const double wa = edge(q, r, x + 0.5, y + 0.5) / area;
@@ -86,47 +106,64 @@ struct Raster {
                 }
                 const double depth = wa * p.inverseDepth + wb * q.inverseDepth + wc * r.inverseDepth;
                 const int index = y * width + x;
-                if (depth > inverseDepth[index]) {
+                if (opacity < 255) {
+                    // Shadow ink belongs to the table only. No depth here means
+                    // the projected silhouette fell outside its finite display patch.
+                    if (inverseDepth[index] > 0 && std::abs(depth - inverseDepth[index]) <= depth * 0.0001) {
+                        pixels[index] = inkOver(pixels[index], value, opacity);
+                    }
+                } else if (depth > inverseDepth[index]) {
                     inverseDepth[index] = depth;
-                    pixels[index] = value;
+                    if (!smooth) {
+                        pixels[index] = value;
+                    } else {
+                        // Perspective-correct highlights stay attached when the
+                        // observer zooms in or crosses the mesh's near clip.
+                        const double u = wa * p.inverseDepth / depth;
+                        const double v = wb * q.inverseDepth / depth;
+                        const double w = 1 - u - v;
+                        pixels[index] = packed({a.color.r * u + b.color.r * v + c.color.r * w,
+                                                a.color.g * u + b.color.g * v + c.color.g * w,
+                                                a.color.b * u + b.color.b * v + c.color.b * w});
+                    }
                 }
             }
         }
     }
 
-    void triangle(Vec3 a, Vec3 b, Vec3 c, Color color) {
-        Vec3 normal = normalize(cross(subtract(b, a), subtract(c, a)));
-        const Vec3 center = multiply(add(add(a, b), c), 1.0 / 3);
-        if (dot(normal, subtract(camera.origin, center)) < 0) {
-            normal = multiply(normal, -1);
-        }
-        const double light = 0.24 + 0.76 * std::max(0.0, dot(normal, normalize({-0.4, 0.85, -0.35})));
-        color = {color.r * light, color.g * light, color.b * light};
-
+    void paint(PaintVertex a, PaintVertex b, PaintVertex c, int opacity, bool smooth) {
         // Clip the polygon against z=near before perspective divide, then triangulate.
         constexpr double nearDepth = 0.06;
-        const std::array<Vec3, 3> input{toCamera(a), toCamera(b), toCamera(c)};
-        std::array<Vec3, 4> output{};
+        const std::array<PaintVertex, 3> input{{{toCamera(a.point), a.color}, {toCamera(b.point), b.color}, {toCamera(c.point), c.color}}};
+        if (input[0].point.z >= nearDepth && input[1].point.z >= nearDepth && input[2].point.z >= nearDepth) {
+            rasterTriangle(input[0], input[1], input[2], opacity, smooth);
+            return;
+        }
+        std::array<PaintVertex, 4> output{};
         int count = 0;
         for (int i = 0; i < 3; ++i) {
-            const Vec3 start = input[i];
-            const Vec3 end = input[(i + 1) % 3];
-            const bool insideStart = start.z >= nearDepth;
-            const bool insideEnd = end.z >= nearDepth;
+            const PaintVertex start = input[i];
+            const PaintVertex end = input[(i + 1) % 3];
+            const bool insideStart = start.point.z >= nearDepth;
+            const bool insideEnd = end.point.z >= nearDepth;
             if (insideStart) {
                 output[count++] = start;
             }
             if (insideStart != insideEnd) {
-                const double t = (nearDepth - start.z) / (end.z - start.z);
-                output[count++] = add(start, multiply(subtract(end, start), t));
+                const double t = (nearDepth - start.point.z) / (end.point.z - start.point.z);
+                output[count++] = {add(start.point, multiply(subtract(end.point, start.point), t)), colorBetween(start.color, end.color, t)};
             }
         }
         for (int i = 1; i + 1 < count; ++i) {
-            rasterTriangle(output[0], output[i], output[i + 1], color);
+            rasterTriangle(output[0], output[i], output[i + 1], opacity, smooth);
         }
     }
 
-    void line(Vec3 a, Vec3 b, Color color, bool xray = false, int radius = 0) {
+    void triangle(Vec3 a, Vec3 b, Vec3 c, Color color, int opacity = 255) {
+        paint({a, color}, {b, color}, {c, color}, opacity, false);
+    }
+
+    void line(Vec3 a, Vec3 b, Color color, bool xray = false, int radius = 0, double hiddenLight = 0.40) {
         a = toCamera(a);
         b = toCamera(b);
         constexpr double nearDepth = 0.061;
@@ -167,6 +204,8 @@ struct Raster {
         const double dx = (q.x - p.x) * (hi - lo);
         const double dy = (q.y - p.y) * (hi - lo);
         const int steps = std::max(1, static_cast<int>(std::ceil(std::max(std::abs(dx), std::abs(dy)))));
+        const auto bright = packed(color);
+        const auto hidden = packed(color, hiddenLight);
         for (int i = 0; i <= steps; ++i) {
             const double t = lo + (hi - lo) * i / steps;
             const int x = static_cast<int>(std::round(p.x + (q.x - p.x) * t));
@@ -180,9 +219,9 @@ struct Raster {
                     const int index = (y + oy) * width + x + ox;
                     const bool visible = depth >= inverseDepth[index] * 0.998;
                     if (visible) {
-                        pixels[index] = packed(color);
+                        pixels[index] = bright;
                     } else if (xray && i % 10 < 4) {
-                        pixels[index] = packed(color, 0.4);
+                        pixels[index] = hidden;
                     }
                 }
             }
@@ -204,6 +243,31 @@ struct Raster {
             for (int x = -size; x <= size; ++x) {
                 if (x * x + y * y <= size * size && px + x >= 0 && px + x < width && py + y >= 0 && py + y < height) {
                     pixels[(py + y) * width + px + x] = packed(color);
+                }
+            }
+        }
+    }
+
+    void ring(Vec3 point, Color color, int radius, bool diamond = false) {
+        const Vec3 p = toCamera(point);
+        if (p.z <= 0.061) {
+            return;
+        }
+        const auto pixel = toScreen(p);
+        if (pixel.x < -radius || pixel.x > width + radius || pixel.y < -radius || pixel.y > height + radius) {
+            return;
+        }
+        const int cx = static_cast<int>(std::round(pixel.x));
+        const int cy = static_cast<int>(std::round(pixel.y));
+        for (int y = -radius; y <= radius; ++y) {
+            for (int x = -radius; x <= radius; ++x) {
+                const int distance2 = x * x + y * y;
+                bool onEdge = distance2 <= radius * radius && distance2 > (radius - 1) * (radius - 1);
+                if (diamond) {
+                    onEdge = std::abs(x) + std::abs(y) == radius;
+                }
+                if (onEdge && cx + x >= 0 && cx + x < width && cy + y >= 0 && cy + y < height) {
+                    pixels[(cy + y) * width + cx + x] = packed(color);
                 }
             }
         }

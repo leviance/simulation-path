@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Từ vị trí chuột đến một tia trong world
 
@@ -37,6 +38,11 @@ Y đổi dấu vì input pixel tăng xuống dưới. Tất cả forward/right/u
 Kéo trong cửa sổ nhỏ rồi xoay góc nhìn lớn. Trước khi nhìn bảng số, hãy đoán thao tác nào làm direction đổi. Chỉ thao tác ngắm hoặc dịch nguồn mới đổi ray; orbit camera quan sát không được đổi ray đang giữ.
 
 ## Viết code từng bước
+
+Đặt đầu dò ngay trước một vật và đánh dấu một điểm trên tấm ngắm. Bạn cần hai vị trí trong world để dựng tia: gốc phát và điểm vừa chọn. Con trỏ chỉ cung cấp tọa độ trên tấm ngắm, không tự cho biết khoảng cách tới vật.
+
+<CourseWorkFile project="52" step={2} path="include/camera.hpp" />
+<CourseWorkFile project="52" step={2} path="include/beam-drawing.hpp" />
 
 ### 1. Thêm dữ liệu Ray, rồi mới thêm cách tạo ray
 
@@ -102,6 +108,18 @@ inline void aimInput(Workshop& state, float x, float y) {
 ```
 
 Hàm được gọi ở mouse-down và mouse-motion khi đang kéo. Mũi tên thay cùng u/v bằng bước 0.02. Trong Canvas, input dùng CSS pixels, bitmap dùng DPR; không nhân DPR thêm lần nữa vào vị trí chuột. Xem [SDL_ConvertEventToRenderCoordinates](https://wiki.libsdl.org/SDL3/SDL_ConvertEventToRenderCoordinates) nếu muốn đối chiếu cách SDL xử lý logical presentation và scale.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="52" step={2} path="include/controls.hpp" />
+<CourseWorkFile project="52" step={2} path="include/input.hpp" />
+<CourseWorkFile project="52" step={2} path="include/instrument-hud.hpp" />
+<CourseWorkFile project="52" step={2} path="include/panel.hpp" />
+<CourseWorkFile project="52" step={2} path="include/view.hpp" />
+<CourseWorkFile project="52" step={2} path="include/workshop.hpp" />
+<CourseWorkFile project="52" step={2} path="src/main.cpp" />
+
+Giữ nguyên điểm ngắm rồi xoay camera quan sát: bạn đang đi quanh bàn đo, không phải lái lại đầu dò. Chỉ khi đổi điểm ngắm thì hướng tia mới thay đổi.
 
 ## Ghép các phần lại
 

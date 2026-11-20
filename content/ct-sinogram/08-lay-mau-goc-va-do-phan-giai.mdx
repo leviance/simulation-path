@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Đổi số góc mà không nhầm với độ nét ảnh
 
@@ -26,18 +27,28 @@ Hai ảnh cùng cao 520 logical pixel vẫn có thể chỉ chứa 30 hoặc 120
 
 ## Viết code từng bước
 
+Tăng 30 lên 180 góc bổ sung **hướng nhìn**, không làm một hàng có nhiều hơn 128 ô. Hãy so hai hàng đo ở cùng một góc vật lý chứ không so hai hàng có cùng số thứ tự.
+
+<CourseWorkFile project="56" step={8} path="include/scan.hpp" />
+<CourseWorkFile project="56" step={8} path="include/controls.hpp" />
+
 ### Bước 1 — Chỉ cho các độ phân giải nhỏ đã định
 
 validate chỉ chấp nhận views=30,60,120. Phím Q chuyển tuần tự, đưa row đang xem về 0; Canvas dùng select. Không cho input tùy ý hàng triệu góc rồi cấp mảng theo nó.
 
+{/* snippet include/controls.hpp#angle-selector */}
+
 ```cpp title="include/controls.hpp"
-    if (key == SDLK_Q) {
-        controls.settings.views *= 2;
-        if (controls.settings.views > 120) {
-            controls.settings.views = 30;
+if (key == SDLK_Q) {
+    const std::array<int, 4> counts{30, 60, 120, 180};
+    for (size_t i = 0; i < counts.size(); ++i) {
+        if (counts[i] == controls.settings.views) {
+            controls.settings.views = counts[(i + 1) % counts.size()];
+            break;
         }
-        controls.row = 0;
     }
+    controls.row = 0;
+}
 ```
 
 Đổi views thay lưới góc của lượt quét, không chỉ thay chiều cao ảnh. Trong main, giữ nhánh kiểm settings của Bài 06:
@@ -56,10 +67,12 @@ if (controls.settings != before.settings || event.key.key == SDLK_R) {
 
 Texture 128×30 không chứa được dữ liệu của scan 128×120. Ta thêm hàm sau trong view.hpp. Nhận `SDL_Texture*&` để thay con trỏ của caller, và `int&` để chỉ cập nhật textureViews sau khi thay tài nguyên thành công:
 
+{/* snippet include/view.hpp#resize-scan */}
+
 ```cpp title="include/view.hpp"
 inline void resizeSinogramTexture(SDL_Renderer* renderer, SDL_Texture*& texture, int& textureViews, int views) {
-    if (views != 30 && views != 60 && views != 120) {
-        throw std::invalid_argument("views must be 30, 60 or 120");
+    if (!supportedViews(views)) {
+        throw std::invalid_argument("Unsupported view count");
     }
     if (textureViews == views) {
         return;
@@ -127,6 +140,13 @@ Cả hai hàng dùng θ=60°, cùng scene, strength và pixel centres. Vòng l�
 Chọn đĩa nhỏ lệch tâm, 30 góc, quét hết và bật trace. Các hàng thưa cho thấy ta chỉ biết tín hiệu tại một số góc rời rạc. Đổi 120 góc sẽ xóa lượt cũ; quét lại có nhiều hàng hơn, không chỉ nhiều byte màu hơn.
 
 Đường trace liên tục là dự đoán hình học từ phantom đã biết. Nó không lấp dữ liệu chưa đo, cũng không chứng minh một thuật toán có thể khôi phục vật thể bất kỳ từ ít góc. Không suy một ngưỡng views tối thiểu phổ quát từ thí nghiệm nhỏ này.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="56" step={8} path="include/view.hpp" />
+<CourseWorkFile project="56" step={8} path="src/main.cpp" />
+
+Chọn 60° ở hai lưới và so p tại cùng cột. Hàng phải khớp; riêng những góc nằm giữa là thông tin mới nhận được.
 
 ## Ghép các phần lại
 

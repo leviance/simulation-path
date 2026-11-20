@@ -16,7 +16,7 @@ function walk(directory) {
       : [path.join(directory, entry.name)],
   );
 }
-test("P54 ten connected lessons have all teaching roles and 34 exact C++/GLSL checkpoint excerpts", () => {
+test("P54 ten connected lessons have all teaching roles and 35 exact C++/GLSL checkpoint excerpts", () => {
   const lessons = readdirSync("content/volume-ray-marching")
     .filter((file) => file.endsWith(".mdx"))
     .sort();
@@ -52,7 +52,7 @@ test("P54 ten connected lessons have all teaching roles and 34 exact C++/GLSL ch
       count++;
     }
   }
-  assert.equal(count, 34);
+  assert.equal(count, 35);
 });
 test("P54 all twelve snapshots resolve authoring stages and retain readable four-space C++", () => {
   for (const snapshot of [

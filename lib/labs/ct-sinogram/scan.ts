@@ -5,12 +5,14 @@ import {
   detectorRadius,
   makeScene,
   validate,
+  supportedViews,
   type Disk,
   type Settings,
 } from "./model.ts";
 import { detectorRay, measure, project } from "./projection.ts";
+import { backproject, makeReconstruction, type Reconstruction } from "./backprojection.ts";
 export function viewAngle(row: number, views: number) {
-  if (![30, 60, 120].includes(views) || !Number.isInteger(row) || row < 0 || row >= views)
+  if (!supportedViews.includes(views) || !Number.isInteger(row) || row < 0 || row >= views)
     throw new RangeError("Invalid view index");
   return (2 * Math.PI * row) / views;
 }
@@ -19,14 +21,16 @@ export interface Scan {
   scene: Disk[];
   values: Float64Array;
   acquired: number;
+  image?: Reconstruction;
 }
-export function makeScan(settings: Settings): Scan {
+export function makeScan(settings: Settings, reconstruct = false): Scan {
   validate(settings);
   return {
     settings: { ...settings },
     scene: makeScene(settings.preset),
     values: new Float64Array(detectorCount * settings.views).fill(NaN),
     acquired: 0,
+    image: reconstruct ? makeReconstruction() : undefined,
   };
 }
 export function acquireOne(scan: Scan) {
@@ -38,6 +42,14 @@ export function acquireOne(scan: Scan) {
   );
   for (let column = 0; column < detectorCount; column++)
     scan.values[column + detectorCount * scan.acquired] = row[column].projection;
+  if (scan.image) {
+    const start = detectorCount * scan.acquired;
+    backproject(
+      scan.image,
+      viewAngle(scan.acquired, scan.settings.views),
+      scan.values.subarray(start, start + detectorCount),
+    );
+  }
   scan.acquired++;
   return true;
 }

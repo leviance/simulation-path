@@ -3,6 +3,7 @@
 
 namespace photon {
 #if LAB_CHECKPOINT >= 8
+// [snippet absorption-oracle]
 inline double audit() {
     Settings settings;
     settings.muA = 0.4;
@@ -24,5 +25,6 @@ inline double audit() {
 
     return std::abs(observed - expected);
 }
+// [/snippet absorption-oracle]
 #endif
 } // namespace photon

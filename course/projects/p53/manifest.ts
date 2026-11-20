@@ -1,7 +1,7 @@
 import type { PublishedProjectEditorial } from "../../types";
 const data = {
   summary:
-    "Tự xây máy cắt lát một khối dữ liệu 3D: mở mẫu vật có lớp vỏ, lõi đặc và lỗ khoan, dời ba lát XY/XZ/YZ rồi lần ngược mỗi giá trị về tám voxel của nó. Bản C++ chạy độc lập; đây là scalar tổng hợp, không phải dữ liệu y khoa hay CT reconstruction.",
+    "Tự làm máy cắt lát viên đá mã não. Từ vỏ đá, đi qua những vòng khoáng sáng rồi tới hốc tinh thể: cùng một điểm phải đọc được trên ba mặt XY/XZ/YZ và trên nửa viên đá đang mở.",
   duration:
     "12–16 giờ: đọc 3–4 giờ, tự viết 6–8 giờ, kiểm chứng và bài tập 3–4 giờ; không tính cài đặt/build lần đầu",
   prerequisites: [
@@ -22,9 +22,9 @@ const data = {
   challenge: {
     timebox: "90–120 phút tự thử; có thể dừng ở ba ảnh trước khi thêm phần định hướng 3D",
     mission:
-      "Tự xây một ứng dụng C++20/SDL3 cho phép quan sát bên trong khối scalar 3D bằng ba mặt cắt vuông góc. Người dùng tìm lõi đặc và đường đi của lỗ khoan trong mẫu vật, chọn một điểm rồi giải thích được giá trị tại điểm ấy đến từ đâu.",
+      "Hãy tìm một tinh thể trong hốc mà chưa xoay viên đá. Đánh dấu nó trên một lát, dự đoán nó sẽ xuất hiện ở đâu trên hai lát còn lại rồi mở mặt cắt 3D để kiểm.",
     outcome:
-      "Một workbench có khối cắt mở chiếm vùng xem chính, ba ảnh XY/XZ/YZ có crosshair liên kết, thanh cắt độc lập và inspector tám voxel. Đổi camera chỉ đổi góc nhìn, không làm dời lát hay thay kết quả đo.",
+      "Một viên đá có vỏ, vòng mã não và hốc lệch tâm. Cưa đúng theo mặt đang chọn, xoay góc quan sát và giữ nguyên tọa độ đầu dò để so ba lát với mẫu 3D.",
     requirements: [
       "Mảng scalar 3D thật, mặc định 128³ = 2.097.152 Float32 / 8 MiB ở bản cuối; có lựa chọn 64³ để học và so sánh.",
       "World box 160 × 192 × 224 mm, origin (-80,-96,-112); voxel là các mẫu tại tâm. Đổi N không đổi kích thước world.",

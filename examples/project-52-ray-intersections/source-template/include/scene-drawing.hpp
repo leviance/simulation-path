@@ -1,12 +1,12 @@
 #pragma once
-#include "mesh-drawing.hpp"
+#include "optical-bench.hpp"
 
 namespace picking {
-inline Color objectColor(int id, int selected) {
-    const Color colors[]{{66, 105, 132}, {86, 190, 250}, {244, 177, 76}, {200, 125, 239}};
-    Color color = colors[id];
+inline Color specimenColor(int id, int selected) {
+    const Color pigments[]{{65, 89, 96}, {41, 169, 178}, {215, 137, 70}, {160, 126, 216}};
+    const Color color = pigments[id];
     if (id == selected) {
-        color = {std::min(255.0, color.r * 1.12), std::min(255.0, color.g * 1.12), std::min(255.0, color.b * 1.12)};
+        return colorBetween(color, {231, 235, 225}, 0.09);
     }
     return color;
 }
@@ -14,29 +14,17 @@ inline Color objectColor(int id, int selected) {
 #if LAB_CHECKPOINT >= 1
 // [snippet draw-scene]
 inline void drawScene(Raster& raster, const Scene& scene, int selected, bool debug) {
-    // Finite display patch; the plane intersection itself is infinite.
-    const Vec3 p = scene.plane.point;
-    const Vec3 a = add(p, {-6, 0, -5});
-    const Vec3 b = add(p, {6, 0, -5});
-    const Vec3 c = add(p, {6, 0, 7});
-    const Vec3 d = add(p, {-6, 0, 7});
-    raster.triangle(a, b, c, objectColor(0, selected));
-    raster.triangle(a, c, d, objectColor(0, selected));
-    // Meshes provide presentation only. No intersection routine is used here.
-    drawSphereMesh(raster, scene.sphere, objectColor(1, selected));
-    drawBoxMesh(raster, scene.box, objectColor(2, selected));
-    raster.triangle(scene.triangle.a, scene.triangle.b, scene.triangle.c, objectColor(3, selected));
+    // Vạch dài cách nhau một đơn vị. Tấm chia độ chỉ minh họa một phần
+    // của mặt phẳng vô hạn; bóng và vạch khắc không phải vật để chọn.
+    drawMat(raster, scene.plane, selected == 0);
+    drawGraduations(raster, scene.plane, debug);
+    drawContactShadows(raster, scene);
 
-    if (debug) {
-        for (int i = -5; i <= 5; ++i) {
-            const double value = static_cast<double>(i);
-            raster.line(add(p, {value, 0.002, -5}), add(p, {value, 0.002, 7}), {68, 102, 128});
-            raster.line(add(p, {-6, 0.002, value}), add(p, {6, 0.002, value}), {68, 102, 128});
-        }
-        raster.line({0, 0, 0}, {1, 0, 0}, {248, 100, 103}, true, 1);
-        raster.line({0, 0, 0}, {0, 1, 0}, {110, 234, 151}, true, 1);
-        raster.line({0, 0, 0}, {0, 0, 1}, {103, 170, 250}, true, 1);
-    }
+    // Ba mẫu lấy trực tiếp từ Scene. Vẽ được chúng ngay cả khi người học
+    // chưa viết bất kỳ hàm nào để tìm giao điểm.
+    drawSphereMesh(raster, scene.sphere, specimenColor(1, selected));
+    drawBoxMesh(raster, scene.box, specimenColor(2, selected));
+    drawTrianglePlate(raster, scene.triangle, specimenColor(3, selected));
 }
 
 // [/snippet draw-scene]

@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Đọc kết quả Monte Carlo cùng mức bất định
 
@@ -22,7 +23,13 @@ $$p_0=e^{-(\mu_A+\mu_S)L}.$$
 
 ## Viết code từng bước
 
+Hai lượt cùng môi trường có thể cho hai con số khác vì dùng seed khác. Ước lượng tỷ lệ bay thẳng trong cả loạt và vẽ khoảng Wilson; tách dao động lấy mẫu khỏi số hạt phải dừng vì giới hạn.
+
+<CourseWorkFile project="57" step={7} path="include/statistics.hpp" />
+
 ### Bước 1 — Viết nghiệm lý thuyết của đúng phép đo
+
+{/* snippet include/statistics.hpp#no-event-probability */}
 
 ```cpp title="include/statistics.hpp"
 inline double expectedBallistic(Settings settings) {
@@ -83,6 +90,12 @@ Quan sát k/N có thể dao động qua lại quanh p0; các vạch thường h�
 Chuyển 2048 mẫu tạo lượt mới, tính lại cùng các ID đầu và thêm phần còn lại. Với RNG theo ID, tập 512 là tiền tố của tập 2048 nếu settings vật lý không đổi. Không dùng hai preview photon làm hai thí nghiệm tỷ lệ.
 
 Đọc cả error tuyệt đối, N và interval; không chỉ nhìn “gần đúng” từ hình. Sau đó đổi seed để thấy dao động, nhưng không lọc seed chỉ giữ lượt đẹp.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="57" step={7} path="src/main.cpp" />
+
+Thử 512 rồi 16.384 hạt. Khoảng bất định thường hẹp lại nhưng tỷ lệ đo không bắt buộc nhích dần về một phía; một seed lặp lại không phải một thí nghiệm độc lập mới.
 
 ## Ghép các phần lại
 

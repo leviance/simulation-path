@@ -5,7 +5,7 @@
 #include <stdexcept>
 
 #ifndef LAB_CHECKPOINT
-#define LAB_CHECKPOINT 8
+#define LAB_CHECKPOINT 10
 #endif
 
 namespace xray {
@@ -49,7 +49,11 @@ inline double wrapAngle(double angle) {
 struct Settings {
     double angle = 0;
     double strength = 1;
-    int preset = 1;
+#if LAB_CHECKPOINT >= 4
+    int preset = 3;
+#else
+    int preset = 0;
+#endif
     bool numeric = false;
     double stepLength = 0.1;
     bool logView = false;
@@ -68,8 +72,9 @@ inline bool imageChanged(Settings before, Settings after) {
     return before != after;
 }
 
+// [snippet measurement-settings]
 inline void validate(Settings settings) {
-    if (!std::isfinite(settings.angle) || std::abs(settings.angle) > pi || !std::isfinite(settings.strength) || settings.strength < 0 || settings.strength > 3 || settings.preset < 0 || settings.preset > 2) {
+    if (!std::isfinite(settings.angle) || std::abs(settings.angle) > pi || !std::isfinite(settings.strength) || settings.strength < 0 || settings.strength > 3 || settings.preset < 0 || settings.preset > 3) {
         throw std::invalid_argument("Invalid angle, strength or preset");
     }
     if (!std::isfinite(settings.stepLength) || settings.stepLength < 0.05 || settings.stepLength > 0.5 || !std::isfinite(settings.logRange) || settings.logRange < 0.5 || settings.logRange > 12) {
@@ -79,4 +84,5 @@ inline void validate(Settings settings) {
         throw std::invalid_argument("Invalid spectrum or exposure");
     }
 }
+// [/snippet measurement-settings]
 } // namespace xray

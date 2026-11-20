@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Vẽ ảnh detector đầu tiên bằng SDL3
 
@@ -22,16 +23,33 @@ Canvas tính preview 40×30 để giảm công việc trong trình duyệt. Hai 
 
 ## Viết code từng bước
 
+Hãy kiểm đường từ mảng số ra cửa sổ bằng một tấm chữ nhật xám trên nền trắng. Chưa có tia ở bước này: nếu hình đã bị kéo lệch, ta sửa cách chép hàng và kích thước detector trước khi đổ lỗi cho phép suy giảm.
+
+<CourseWorkFile project="55" step={1} path="include/detector.hpp" />
+<CourseWorkFile project="55" step={1} path="include/view.hpp" />
+
 ### Bước 1 — Tạo ảnh kiểm trước khi thêm vật lý
 
 Trong main, sau window/renderer, tạo SDL_PIXELFORMAT_RGBA32 với SDL_TEXTUREACCESS_STREAMING, kích thước imageWidth/imageHeight và SDL_SCALEMODE_NEAREST. Nếu tạo texture hoặc đặt filter thất bại, throw và đi tới cleanup. brightness của bài này là:
 
+{/* snippet include/detector.hpp#fill-detector */}
+
 ```cpp title="include/detector.hpp"
-inline double brightness(int x, int y, [[maybe_unused]] const Settings& settings) {
-    if (x >= 25 && x < 55 && y >= 18 && y < 42) {
-        return 0.35;
+inline Image makeImage(Settings settings) {
+    validate(settings);
+    Image image;
+    for (int y = 0; y < imageHeight; ++y) {
+        for (int x = 0; x < imageWidth; ++x) {
+            const double value = brightness(x, y, settings);
+            const auto gray = static_cast<std::uint8_t>(std::floor(std::clamp(value, 0.0, 1.0) * 255 + 0.5));
+            const int offset = 4 * (x + imageWidth * y);
+            image.rgba[offset] = gray;
+            image.rgba[offset + 1] = gray;
+            image.rgba[offset + 2] = gray;
+            image.rgba[offset + 3] = 255;
+        }
     }
-    return 1;
+    return image;
 }
 ```
 
@@ -87,6 +105,12 @@ inline void upload(SDL_Texture* texture, const Image& image) {
 ```
 
 Pitch là byte stride do SDL trả về, có thể khác width*4. Lock không đảm bảo có ảnh cũ để đọc; phải ghi đầy đủ. Sau unlock, main clear nền, SDL_RenderTexture vào imageRect rồi SDL_RenderPresent. Xem [SDL_LockTexture](https://wiki.libsdl.org/SDL3/SDL_LockTexture) về hợp đồng write-only và unlock.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="55" step={1} path="src/main.cpp" />
+
+Đổi đúng một ô trên mảng RGBA. Xác nhận ô đổi nằm ở phía bạn đoán khi cửa sổ được phóng to, không thay dữ liệu theo kích thước cửa sổ.
 
 ## Ghép các phần lại
 

@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Ghép bốn phép giao thành công cụ chọn vật thể
 
@@ -19,6 +20,12 @@ Các ứng viên phải được tính từ cùng ray và cùng range. Khi direc
 Preset “Trong sphere” cho mặt thoát sphere; “Trong box” cho mặt thoát box. Ở preset box, giảm tMax xuống 0.5: ray chưa tới mặt z=max nên Box trả MISS. Preset nhìn ra ngoài cảnh không có hit. Bật Quét tia, rồi kéo vùng vẽ: thao tác tay dừng quét để không có hai nguồn điều khiển tranh nhau.
 
 ## Viết code từng bước
+
+Chĩa tia sao cho đi qua hai vật. Câu hỏi lúc này không phải «có chạm không?» mà là «trên đường từ đầu dò đi ra, chạm cái nào trước?». Thu kết quả theo t rồi mới chọn vật, giữ các lần chạm sau để người học kiểm.
+
+<CourseWorkFile project="52" step={7} path="include/query.hpp" />
+<CourseWorkFile project="52" step={7} path="include/scan.hpp" />
+<CourseWorkFile project="52" step={7} path="include/workshop.hpp" />
 
 ### Bước 1 — Giữ kết quả của từng primitive
 
@@ -86,6 +93,17 @@ if (event.button.button == SDL_BUTTON_LEFT && !inside(aimRect, x, y) && x >= 0 &
 Phím **5–8** chọn preset nguồn: phòng ban đầu, trong sphere, trong box, nhìn ra ngoài. Preset box lấy trung điểm min/max; preset miss quay target về −z. Space quét/dừng, +/- đổi tMax; R đặt lại cả scene, hai camera, khoảng tia và phase. Mất focus/minimize dừng quét và nhả capture. Pause chỉ dừng việc tự di chuyển tâm ngắm, không khóa camera, chỉnh vật thể hoặc inspector.
 
 Canvas có thêm thí nghiệm tia song song/tiếp tuyến/suy biến và hỗ trợ pointer capture. Reduced motion tắt quét tự động nhưng không vô hiệu hóa bàn phím. C++ không dùng web reduced-motion preference; mở paused và chỉ quét sau thao tác Space của người dùng.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="52" step={7} path="include/controls.hpp" />
+<CourseWorkFile project="52" step={7} path="include/input.hpp" />
+<CourseWorkFile project="52" step={7} path="include/instrument-hud.hpp" />
+<CourseWorkFile project="52" step={7} path="include/panel.hpp" />
+<CourseWorkFile project="52" step={7} path="include/view.hpp" />
+<CourseWorkFile project="52" step={7} path="src/main.cpp" />
+
+Rút ngắn tMax ngay trước điểm ra của khối. Chỉ đoạn đo hợp lệ còn hiện; đổi góc camera không được đổi tên vật đứng đầu danh sách.
 
 ## Ghép các phần lại
 

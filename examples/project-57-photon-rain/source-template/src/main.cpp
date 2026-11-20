@@ -8,9 +8,12 @@
 
 int main(int argc, char** argv) {
     bool smoke = false;
+    const char* capture = nullptr;
     for (int i = 1; i < argc; ++i) {
         if (std::string_view(argv[i]) == "--smoke") {
             smoke = true;
+        } else if (std::string_view(argv[i]) == "--capture" && i + 1 < argc) {
+            capture = argv[++i];
         }
     }
     // Khởi tạo SDL; starter chỉ có window, renderer và event loop.
@@ -19,7 +22,7 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-    if (smoke) {
+    if (smoke || capture != nullptr) {
         flags |= SDL_WINDOW_HIDDEN;
     }
     SDL_Window* window = SDL_CreateWindow("Photon rain | analog 2D transport", photon::viewWidth, photon::viewHeight, flags);
@@ -41,8 +44,19 @@ int main(int argc, char** argv) {
         photon::Controls controls;
         photon::Trace selected;
         bool dirty = true;
+#if LAB_CHECKPOINT >= 7
+        std::string uncertainty;
+#endif
 #if LAB_CHECKPOINT >= 6
         auto experiment = photon::makeExperiment(controls.settings);
+        if (capture != nullptr) {
+            while (photon::advance(experiment, 32) > 0) {
+                // Hoàn thành đúng một lượt với seed trong Settings rồi chụp.
+            }
+        }
+#if LAB_CHECKPOINT >= 8
+        controls.paused = false;
+#endif
 #endif
         std::cout << "Esc: quit\n";
 #if LAB_CHECKPOINT >= 2
@@ -52,7 +66,7 @@ int main(int argc, char** argv) {
         std::cout << "J/K: muS | L: event limit1/8/64 | Left/Right or drag timeline: inspect vertices\n";
 #endif
 #if LAB_CHECKPOINT >= 6
-        std::cout << "N: add1 photon | M: add32 | Q: count512/2048/8192\n";
+        std::cout << "N: add1 photon | M: add32 | Q: count512/2048/8192/16384\n";
 #endif
 #if LAB_CHECKPOINT >= 8
         std::cout << "Space: run/pause | V: bounded pure-absorption audit\n";
@@ -163,13 +177,17 @@ int main(int argc, char** argv) {
                 title << " collisions=" << selected.collisions << " scatters=" << selected.scatters << " event limit=" << controls.settings.eventLimit;
 #endif
 #if LAB_CHECKPOINT >= 6
-                const auto counts = experiment.counts;
+                const auto& counts = experiment.counts;
                 title << " N=" << counts.completed << '/' << controls.settings.count << " A/E/C=" << counts.absorbed << '/' << counts.escaped << '/' << counts.censored;
 #endif
 #if LAB_CHECKPOINT >= 7
+                uncertainty = "Emit photons to estimate the ballistic fraction";
                 if (counts.completed > 0) {
                     const auto interval = photon::wilson(counts.ballistic, counts.completed);
                     title << " ballistic=" << static_cast<double>(counts.ballistic) / counts.completed << " CI=[" << interval[0] << ',' << interval[1] << "] theory=" << photon::expectedBallistic(controls.settings);
+                    std::ostringstream estimate;
+                    estimate << std::fixed << std::setprecision(3) << "Straight-through 95%: [" << interval[0] << ", " << interval[1] << "]  seed " << controls.settings.seed;
+                    uncertainty = estimate.str();
                 }
 #endif
                 photon::require(SDL_SetWindowTitle(window, title.str().c_str()));
@@ -178,7 +196,10 @@ int main(int argc, char** argv) {
             photon::require(SDL_SetRenderDrawColor(renderer, 11, 16, 32, 255));
             photon::require(SDL_RenderClear(renderer));
 #if LAB_CHECKPOINT >= 1
-            photon::drawMedium(renderer);
+            photon::drawMedium(renderer, controls.settings);
+#if LAB_CHECKPOINT >= 7
+            photon::label(renderer, 589, 72, uncertainty, {182, 205, 203, 255});
+#endif
 #if LAB_CHECKPOINT >= 6
             for (const auto& trace : experiment.recent) {
                 photon::drawTrace(renderer, trace, photon::maximumEvents + 1, true);
@@ -195,6 +216,14 @@ int main(int argc, char** argv) {
 #if LAB_CHECKPOINT >= 6
             photon::drawCounts(renderer, experiment.counts);
 #endif
+            if (capture != nullptr) {
+                SDL_Surface* frame = SDL_RenderReadPixels(renderer, nullptr);
+                if (!frame) throw std::runtime_error(SDL_GetError());
+                const bool saved = SDL_SavePNG(frame, capture);
+                SDL_DestroySurface(frame);
+                photon::require(saved);
+                running = false;
+            }
             photon::require(SDL_RenderPresent(renderer));
             if (smoke) {
                 running = false;

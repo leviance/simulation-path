@@ -9,14 +9,17 @@ namespace slice53 {
 // A coarse isosurface makes the specimen readable; every slice still samples the full volume.
 constexpr double contextIso = 0.12;
 constexpr std::size_t maxContextTriangles = 240000;
-struct Vertex { Vec3 point; Vec3 normal; };
+struct Vertex {
+    Vec3 point, normal;
+    double material = -1; // negative on the neutral analytic fixtures
+};
 using Triangle = std::array<Vertex, 3>;
 using Mesh = std::vector<Triangle>;
 
 inline Vec3 surfaceNormal(const Volume& volume, Vec3 point) {
     Vec3 gradient;
     for (int axis = 0; axis < 3; ++axis) {
-        const double h = volume.grid().spacing[axis];
+        const double h = 2 * volume.grid().spacing[axis];
         Vec3 before = point;
         Vec3 after = point;
         before[axis] -= h;
@@ -26,7 +29,7 @@ inline Vec3 surfaceNormal(const Volume& volume, Vec3 point) {
     return unit(gradient);
 }
 
-inline void meshTetrahedron(const Volume& volume, const std::array<Vec3, 4>& points, const std::array<double, 4>& scalar, Mesh& mesh) {
+inline void meshTetrahedron(const Volume& volume, const std::array<Vec3, 4>& points, const std::array<double, 4>& scalar, Mesh& mesh, bool showMinerals) {
     constexpr std::array<std::array<int, 2>, 6> edges{{{0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}}};
     std::vector<Vertex> polygon;
     for (const auto& edge : edges) {
@@ -35,7 +38,12 @@ inline void meshTetrahedron(const Volume& volume, const std::array<Vec3, 4>& poi
         if ((scalar[a] < contextIso) == (scalar[b] < contextIso)) continue;
         const double t = (contextIso - scalar[a]) / (scalar[b] - scalar[a]);
         const Vec3 point = volume.grid().clamp(lerp(points[a], points[b], t));
-        polygon.push_back({point, surfaceNormal(volume, point)});
+        const Vec3 normal = surfaceNormal(volume, point);
+        double material = -1;
+        // The interface has one iso value. The solid endpoint of this crossing
+        // contains the measured material, even at the sharp tip of a crystal.
+        if (showMinerals) material = std::max(scalar[a], scalar[b]);
+        polygon.push_back({point, normal, material});
     }
     if (polygon.size() < 3) return;
     Vec3 centre;
@@ -62,7 +70,7 @@ inline void meshTetrahedron(const Volume& volume, const std::array<Vec3, 4>& poi
 }
 
 // [snippet context-build]
-inline Mesh buildContextMesh(const Volume& volume) {
+inline Mesh buildContextMesh(const Volume& volume, bool showMinerals = false) {
     // Two-voxel stride is explicitly a presentation approximation, never a measurement.
     std::array<std::vector<int>, 3> coordinates;
     for (int axis = 0; axis < 3; ++axis) {
@@ -88,6 +96,8 @@ inline Mesh buildContextMesh(const Volume& volume) {
                     if (ix >= 0 && iy >= 0 && iz >= 0 && ix < volume.grid().size[0] && iy < volume.grid().size[1] && iz < volume.grid().size[2])
                         scalar[corner] = volume.at(ix, iy, iz);
                 }
+                const auto limits = std::minmax_element(scalar.begin(), scalar.end());
+                if (*limits.second < contextIso || *limits.first >= contextIso) continue;
                 for (const auto& tetrahedron : tetrahedra) {
                     std::array<Vec3, 4> positions;
                     std::array<double, 4> values;
@@ -95,7 +105,7 @@ inline Mesh buildContextMesh(const Volume& volume) {
                         positions[vertex] = points[tetrahedron[vertex]];
                         values[vertex] = scalar[tetrahedron[vertex]];
                     }
-                    meshTetrahedron(volume, positions, values, mesh);
+                    meshTetrahedron(volume, positions, values, mesh, showMinerals);
                 }
             }
         }
@@ -115,7 +125,7 @@ inline std::vector<Vertex> clipPolygon(const std::vector<Vertex>& input, int axi
         if (!keepLower) dAfter = -dAfter;
         if ((dBefore <= 0) != (dAfter <= 0)) {
             const double t = dBefore / (dBefore - dAfter);
-            output.push_back({lerp(before.point, after.point, t), unit(lerp(before.normal, after.normal, t))});
+            output.push_back({lerp(before.point, after.point, t), unit(lerp(before.normal, after.normal, t)), lerp(before.material, after.material, t)});
         }
         if (dAfter <= 0) output.push_back(after);
         before = after;

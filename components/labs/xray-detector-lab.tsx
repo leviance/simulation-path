@@ -35,7 +35,7 @@ function Experiment({ stage }: { stage: number }) {
     size = useCanvasSize(canvas),
     help = useId(),
     reduced = useReducedMotion();
-  const [settings, setSettings] = useState({ ...defaultSettings }),
+  const [settings, setSettings] = useState({ ...defaultSettings, preset: stage >= 4 ? 3 : 0 }),
     [pixel, setPixel] = useState({ x: 40, y: 30 }),
     [paused, setPaused] = useState(true),
     [auditResult, setAuditResult] = useState("Chưa kiểm"),
@@ -83,15 +83,19 @@ function Experiment({ stage }: { stage: number }) {
       frame = 0,
       cancelled = false;
     previewReady.current = false;
-    const image = new Uint8ClampedArray(40 * 30 * 4);
+    const width = stage >= 4 && settings.preset === 3 ? 80 : 40;
+    const height = (width * 3) / 4;
+    const image = new Uint8ClampedArray(width * height * 4);
     const batch = () => {
       try {
         const begin = performance.now();
         let count = 0;
-        while (row < 30 && count < 3 && performance.now() - begin < 10) {
-          for (let x = 0; x < 40; x++) {
-            const gray = Math.round(brightness(x, row, 40, 30, scene, settings, stage) * 255),
-              i = 4 * (x + row * 40);
+        while (row < height && count < 3 && performance.now() - begin < 10) {
+          for (let x = 0; x < width; x++) {
+            const gray = Math.round(
+                brightness(x, row, width, height, scene, settings, stage) * 255,
+              ),
+              i = 4 * (x + row * width);
             image[i] = gray;
             image[i + 1] = gray;
             image[i + 2] = gray;
@@ -100,9 +104,9 @@ function Experiment({ stage }: { stage: number }) {
           row++;
           count++;
         }
-        if (row === 30) previewReady.current = true;
+        if (row === height) previewReady.current = true;
         if (!cancelled) setPreview({ image: new Uint8ClampedArray(image), rows: row });
-        if (row < 30 && !cancelled) frame = requestAnimationFrame(batch);
+        if (row < height && !cancelled) frame = requestAnimationFrame(batch);
       } catch (e) {
         setError(String(e));
       }
@@ -149,7 +153,7 @@ function Experiment({ stage }: { stage: number }) {
   }, [paused, reduced, stage]);
   const reset = () => {
     restart();
-    setSettings({ ...defaultSettings });
+    setSettings({ ...defaultSettings, preset: stage >= 4 ? 3 : 0 });
     setPixel({ x: 40, y: 30 });
     setAuditResult("Chưa kiểm");
     setError("");
@@ -202,7 +206,7 @@ function Experiment({ stage }: { stage: number }) {
   const readout: { label: string; value: ReactNode }[] = [
     {
       label: "Pixel detector / target",
-      value: pixel.x + ", " + pixel.y + " / 80×60 (preview 40×30)",
+      value: pixel.x + ", " + pixel.y + " / 80×60",
     },
   ];
   if (stage >= 2)
@@ -252,8 +256,8 @@ function Experiment({ stage }: { stage: number }) {
       <p id={help}>
         Click/kéo ảnh detector hoặc mũi tên để chọn pixel. M xem một mẫu midpoint. Sơ đồ XZ là hình
         chiếu của tia 3D, không phải lát cắt y=0. Space quay/dừng vật thể, R reset; reduced motion
-        chỉ cho điều chỉnh thủ công. Ảnh CPU 40×30 được tính tối đa ba hàng mỗi frame; không WebGL,
-        không thiết bị X-ray thật.
+        chỉ cho điều chỉnh thủ công. Canvas đo bằng CPU: 80×60 ô cho radio, 40×30 cho vật thử; tối
+        đa ba hàng mỗi frame. Bản C++ dùng shader từ Bài 9. Đây không phải thiết bị X-ray thật.
       </p>
       <div className="lab-controls">
         <label>
@@ -269,7 +273,8 @@ function Experiment({ stage }: { stage: number }) {
           >
             <option value="0">Một slab</option>
             <option value="1">Các lớp tách rời</option>
-            <option value="2">Overlap cộng mu</option>
+            <option value="2">Hai lớp chồng lên nhau</option>
+            <option value="3">Radio: vỏ, bo mạch, pin và loa</option>
           </select>
         </label>
         <label>
@@ -466,7 +471,7 @@ function Experiment({ stage }: { stage: number }) {
     </>
   );
 }
-export default function XrayDetectorLab({ mode = "xray55-8" }: { mode?: string }) {
-  const stage = Math.max(1, Math.min(8, Number(mode.match(/^xray55-(\d)$/)?.[1] ?? 8)));
+export default function XrayDetectorLab({ mode = "xray55-10" }: { mode?: string }) {
+  const stage = Math.max(1, Math.min(10, Number(mode.match(/^xray55-(\d{1,2})$/)?.[1] ?? 10)));
   return <Experiment key={stage} stage={stage} />;
 }

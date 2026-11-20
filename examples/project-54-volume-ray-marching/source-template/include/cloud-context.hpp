@@ -35,9 +35,9 @@ inline void drawCloudContext(Overlay& ui, const State& state, int width, int hei
         float y;
     };
     const std::array<Landmark, 3> landmarks{{
-        {{-0.20, 0.25, 0}, "DENSE BILLOW", 36, 208},
-        {{-0.85, -0.03, 0.04}, "THIN EDGE", 36, static_cast<float>(height - 314)},
-        {{0.32, -0.20, 0.07}, "LOW-DENSITY OPENING", static_cast<float>(width - 280), static_cast<float>(height - 314)}
+        {{-0.25, 0.26, 0.12}, "NEAR TOWER CORE", 36, 208},
+        {{0.96, 0.55, -0.04}, "DOWNWIND ANVIL TIP", static_cast<float>(width - 265), 182},
+        {{0, 0, 0}, "AIR BETWEEN LAYERS", 36, static_cast<float>(height - 314)}
     }};
     for (const Landmark& item : landmarks) {
         const auto projected = projectAnnotation(item.point, state.camera, width, height);

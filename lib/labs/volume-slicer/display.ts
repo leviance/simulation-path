@@ -15,18 +15,23 @@ export function windowValue(scalar: number, window: DisplayWindow) {
   return Math.max(0, Math.min(1, (scalar - window.level + window.width * 0.5) / window.width));
 }
 const stops: Color[] = [
-  [0.025, 0.035, 0.055],
-  [0.1, 0.27, 0.35],
-  [0.24, 0.51, 0.52],
-  [0.86, 0.67, 0.42],
-  [0.98, 0.42, 0.24],
-  [1, 0.94, 0.78],
+  [0.018, 0.029, 0.048],
+  [0.102, 0.118, 0.141],
+  [0.235, 0.165, 0.145],
+  [0.65, 0.415, 0.26],
+  [0.202, 0.193, 0.29],
+  [0.105, 0.32, 0.411],
+  [0.17, 0.613, 0.646],
+  [0.55, 0.81, 0.756],
+  [0.96, 0.903, 0.725],
+  [0.732, 0.574, 0.842],
+  [0.987, 0.944, 1.0],
 ];
 export function scalarColor(scalar: number, window: DisplayWindow, colored: boolean): Color {
   const t = windowValue(scalar, window);
   if (!colored) return [t, t, t];
-  const p = 5 * t,
-    lower = Math.min(4, Math.floor(p)),
+  const p = 10 * t,
+    lower = Math.min(9, Math.floor(p)),
     fraction = p - lower;
   return stops[lower].map((v, i) => v + fraction * (stops[lower + 1][i] - v)) as Color;
 }

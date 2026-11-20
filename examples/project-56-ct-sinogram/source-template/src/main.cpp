@@ -1,5 +1,6 @@
 #include "audit.hpp"
 #include "controls.hpp"
+#include "timber-station.hpp"
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
@@ -8,9 +9,12 @@
 
 int main(int argc, char** argv) {
     bool smoke = false;
+    const char* capture = nullptr;
     for (int i = 1; i < argc; ++i) {
         if (std::string_view(argv[i]) == "--smoke") {
             smoke = true;
+        } else if (std::string_view(argv[i]) == "--capture" && i + 1 < argc) {
+            capture = argv[++i];
         }
     }
     // Khởi tạo SDL; starter chỉ mở window, renderer và event loop.
@@ -19,7 +23,7 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-    if (smoke) {
+    if (smoke || capture != nullptr) {
         flags |= SDL_WINDOW_HIDDEN;
     }
     SDL_Window* window = SDL_CreateWindow("Toy CT | XY cross-section", ct::viewWidth, ct::viewHeight, flags);
@@ -35,15 +39,34 @@ int main(int argc, char** argv) {
     }
 
     SDL_Texture* texture = nullptr;
+    SDL_Texture* specimenTexture = nullptr;
+    SDL_Texture* estimateTexture = nullptr;
     bool failed = false;
     try {
         ct::require(SDL_SetRenderLogicalPresentation(renderer, ct::viewWidth, ct::viewHeight, SDL_LOGICAL_PRESENTATION_LETTERBOX));
         SDL_SetRenderVSync(renderer, 1);
         ct::Controls controls;
+#if LAB_CHECKPOINT >= 1
+        specimenTexture = ct::fieldTexture(renderer, ct::sampleSide);
+        int lastPreset = -1;
+        double lastStrength = -1;
+#endif
+#if LAB_CHECKPOINT >= 10
+        ct::Reconstruction image;
+        estimateTexture = ct::fieldTexture(renderer, ct::sliceSide);
+        controls.paused = false;
+        std::string comparison;
+#endif
         [[maybe_unused]] bool dirty = true;
 #if LAB_CHECKPOINT >= 5
         auto scan = ct::makeScan(controls.settings);
         ct::acquireOne(scan);
+        if (capture != nullptr) {
+            while (ct::acquireOne(scan)) {
+                // Ảnh minh họa lấy từ một lượt đo đủ, không nạp sẵn dữ liệu mẫu.
+            }
+            controls.row = scan.acquired - 1;
+        }
         int textureViews = 0;
 #endif
 #if LAB_CHECKPOINT >= 4
@@ -66,7 +89,7 @@ int main(int argc, char** argv) {
         std::cout << "T: point trace\n";
 #endif
 #if LAB_CHECKPOINT >= 8
-        std::cout << "Q: 30/60/120 views\n";
+        std::cout << "Q: 30/60/120/180 views\n";
 #endif
 #if LAB_CHECKPOINT >= 9
         std::cout << "V: independent circular phantom audit\n";
@@ -91,6 +114,10 @@ int main(int argc, char** argv) {
 #if LAB_CHECKPOINT >= 5
                     if (controls.settings != before.settings || event.key.key == SDLK_R) {
                         scan = ct::makeScan(controls.settings);
+#if LAB_CHECKPOINT >= 10
+                        image = {};
+                        comparison.clear();
+#endif
                         controls.paused = true;
                         controls.step = false;
                     }
@@ -165,6 +192,13 @@ int main(int argc, char** argv) {
 #endif
             // Inspector and detector preview update only when their inputs change.
             if (dirty) {
+#if LAB_CHECKPOINT >= 1
+                if (lastPreset != controls.settings.preset || lastStrength != controls.settings.strength) {
+                    ct::paintSpecimen(specimenTexture, ct::makeScene(controls.settings.preset), controls.settings.strength);
+                    lastPreset = controls.settings.preset;
+                    lastStrength = controls.settings.strength;
+                }
+#endif
 #if LAB_CHECKPOINT >= 5
 #if LAB_CHECKPOINT >= 8
                 ct::resizeSinogramTexture(renderer, texture, textureViews, controls.settings.views);
@@ -180,6 +214,25 @@ int main(int argc, char** argv) {
                 }
 #endif
                 ct::upload(texture, scan, controls.displayRange, controls.invert);
+#endif
+#if LAB_CHECKPOINT >= 10
+                const int previousRows = image.rows;
+                while (image.rows < scan.acquired) {
+                    const int row = image.rows;
+                    const double* values = scan.values.data() + row * ct::detectorCount;
+                    const std::span<const double, ct::detectorCount> detector(values, ct::detectorCount);
+                    ct::backproject(image, ct::viewAngle(row, scan.settings.views), detector);
+                }
+                if (image.rows != previousRows || image.rows == 0) {
+                    ct::paintEstimate(estimateTexture, image);
+                }
+#if LAB_CHECKPOINT >= 11
+                if (image.rows == scan.settings.views && comparison.empty()) {
+                    std::ostringstream metric;
+                    metric << std::fixed << std::setprecision(3) << "Shape RMSE (peak normalized): " << ct::shapeError(image, scan.scene, scan.settings.strength);
+                    comparison = metric.str();
+                }
+#endif
 #endif
                 std::ostringstream title;
                 title << std::fixed << std::setprecision(5) << "Toy CT | row=" << controls.row << " col=" << controls.column;
@@ -208,7 +261,11 @@ int main(int argc, char** argv) {
             ct::require(SDL_SetRenderDrawColor(renderer, 11, 16, 32, 255));
             ct::require(SDL_RenderClear(renderer));
 #if LAB_CHECKPOINT >= 1
-            ct::drawScene(renderer, ct::makeScene(controls.settings.preset));
+            ct::stationFrame(renderer);
+            if (controls.showReference) {
+                ct::require(SDL_RenderTexture(renderer, specimenTexture, nullptr, &ct::referenceRect));
+                ct::drawScene(renderer, ct::makeScene(controls.settings.preset));
+            }
 #endif
 #if LAB_CHECKPOINT >= 2
             const double angle = 2 * ct::pi * controls.row / controls.settings.views;
@@ -228,6 +285,20 @@ int main(int argc, char** argv) {
                 ct::drawTrace(renderer, controls.settings.views, {0.65, 0.3});
             }
 #endif
+#if LAB_CHECKPOINT >= 10
+            ct::require(SDL_RenderTexture(renderer, estimateTexture, nullptr, &ct::reconstructionRect));
+            ct::pigment(renderer, 242, 199, 131);
+            ct::caption(renderer, 443, 608, std::to_string(image.rows) + " / " + std::to_string(scan.settings.views) + " acquired views");
+            ct::caption(renderer, 843, 592, comparison);
+#endif
+            if (capture != nullptr) {
+                SDL_Surface* frame = SDL_RenderReadPixels(renderer, nullptr);
+                if (!frame) throw std::runtime_error(SDL_GetError());
+                const bool saved = SDL_SavePNG(frame, capture);
+                SDL_DestroySurface(frame);
+                ct::require(saved);
+                running = false;
+            }
             ct::require(SDL_RenderPresent(renderer));
             if (smoke) {
                 running = false;
@@ -242,6 +313,8 @@ int main(int argc, char** argv) {
 
     // Giải phóng texture trước renderer/window, kể cả khi khởi tạo thất bại.
     SDL_CaptureMouse(false);
+    SDL_DestroyTexture(specimenTexture);
+    SDL_DestroyTexture(estimateTexture);
     SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

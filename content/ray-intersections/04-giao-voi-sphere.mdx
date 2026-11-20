@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Hai nghiệm của sphere: vào, ra và tiếp tuyến
 
@@ -30,6 +31,12 @@ Công thức trực tiếp có thể trừ hai số gần bằng nhau. Source d�
 Ngắm sphere và đọc t cùng normal. Chọn “Tiếp tuyến sphere”: ray cố định chạy dọc z qua x=center.x+radius, y=0. Nó phải chạm tại t≈3. Giảm tMax xuống dưới 3 để thấy hit bị loại bởi range chứ không bởi discriminant.
 
 ## Viết code từng bước
+
+Một hòn bi trong suốt có hai chỗ đáng đánh dấu: nơi tia đi vào và nơi nó ra khỏi bi. Sắp hai nghiệm theo đường đi trước khi tô nét nằm trong vật; nếu nguồn ở bên trong thì chỉ còn giao điểm ra trước mặt.
+
+<CourseWorkFile project="52" step={4} path="include/sphere.hpp" />
+<CourseWorkFile project="52" step={4} path="include/beam-drawing.hpp" />
+<CourseWorkFile project="52" step={4} path="include/query.hpp" />
 
 ### Bước 1 — Giữ hai nghiệm, chưa vội chọn một hit
 
@@ -107,6 +114,37 @@ inline std::optional<Hit> intersectSphere(const Ray& ray, const Sphere& sphere) 
 ```
 
 Khi origin ở trong sphere, t0 âm và t1 dương; đoạn code tự chọn t1. Khi tMin nằm sau entry nhưng trước exit, cũng chọn exit. Normal hướng từ tâm ra ngoài, kể cả ở mặt thoát; frontFace khi đó false.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="52" step={4} path="include/instrument-hud.hpp" />
+<CourseWorkFile project="52" step={4} path="include/panel.hpp" />
+<CourseWorkFile project="52" step={4} path="include/view.hpp" />
+
+Nhắm từ giữa quả cầu rồi kéo về phía rìa. Đoạn trong vật phải ngắn dần; tiếp tuyến không tạo ra một đoạn có bề dày.
+
+Kết quả hình học cho ta hai khoảng cách; trước khi vẽ đoạn bên trong, nhớ cắt chúng theo tầm của đầu dò. Đây là đoạn cần đối chiếu với dấu trên thước.
+
+{/* snippet include/beam-drawing.hpp#solid-chord */}
+
+```cpp title="include/beam-drawing.hpp — Đo bề dày của quả cầu"
+inline void drawSolidPath(Raster& raster, const Ray& ray, double entry, double exit) {
+    // Chỉ tô đoạn vừa nằm trong vật, vừa thuộc phạm vi đo. Nếu O ở
+    // bên trong, entry âm vẫn đúng nhưng nằm ngoài phần tia được vẽ.
+    const double from = std::max(entry, ray.tMin);
+    const double until = std::min(exit, ray.tMax);
+    if (from > until) {
+        return;
+    }
+    raster.line(at(ray, from), at(ray, until), {255, 182, 94}, true, 1, 0.95);
+    if (inRange(ray, entry)) {
+        raster.ring(at(ray, entry), {215, 253, 237}, 7);
+    }
+    if (inRange(ray, exit)) {
+        raster.ring(at(ray, exit), {255, 194, 109}, 7, true);
+    }
+}
+```
 
 ## Ghép các phần lại
 

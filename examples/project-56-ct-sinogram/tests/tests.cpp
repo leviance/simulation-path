@@ -1,4 +1,5 @@
 #include "audit.hpp"
+#include "backprojection.hpp"
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -153,6 +154,40 @@ int main() {
         },
                 "invalid strength rejected");
     }
+    // Đo vỏ tròn có đường kính 2, lỗ rỗng đường kính 0.5: còn 1.5 đơn vị vật liệu.
+    check(close(chordLength(centre, {{0, 0}, 1, 0.5, 0.25}), 1.5), "annulus excludes its hollow");
+    check(densityAt(original, {-0.17, 0.08}) == 0 && densityAt(original, {0.52, -0.33}) > 1, "hollow and dense knot belong to the reference");
+    std::array<double, detectorCount> line{};
+    line.fill(0.75);
+    Reconstruction image;
+    backproject(image, 0, line);
+    backproject(image, pi / 3, line);
+    const int centrePixel = sliceSide / 2 * sliceSide + sliceSide / 2;
+    check(image.rows == 2 && close(averageAt(image, centrePixel), 0.75), "mean is independent of number of views");
+    line.fill(0);
+    line[64] = 1;
+    check(close(readDetector(line, 0), 0.5), "interpolate between detector centres 63 and 64");
+    check(readDetector(line, detectorWidth) == 0, "outside detector has no measurement");
+    Reconstruction blank;
+    line.fill(0);
+    backproject(blank, 0, line);
+    check(close(shapeError(blank, original, 0), 0), "zero truth and zero estimate have zero error");
+    auto wood = makeScan({2, 180, 1});
+    Reconstruction timber;
+    while (acquireOne(wood)) {
+        const int row = wood.acquired - 1;
+        const double* samples = wood.values.data() + detectorCount * row;
+        backproject(timber, viewAngle(row, 180), std::span<const double, detectorCount>(samples, detectorCount));
+    }
+    auto estimateNear = [&](Point p) {
+        const int x = static_cast<int>((p[0] + sliceRadius) / (2 * sliceRadius) * sliceSide);
+        const int y = static_cast<int>((sliceRadius - p[1]) / (2 * sliceRadius) * sliceSide);
+        return averageAt(timber, x + sliceSide * y);
+    };
+    const double rmse = shapeError(timber, original, 1);
+    check(estimateNear({0.52, -0.33}) > estimateNear({-0.17, 0.08}), "measured knot is brighter than the hollow");
+    check(std::isfinite(rmse) && rmse > 0 && rmse < 0.70, "unfiltered result locates the feature without reproducing the ground truth");
+    std::cout << "180 measured angles | peak-normalized shape RMSE " << rmse << '\n';
     if (failures != 0) {
         return EXIT_FAILURE;
     }

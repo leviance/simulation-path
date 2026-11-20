@@ -49,7 +49,7 @@ test("P53 nine new lessons teach connected steps and every C++ block matches its
       count++;
     }
   }
-  assert.equal(count, 38);
+  assert.equal(count, 40);
 });
 test("P53 snapshots resolve authoring stages and retain readable four-space C++", () => {
   for (const snapshot of [

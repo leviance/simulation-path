@@ -13,12 +13,14 @@ class Random {
         }
     }
 
+    // [snippet next-draw]
     std::uint32_t next() {
         state ^= state << 13;
         state ^= state >> 17;
         state ^= state << 5;
         return state;
     }
+    // [/snippet next-draw]
 
     double uniform() {
         return (static_cast<double>(next()) + 0.5) / 4294967296.0;

@@ -133,7 +133,7 @@ class Renderer {
         gl_.UseProgram(program_);
         gl_.Uniform2f(uniform(gl_, program_, "uSize"), static_cast<float>(width), static_cast<float>(height));
 #if LAB_CHECKPOINT >= 2
-        setBasis(program_, camera, false);
+        setCameraDirections(program_, camera);
 #endif
 #if LAB_CHECKPOINT >= 3
         const Vec3 origin = cameraBasis(camera).origin;
@@ -205,7 +205,7 @@ class Renderer {
         gl_.Uniform2f(uniform(gl_, present_, "uSize"), static_cast<float>(viewWidth), static_cast<float>(viewHeight));
         gl_.Uniform2f(uniform(gl_, present_, "uOffset"), static_cast<float>(left), static_cast<float>(bottom));
 #if LAB_CHECKPOINT >= 5
-        setBasis(present_, camera, true);
+        setCameraDirections(present_, camera);
 #endif
 #if LAB_CHECKPOINT >= 6
         gl_.Uniform1i(uniform(gl_, present_, "uMode"), static_cast<int>(settings.mode));
@@ -229,12 +229,10 @@ class Renderer {
 #endif
 
 #if LAB_CHECKPOINT >= 2
-    void setBasis(GLuint program, Camera camera, bool originRequired) {
+    void setCameraDirections(GLuint program, Camera camera) {
         const Basis basis = cameraBasis(camera);
         for (const auto& [name, value] : {std::pair{"uForward", basis.forward}, std::pair{"uRight", basis.right}, std::pair{"uUp", basis.up}})
             gl_.Uniform3f(uniform(gl_, program, name), static_cast<float>(value.x), static_cast<float>(value.y), static_cast<float>(value.z));
-        if (originRequired)
-            gl_.Uniform3f(uniform(gl_, program, "uOrigin"), static_cast<float>(basis.origin.x), static_cast<float>(basis.origin.y), static_cast<float>(basis.origin.z));
     }
 #endif
 

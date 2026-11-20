@@ -21,13 +21,16 @@ export async function InteractiveLab({
   if (native && selection) {
     const info = mode ? metadata.modes[mode] : metadata.base;
     return (
-      <NativeGallery
-        key={mode ?? demo}
-        title={info.title}
-        overview={overview}
-        directory={native.directory}
-        takes={selection.map((key) => native.takes[key])}
-      />
+      <>
+        <NativeGallery
+          key={mode ?? demo}
+          title={info.title}
+          overview={overview}
+          directory={native.directory}
+          takes={selection.map((key) => native.takes[key])}
+        />
+        {native.withDemo && <InteractiveLabClient demo={demo} metadata={canvasInfo} mode={mode} />}
+      </>
     );
   }
   return (

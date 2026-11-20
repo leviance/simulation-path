@@ -1,8 +1,8 @@
 import type { PublishedProjectEditorial } from "../../types";
 const data = {
   summary:
-    "Tự xây máy X-ray ảo bằng SDL3: nối nguồn điểm với detector, tính đường đi qua vật liệu và tạo ảnh suy giảm. So kết quả giải tích với midpoint, giữ riêng tín hiệu thô/ảnh log và thử một phổ hai năng lượng tổng hợp.",
-  duration: "11–15 giờ",
+    "Không mở nắp radio, bạn có tìm được hai viên pin? Hãy dựng chiếc radio từ các lớp vật liệu, tự viết phép đo xuyên vật rồi để GPU tạo ảnh. Hình 3D, detector và số đo của cùng một tia nằm cạnh nhau.",
+  duration: "14–18 giờ",
   prerequisites: [
     "Project 01–05 — SDL3 texture, input và hệ tọa độ",
     "Project 52 — ray normalized và slab interval",
@@ -21,11 +21,11 @@ const data = {
   challenge: {
     timebox: "120–150 phút tự thử trước khi đọc lời giải",
     mission:
-      "Tự xây mô phỏng 3D đơn giản có nguồn điểm, các box vật liệu và một mặt detector 2D. Mỗi pixel nhận tín hiệu còn lại sau khi ray xuyên vật thể. Cho người dùng xoay vật thể, chọn pixel và đối chiếu phép tính dọc tia.",
+      "Giấu sơ đồ linh kiện. Dùng ảnh xuyên qua chiếc radio để tìm pin, bo mạch và những gân loa. Xoay radio để phân biệt hai chi tiết chồng nhau; sau đó kiểm lại bằng độ dài đoạn tia đi trong từng vật liệu.",
     outcome:
-      "Ảnh detector mức xám cạnh sơ đồ XZ và readout của tia; nhiều lớp vật liệu, exact/midpoint, ảnh log, palette và phổ hai năng lượng minh họa.",
+      "Một bàn soi radio: mô hình 3D nhìn rõ vỏ và linh kiện, ảnh detector bên cạnh và số đo T tại ô bạn chọn. Cùng một danh sách vật liệu nuôi cả hai hình.",
     requirements: [
-      "C++20, CMake 3.24+, SDL3 3.4.8; SDL_Renderer/streaming texture RGBA32, không OpenGL/GPU shader.",
+      "C++20, CMake 3.24+, SDL3 3.4.8; fragment shader OpenGL 3.3 ghi T vào R32F; SDL3 trưng bày ảnh và đọc ô đang chọn.",
       "Native target 80×60 cố định; source=(0,0,-6), detector z=6, rộng6/cao4.5 world units. Ray normalized với maximum đúng khoảng source→pixel, ≤20.",
       "Pixel centre dùng (x+0.5)/width, (y+0.5)/height; detector y lên, ảnh y xuống.",
       "Box được lưu trong object space; xoay quanh y bằng angle, ray đổi bằng rotation nghịch đảo. Source/detector không quay trong project này.",
@@ -36,7 +36,7 @@ const data = {
       "Ảnh ratio hoặc log p=-ln(max(T,1e-12)), display range 4 và đảo palette; không sửa tín hiệu raw.",
       "Phổ hai thành phần: T=w*exp(-tauLow)+(1-w)*exp(-tauHigh), w∈[0,1]. Cộng intensity trước log.",
       "Mở paused; Space quay/dừng object, blur/minimize/reset dừng và hủy capture. Mouse pick bỏ letterbox, keyboard chọn pixel.",
-      "Canvas CPU40×30 dựng tối đa3 hàng/frame, marker sample/readout dọc tia, pointer capture/DPR/keyboard/reduced-motion; không suy FPS native từ Canvas.",
+      "Canvas dựng ảnh CPU 80×60 cho radio và 40×30 cho vật thử, tối đa ba hàng/frame, marker sample/readout dọc tia, pointer capture/DPR/keyboard/reduced-motion; không suy FPS native từ Canvas.",
     ],
     constraints: [
       "Các hệ số không ứng với vật liệu hay keV thật; đây là forward projection tổng hợp, không thiết bị X-ray hoặc công cụ chẩn đoán.",
@@ -48,7 +48,7 @@ const data = {
       "Native dựng ảnh khi dirty, không tăng resolution theo cửa sổ. Canvas chỉ đổi góc sau khi preview cũ xong, không hủy mãi preview khi auto quay.",
     ],
     definitionOfDone: [
-      "Starter và8 checkpoint/final build độc lập; code4-space, có comments và đầy đủ file cuối học phần.",
+      "Starter, 10 bước và bản hoàn chỉnh build độc lập; code4-space, có comments và đầy đủ file cuối học phần.",
       "Ray centre/corner, normalized direction, inside/parallel/miss và finite detector clipping có tests.",
       "Slab centre: L=1.1, muLow=.55 cho tau=.605 và T=exp(-.605); oblique chord đúng.",
       "Layer order không đổi tau/T; overlap cộng mu; strengthzero/vacuum ratio1.",
@@ -126,11 +126,30 @@ const data = {
     {
       id: "p55-l08",
       slug: "08-kiem-chung-va-hoan-thien",
-      title: "Kiểm máy X-ray ảo rồi chạy project hoàn chỉnh",
+      title: "Kiểm bộ đo CPU trên tấm vật liệu chuẩn",
       summary: "Oracle slab, CTest Debug/Release, audit và giới hạn mô hình.",
       order: 8,
       estimatedMinutes: 90,
       demoId: "xray-detector",
+    },
+    {
+      id: "p55-l09",
+      slug: "09-do-anh-tren-gpu",
+      order: 9,
+      estimatedMinutes: 95,
+      demoId: "xray-detector",
+      title: "Soi chiếc radio bằng fragment shader",
+      summary:
+        "Gửi hình học và hệ số vào shader, đo cùng lúc các tia rồi đọc tỷ số truyền qua từ texture float.",
+    },
+    {
+      id: "p55-l10",
+      slug: "10-doi-chieu-anh-radio",
+      order: 10,
+      estimatedMinutes: 70,
+      demoId: "xray-detector",
+      title: "Kiểm ảnh radio bằng những tia đã biết",
+      summary: "So GPU với CPU trên bốn vật mẫu trước khi nhận xét độ sáng của màn hình.",
     },
   ],
 } satisfies PublishedProjectEditorial;

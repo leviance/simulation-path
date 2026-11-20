@@ -1,6 +1,20 @@
 # Project 53 — Scalar / Slice Workbench
 
-Tự xây máy cắt lát một khối scalar 3D. Chương trình mở một mẫu tổng hợp có vỏ, hai lõi đặc và các lỗ khoan, cho phép cắt theo XY/XZ/YZ, xoay góc nhìn rồi lần ngược một giá trị về tám voxel dùng để nội suy. Ba ảnh không phải ba dataset riêng.
+## Từ starter tới chương trình của bạn
+
+Bắt đầu từ tâm hốc của viên mã não tại (−16, −9, −14) mm. Chuyển XY → XZ → YZ, rồi xoay mẫu để kiểm mặt đang cắt. Giữ y = −9 và z = −14 mm. Ở 128³ với trilinear, x = −16 cho 0,015; x = −40 cho khoảng 0,928. Đây là số scalar của mẫu tổng hợp, không phải giá trị y khoa.
+
+Giải nén ZIP vào một thư mục riêng, mở terminal cạnh CMakeLists.txt. CMake sẽ tạo thư mục work từ starter đúng một lần. Bạn viết tiếp trong đó qua tất cả các bài; không chép final lên bài làm.
+
+```bash
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_53_work --parallel 1
+```
+
+Với Visual Studio, mở build-work/Release/project_53_work.exe; với generator một cấu hình, mở build-work/project_53_work. Cuối học phần, build thêm target project_53_tests và chạy ctest --test-dir build-work -C Release --output-on-failure --timeout 20. Lần này CTest đọc header trong work/include, không đọc đáp án final/include.
+
+
+Tự xây máy cắt lát một khối scalar 3D. Chương trình mở một viên đá mã não có vỏ thô, vành khoáng và hốc tinh thể, cho phép cắt theo XY/XZ/YZ, xoay góc nhìn rồi lần ngược một giá trị về tám voxel dùng để nội suy. Ba ảnh không phải ba dataset riêng.
 
 Đây **không phải** DICOM, Hounsfield Units, ảnh bệnh nhân, ray marching hoặc CT reconstruction. Đơn vị mm được gán cho mẫu tổng hợp để kiểm hướng và tỉ lệ; scalar không có đơn vị y khoa.
 

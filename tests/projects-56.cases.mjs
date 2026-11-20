@@ -4,12 +4,12 @@ import path from "node:path";
 import test from "node:test";
 import { workspace, authoredLessons, render } from "./site-support.mjs";
 const dir = path.join(workspace, "examples/project-56-ct-sinogram");
-test("Project56 publishes nine CT lessons with challenge, staged labs and complete One Dark source", async () => {
+test("Project56 publishes eleven CT lessons with challenge, staged labs and complete One Dark source", async () => {
   const overview = await render("/projects/ct-sinogram");
   assert.equal(overview.status, 200);
   assert.match(await overview.text(), /THỬ SỨC TRƯỚC KHI XEM LỜI GIẢI/i);
   const lessons = (await authoredLessons()).filter((l) => l.project === "ct-sinogram");
-  assert.equal(lessons.length, 9);
+  assert.equal(lessons.length, 11);
   for (const lesson of lessons) {
     const response = await render(lesson.route),
       html = await response.text();
@@ -33,6 +33,8 @@ test("Project56 source progresses through drawing, fan rays, chords, projection,
     [7, "include/geometry.hpp", "inline double pointOffset("],
     [8, "include/scan.hpp", "inline double samplingAngle("],
     [9, "include/audit.hpp", "inline double audit("],
+    [10, "include/backprojection.hpp", "inline void backproject("],
+    [11, "include/backprojection.hpp", "inline double shapeError("],
   ]) {
     const now = await readFile(
       path.join(dir, "checkpoints", String(n).padStart(2, "0"), file),
@@ -62,10 +64,13 @@ test("Project56 documents fan geometry, unmeasured cells, acquisition bounds and
     /-C Debug/,
     /-C Release/,
     /WaitForExit\(30000\)/,
-    /Không reconstruction/,
-    /Sắp ra mắt/,
+    /phép chiếu của lát cắt 2D/,
+    /10-trai-nguoc-tung-hang/,
   ])
     assert.match(last, pattern);
+  const reconstruction = await get("11-do-do-mo-cua-lat-cat.mdx");
+  assert.match(reconstruction, /RMSE|shapeError/);
+  assert.match(reconstruction, /chuẩn hóa|cực đại riêng/);
 });
 test("Project56 Canvas has bounded acquisition and persistent lifecycle cleanup", async () => {
   const lab = await readFile(path.join(workspace, "components/labs/ct-sinogram-lab.tsx"), "utf8");

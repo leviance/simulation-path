@@ -12,6 +12,7 @@ struct Controls {
     double displayRange = 2;
     bool invert = false;
     bool trace = false;
+    bool showReference = true;
 };
 
 #if LAB_CHECKPOINT >= 2
@@ -69,18 +70,28 @@ inline void keyDown(SDL_Keycode key, Controls& controls) {
     }
 #endif
 #if LAB_CHECKPOINT >= 8
+    // [snippet angle-selector]
     if (key == SDLK_Q) {
-        controls.settings.views *= 2;
-        if (controls.settings.views > 120) {
-            controls.settings.views = 30;
+        const std::array<int, 4> counts{30, 60, 120, 180};
+        for (size_t i = 0; i < counts.size(); ++i) {
+            if (counts[i] == controls.settings.views) {
+                controls.settings.views = counts[(i + 1) % counts.size()];
+                break;
+            }
         }
         controls.row = 0;
     }
+    // [/snippet angle-selector]
 #endif
     if (key == SDLK_R) {
         controls = {};
         SDL_CaptureMouse(false);
     }
+#if LAB_CHECKPOINT >= 10
+    if (key == SDLK_H) {
+        controls.showReference = !controls.showReference;
+    }
+#endif
 }
 #endif
 } // namespace ct

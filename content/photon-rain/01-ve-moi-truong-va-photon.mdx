@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Vẽ môi trường và photon đầu tiên
 
@@ -16,13 +17,18 @@ Ta dùng một môi trường đồng nhất trong mặt phẳng XY: x từ −1
 
 $$x_s=340+180x,\qquad y_s=330-180y.$$
 
-Miền rộng 3 world units, cao 2; ở bản SDL nó chiếm 540×360 logical pixel. Photon ban đầu ở cạnh trái, hướng `(1,0)`. Chấm vuông 8×8 chỉ là marker để nhìn thấy, không phải kích thước vật lý của photon.
+Miền rộng 3 đơn vị, cao 2; trên cửa sổ SDL, mặt trước của bể chiếm 540×360 pixel logic. Photon ban đầu ở cạnh trái, hướng `(1,0)`. Dấu vàng giúp bạn tìm thấy nó trên hình, chứ không cho biết photon lớn đến đâu.
 
 <InteractiveLab demo="photon-rain" mode="photon57-1" />
 
 Mô hình này là công cụ học thuật toán trong 2D. Nó không mô tả đầy đủ bức xạ X-ray, không dùng dữ liệu y khoa và không vận hành thiết bị phát tia.
 
 ## Viết code từng bước
+
+Vẽ thành bể bằng thước của world XY, đặt nguồn ở mặt trái và màn thu ở đúng mặt phải trước khi phát photon. Thành kính tạo cảm giác chiều sâu cho người xem; chuyển động mô phỏng vẫn nằm trong một mặt phẳng.
+
+<CourseWorkFile project="57" step={1} path="include/chamber.hpp" />
+<CourseWorkFile project="57" step={1} path="include/view.hpp" />
 
 ### Bước 1 — Chạy bộ khung
 
@@ -47,29 +53,59 @@ Point là array hai double. left bằng −1.5. Không lưu pixel màn hình tro
 
 ### Bước 3 — Vẽ môi trường
 
+{/* snippet include/view.hpp#set-up-tank */}
+
 ```cpp title="include/view.hpp"
-inline void drawMedium(SDL_Renderer* renderer) {
-    require(SDL_SetRenderDrawColor(renderer, 25, 42, 66, 255));
-    require(SDL_RenderFillRect(renderer, &mediumRect));
-    require(SDL_SetRenderDrawColor(renderer, 125, 160, 200, 255));
-    require(SDL_RenderRect(renderer, &mediumRect));
-    require(SDL_RenderDebugText(renderer, 70, 120, "XY medium: [-1.5,1.5] x [-1,1]"));
+inline void drawMedium(SDL_Renderer* r, Settings settings = {}) {
+    panel(r, 0, 0, viewWidth, viewHeight, {10, 20, 29, 255});
+    panel(r, 26, 26, 4, 52, teal);
+    label(r, 43, 27, "SIMULATION PATH  /  OPTICS   57", teal);
+    label(r, 41, 46, "Photon tank", paper, 2.6f);
+    label(r, 703, 39, "MONTE CARLO    /    XY SECTION", muted);
+    line(r, 27, 88, 1052, 88, divider);
+    panel(r, 27, 102, 625, 438, {14, 29, 40, 255});
+    label(r, 47, 110, "01  SOURCE", gold);
+    label(r, 242, 110, "02  HOMOGENEOUS WATER", muted);
+    label(r, 528, 110, "03  SCREEN", teal);
+    paintChamber(r, settings);
+    panel(r, 672, 102, 380, 438, {17, 32, 43, 255});
+    label(r, 693, 120, "RIGHT-WALL SENSOR", teal);
+    label(r, 693, 151, "Collecting a distribution starts in lesson 6.", muted);
+    label(r, 693, 178, "For now: inspect the selected path.", paper);
+    panel(r, 27, 548, 625, 67, {17, 32, 43, 255});
+    panel(r, 27, 619, 625, 72, {17, 32, 43, 255});
+    panel(r, 672, 548, 380, 143, {17, 32, 43, 255});
+    label(r, 693, 563, "HOW TO READ THE TANK", muted);
+    stroke(r, {696, 595}, {720, 595}, 2.5f, gold);
+    label(r, 735, 590, "Selected photon / its recorded steps", paper);
+    stroke(r, {696, 621}, {720, 621}, 1, {85, 133, 145, 255});
+    label(r, 735, 616, "Faint paths: recent histories only", paper);
+    label(r, 694, 646, "Glass depth is illustrative.", muted);
+    label(r, 694, 665, "Transport takes place on the XY plane.", muted);
 }
 ```
 
-mediumRect là `{70,150,540,360}`. Màu nền chỉ đánh dấu nơi có môi trường, chưa biểu diễn mu hay xác suất hấp thụ. require đưa lỗi SDL tới cleanup. SDL_RenderDebugText có sẵn trong SDL3, chỉ hỗ trợ chữ ASCII nhỏ, nên nhãn native dùng tiếng Anh; tài liệu và Canvas vẫn bằng tiếng Việt. Không cần thêm SDL_ttf để học phần toán ở đây. Xem [giới hạn của hàm debug text](https://wiki.libsdl.org/SDL3/SDL_RenderDebugText).
+`mediumRect` đặt mặt trước của bể tại (70, 150). Trong `chamber.hpp`, hàm `panel` đổi màu rồi gọi `SDL_RenderFillRect` để vẽ một hình chữ nhật đặc. Riêng mặt kính dùng hai tam giác với `SDL_RenderGeometry` để phần đáy có màu đậm hơn. Độ đậm này là lựa chọn khi vẽ, không phải phép đo số photon bị hấp thụ.
+
+Để ghi nhãn, ta dùng [SDL_RenderDebugText](https://wiki.libsdl.org/SDL3/SDL_RenderDebugText) có sẵn trong SDL3. Hàm này chỉ hiển thị bộ ký tự ASCII; đó là lý do nhãn trong cửa sổ C++ dùng tiếng Anh. Bạn không cần cài SDL_ttf cho bài này.
 
 ### Bước 4 — Vẽ photon ở vị trí world
 
+{/* snippet include/view.hpp#selected-photon */}
+
 ```cpp title="include/view.hpp"
-inline void drawPhoton(SDL_Renderer* renderer, Point position) {
-    const auto centre = screen(position);
-    const SDL_FRect marker{centre.x - 4, centre.y - 4, 8, 8};
-    require(SDL_RenderFillRect(renderer, &marker));
-}
+const auto point = screen(trace.vertices[last].position);
+const float x = point.x, y = point.y;
+const Event shown = trace.vertices[last].event;
 ```
 
 Main clear → drawMedium → drawTrace/marker → present. Với một điểm phát duy nhất, drawTrace thêm đoạn ngắn chỉ hướng sang phải. Đây là mũi chỉ hướng, không phải photon đã bay một quãng đường trong vật liệu.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="57" step={1} path="src/main.cpp" />
+
+Đánh dấu x = −1,5 và +1,5. Photon thử đi thẳng phải chạm màn bên phải, không biến mất ở mép hình vẽ trang trí.
 
 ## Ghép các phần lại
 

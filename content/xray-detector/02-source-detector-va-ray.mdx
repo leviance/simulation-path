@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Nối nguồn điểm với từng pixel detector
 
@@ -28,9 +29,16 @@ Sơ đồ XZ là hình chiếu của ray 3D, không phải lát cắt y=0. Chọ
 
 ## Viết code từng bước
 
+Đặt đầu phát phía trước radio và tấm thu phía sau. Dựng đoạn nối nguồn tới tâm đúng một ô trước khi làm cả ảnh. Mũi tên trên sơ đồ là một đoạn có điểm dừng, không phải ray kéo dài vô tận.
+
+<CourseWorkFile project="55" step={2} path="include/geometry.hpp" />
+<CourseWorkFile project="55" step={2} path="include/detector.hpp" />
+
 ### Bước 1 — Tạo beam hữu hạn
 
 geometry.hpp định nghĩa Beam có origin/direction/maximum và detectorRay:
+
+{/* snippet include/geometry.hpp#finite-beam */}
 
 ```cpp title="include/geometry.hpp"
 inline Beam detectorRay(double u, double v) {
@@ -74,6 +82,13 @@ inline std::optional<std::array<int, 2>> pickPixel(double x, double y) {
 ```
 
 Chỉ vùng imageRect nhận input; mép phải/dưới là exclusive để không sinh index80/60. Main thêm marker và drawGeometry cho pixel đang chọn. Mũi tên chọn pixel; click/kéo dùng mouse capture, blur hủy drag.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="55" step={2} path="include/view.hpp" />
+<CourseWorkFile project="55" step={2} path="src/main.cpp" />
+
+Chọn một ô ở góc rồi trở về giữa. Điểm đầu giữ nguyên, điểm cuối chạy trên detector và độ dài đường đi thay đổi.
 
 ## Ghép các phần lại
 

@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Dựng cảnh để nhìn thấy thứ mình sắp chọn
 
@@ -31,6 +32,11 @@ Kéo chuột phải để xoay góc nhìn; giữ Shift để pan, lăn chuột �
 
 ## Viết code từng bước
 
+Đặt quả cầu, khối hộp và tấm tam giác lên bàn có vạch. Trước khi cho phép chọn vật, hãy xoay góc nhìn: quả cầu phải che đúng phần mặt bàn phía sau nó. Nếu vật chỉ là hình tròn vẽ đè lên nền, những bài đo độ sâu sau sẽ không có mốc để đối chiếu.
+
+<CourseWorkFile project="52" step={1} path="include/camera.hpp" />
+<CourseWorkFile project="52" step={1} path="include/scene-drawing.hpp" />
+
 ### 1. Chạy bộ khung trước khi thêm hình
 
 Build và mở `project_52_starter` trước. Nền tối xuất hiện, resize được và Esc thoát là đủ cho bước này. Nếu chưa chạy được, xử lý việc cài compiler/SDL theo Getting Started trước khi thêm công thức.
@@ -43,7 +49,7 @@ if (!SDL_Init(SDL_INIT_VIDEO)) {
     std::cerr << SDL_GetError() << '\n';
     return EXIT_FAILURE;
 }
-SDL_Window* window = SDL_CreateWindow("Project 52 - Ray geometry workshop", picking::viewWidth, picking::viewHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+SDL_Window* window = SDL_CreateWindow("Project 52 - Optical measurement bench", picking::viewWidth, picking::viewHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
 if (window == nullptr) {
     std::cerr << SDL_GetError() << '\n';
     SDL_Quit();
@@ -93,33 +99,30 @@ Trong `scene-drawing.hpp`, ta dùng bộ khung ấy để vẽ chính dữ liệ
 {/* snippet include/scene-drawing.hpp#draw-scene */}
 ```cpp title="include/scene-drawing.hpp — dựng cảnh từ dữ liệu hình học"
 inline void drawScene(Raster& raster, const Scene& scene, int selected, bool debug) {
-    // Finite display patch; the plane intersection itself is infinite.
-    const Vec3 p = scene.plane.point;
-    const Vec3 a = add(p, {-6, 0, -5});
-    const Vec3 b = add(p, {6, 0, -5});
-    const Vec3 c = add(p, {6, 0, 7});
-    const Vec3 d = add(p, {-6, 0, 7});
-    raster.triangle(a, b, c, objectColor(0, selected));
-    raster.triangle(a, c, d, objectColor(0, selected));
-    // Meshes provide presentation only. No intersection routine is used here.
-    drawSphereMesh(raster, scene.sphere, objectColor(1, selected));
-    drawBoxMesh(raster, scene.box, objectColor(2, selected));
-    raster.triangle(scene.triangle.a, scene.triangle.b, scene.triangle.c, objectColor(3, selected));
+    // Vạch dài cách nhau một đơn vị. Tấm chia độ chỉ minh họa một phần
+    // của mặt phẳng vô hạn; bóng và vạch khắc không phải vật để chọn.
+    drawMat(raster, scene.plane, selected == 0);
+    drawGraduations(raster, scene.plane, debug);
+    drawContactShadows(raster, scene);
 
-    if (debug) {
-        for (int i = -5; i <= 5; ++i) {
-            const double value = static_cast<double>(i);
-            raster.line(add(p, {value, 0.002, -5}), add(p, {value, 0.002, 7}), {68, 102, 128});
-            raster.line(add(p, {-6, 0.002, value}), add(p, {6, 0.002, value}), {68, 102, 128});
-        }
-        raster.line({0, 0, 0}, {1, 0, 0}, {248, 100, 103}, true, 1);
-        raster.line({0, 0, 0}, {0, 1, 0}, {110, 234, 151}, true, 1);
-        raster.line({0, 0, 0}, {0, 0, 1}, {103, 170, 250}, true, 1);
-    }
+    // Ba mẫu lấy trực tiếp từ Scene. Vẽ được chúng ngay cả khi người học
+    // chưa viết bất kỳ hàm nào để tìm giao điểm.
+    drawSphereMesh(raster, scene.sphere, specimenColor(1, selected));
+    drawBoxMesh(raster, scene.box, specimenColor(2, selected));
+    drawTrianglePlate(raster, scene.triangle, specimenColor(3, selected));
 }
 ```
 
 `drawSphereMesh` chỉ chia mặt cầu thành triangle để **vẽ**. Bài 04 sẽ tìm giao với phương trình sphere giải tích, không dò giao với các triangle minh họa. Màu mặt phụ thuộc hướng normal và một nguồn sáng cố định; đó là scaffold trình bày, không phải thuật toán picking đang học.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="52" step={1} path="include/input.hpp" />
+<CourseWorkFile project="52" step={1} path="include/instrument-hud.hpp" />
+<CourseWorkFile project="52" step={1} path="include/view.hpp" />
+<CourseWorkFile project="52" step={1} path="src/main.cpp" />
+
+Chạy thử mà chưa phát tia. Hãy chỉ một mặt quay về phía người xem và một mặt khuất; cả hai vẫn thuộc cùng vật trong world.
 
 ## Ghép các phần lại
 

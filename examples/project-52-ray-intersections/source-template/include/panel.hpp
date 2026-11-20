@@ -1,53 +1,14 @@
 #pragma once
 #include "controls.hpp"
+#include "instrument-hud.hpp"
 #include "validation.hpp"
-#include "view.hpp"
-#include <iomanip>
-#include <sstream>
 #include <string>
 #include <vector>
 
 namespace picking {
-inline void text(SDL_Renderer* renderer, float x, float y, const std::string& value, bool heading = false) {
-    float scale = 1.25f;
-    if (heading) {
-        scale = 1.5f;
-    }
-    SDL_SetRenderScale(renderer, scale, scale);
-    SDL_SetRenderDrawColor(renderer, 211, 226, 239, 255);
-    SDL_RenderDebugText(renderer, x / scale, y / scale, value.c_str());
-    SDL_SetRenderScale(renderer, 1, 1);
-}
-
-inline std::string number(double value) {
-    std::ostringstream out;
-    out << std::fixed << std::setprecision(3) << value;
-    return out.str();
-}
-
 inline std::string vectorText(Vec3 value) {
     return number(value.x) + " " + number(value.y) + " " + number(value.z);
 }
-
-#if LAB_CHECKPOINT >= 1
-inline void drawLabels(SDL_Renderer* renderer, const Workshop& state) {
-    const char* labels[]{"PLANE", "SPHERE", "AABB", "TRIANGLE"};
-    const Vec3 offsets[]{{-3, 0, -2}, {0, 1.1, 0}, {0, 1.2, 0}, {0, 1.7, 0}};
-    for (int id = 0; id < 4; ++id) {
-        const Vec3 point = add(objectCenter(state.scene, id), offsets[id]);
-        const auto pixel = project(point, state.observer.camera(), sceneWidth, viewHeight);
-        if (pixel && pixel->x >= 0 && pixel->x < sceneWidth - 80 && pixel->y >= 120 && pixel->y < viewHeight - 30) {
-            text(renderer, static_cast<float>(pixel->x), static_cast<float>(pixel->y), labels[id]);
-        }
-    }
-#if LAB_CHECKPOINT >= 2
-    const auto origin = project(state.ray().origin, state.observer.camera(), sceneWidth, viewHeight);
-    if (origin && origin->x >= 0 && origin->x < sceneWidth - 100 && origin->y >= 120 && origin->y < 510) {
-        text(renderer, static_cast<float>(origin->x + 10), static_cast<float>(origin->y), "EMITTER O");
-    }
-#endif
-}
-#endif
 
 struct Button {
     SDL_FRect rect;
@@ -104,32 +65,33 @@ inline bool panelClick(Workshop& state, float x, float y) {
 }
 
 inline void drawPanel(SDL_Renderer* renderer, const Workshop& state) {
-    SDL_SetRenderDrawColor(renderer, 15, 23, 38, 255);
-    const SDL_FRect panel{880, 0, 320, 760};
-    SDL_RenderFillRect(renderer, &panel);
-    text(renderer, 900, 20, "RAY INSPECTOR / 52", true);
-    text(renderer, 900, 46, "Select and translate a target");
-    text(renderer, 900, 142, "OBJECT  A/D X  Q/E Y  S/W Z");
-    text(renderer, 900, 200, vectorText(objectCenter(state.scene, state.selected)));
+    fill(renderer, {880, 0, 320, 760}, {17, 28, 37, 255});
+    fill(renderer, {880, 0, 1, 760}, rule);
+    letter(renderer, 900, 18, "Bench controls", 1.75f, type);
+    letter(renderer, 1132, 23, "ID 52", 1, beamInk);
+    letter(renderer, 900, 48, "01   SPECIMEN RACK", 1, muted);
+    letter(renderer, 900, 145, "TRANSLATE OBJECT   A/D   Q/E   S/W", 1, muted);
+    letter(renderer, 900, 198, "C  " + vectorText(objectCenter(state.scene, state.selected)), 1, muted);
 #if LAB_CHECKPOINT >= 2
-    text(renderer, 900, 216, "SOURCE  J/L X  U/O Y  K/I Z");
-    text(renderer, 900, 414, "RAY  tMin=0.000001");
-    text(renderer, 900, 434, "tMax=" + number(state.tMax));
-    text(renderer, 900, 454, "o " + vectorText(state.ray().origin));
-    text(renderer, 900, 474, "d " + vectorText(state.ray().direction));
+    letter(renderer, 900, 217, "TRANSLATE SOURCE   J/L   U/O   K/I", 1, muted);
+    fill(renderer, {896, 400, 286, 91}, paper);
+    letter(renderer, 907, 412, "02   RAY  /  WORLD SPACE", 1, beamInk);
+    letter(renderer, 907, 430, "tMin 1e-6  /  tMax " + number(state.tMax), 1, muted);
+    letter(renderer, 907, 451, "O  " + vectorText(state.ray().origin), 1.125f, type);
+    letter(renderer, 907, 472, "D  " + vectorText(state.ray().direction), 1.125f, type);
 #endif
     for (const auto& button : buttons(state)) {
-        SDL_SetRenderDrawColor(renderer, 30, 45, 65, 255);
+        fill(renderer, button.rect, {37, 52, 63, 255});
         if (button.active) {
-            SDL_SetRenderDrawColor(renderer, 43, 87, 107, 255);
+            fill(renderer, button.rect, {47, 84, 85, 255});
+            fill(renderer, {button.rect.x, button.rect.y, 3, button.rect.h}, beamInk);
         }
-        SDL_RenderFillRect(renderer, &button.rect);
-        text(renderer, button.rect.x + 5, button.rect.y + 9, button.label);
+        letter(renderer, button.rect.x + 7, button.rect.y + 10, button.label, 1.125f, type);
     }
 #if LAB_CHECKPOINT >= 3
     const auto hits = candidates(state.ray(), state.scene);
     const auto hit = hits[state.selected];
-    text(renderer, 900, 500, "SELECTED SURFACE");
+    letter(renderer, 900, 500, "03   SELECTED SURFACE", 1, beamInk);
     if (hit) {
         text(renderer, 900, 520, "t=" + number(hit->t));
         text(renderer, 900, 540, "p " + vectorText(hit->point));
@@ -171,7 +133,7 @@ inline void drawPanel(SDL_Renderer* renderer, const Workshop& state) {
             intervalText = number(1 - hit->u - hit->v) + " / " + number(hit->u) + " / " + number(hit->v);
         }
     }
-    text(renderer, 900, 608, intervalHeading);
+    letter(renderer, 900, 608, intervalHeading, 1, insideInk);
     text(renderer, 900, 628, intervalText);
 #if LAB_CHECKPOINT >= 7
     const auto best = nearestHit(hits);
@@ -186,6 +148,7 @@ inline void drawPanel(SDL_Renderer* renderer, const Workshop& state) {
     text(renderer, 900, 704, "Residuals do not prove misses");
 #endif
 #endif
-    text(renderer, 900, 738, "R reset / B debug / Esc exit");
+    fill(renderer, {896, 727, 286, 1}, rule);
+    letter(renderer, 900, 740, "R reset   B labels/axes   Esc exit", 1, muted);
 }
 } // namespace picking

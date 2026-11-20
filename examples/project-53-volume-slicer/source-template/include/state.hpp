@@ -10,7 +10,7 @@ namespace slice53 {
 // Own datasets and derived images here; camera/display changes do not rebuild scalar storage.
 inline Vec3 initialProbe() {
 #if LAB_CHECKPOINT >= 2
-    return {-8, -4, -8};
+    return geodeCentre;
 #else
     return {0, 0, 0};
 #endif
@@ -76,7 +76,7 @@ struct State {
             auto nextVolume = std::make_unique<Volume>(buildVolume(nextPreset, nextSide));
             Statistics nextStatistics = measure(*nextVolume);
 #if LAB_CHECKPOINT >= 6
-            Mesh nextMesh = buildContextMesh(*nextVolume);
+            Mesh nextMesh = buildContextMesh(*nextVolume, nextPreset == Preset::Specimen);
             mesh = std::move(nextMesh);
 #endif
             volume = std::move(nextVolume);
@@ -166,7 +166,9 @@ struct State {
         // [snippet refresh-context]
         if (!scene) scene = std::make_unique<Raster>(820, 620);
         const auto started = std::chrono::steady_clock::now();
-        drawContext(*scene, cameraFrame(camera, 820, 620), mesh, grid(), probe, slices, window, colored, cut);
+        int sectionView = -1;
+        if (preset == Preset::Specimen) sectionView = activeView;
+        drawContext(*scene, cameraFrame(camera, 820, 620), mesh, grid(), probe, slices, window, colored, cut, sectionView);
         sceneMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
         // [/snippet refresh-context]
 #endif

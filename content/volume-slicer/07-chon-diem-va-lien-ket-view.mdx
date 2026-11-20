@@ -1,10 +1,11 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Chọn một điểm, cập nhật cả ba view
 
 ## Vấn đề cần giải quyết
 
-Ta đã dời được từng mặt cắt bằng slider, nhưng người xem thường muốn bấm thẳng vào một lõi hoặc mép lỗ khoan. Một điểm được chọn trên XY phải xuất hiện đúng ở XZ và YZ, không cần người dùng tự tính lại hai slider còn lại.
+Ta đã dời được từng mặt cắt bằng slider, nhưng người xem thường muốn bấm thẳng vào một mũi tinh thể hoặc mép hốc. Một điểm được chọn trên XY phải xuất hiện đúng ở XZ và YZ, không cần người dùng tự tính lại hai slider còn lại.
 
 Bài này nối input vào một probe world duy nhất. Kéo ảnh là chọn điểm; kéo vùng 3D là đổi góc nhìn. Hai thao tác không được chia sẻ cùng một biến tọa độ.
 
@@ -17,6 +18,11 @@ Ta phải đổi tọa độ chuột qua hai bước: window → logical present
 <InteractiveLab demo="volume-slicer" mode="slice53-7" />
 
 ## Viết code từng bước
+
+Bấm vào một điểm sáng trên ảnh XY. Từ cú bấm, ta chỉ được hai tọa độ; trục còn thiếu phải lấy từ vị trí lát hiện tại. Ba ô đọc cùng một điểm, không gửi ba sự kiện kéo rời rạc.
+
+<CourseWorkFile project="53" step={7} path="include/layout.hpp" />
+<CourseWorkFile project="53" step={7} path="include/input.hpp" />
 
 ### 1. Từ rectangle ảnh về hai tọa độ world
 
@@ -136,6 +142,12 @@ void reset() {
 ```
 
 Hủy capture không nằm trong hàm reset thuần này. Input gọi `release` trước reset; tách hai việc giúp reset không phụ thuộc SDL khi kiểm state và tránh quên nhả chuột ở đường bàn phím.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="53" step={7} path="include/stage.hpp" />
+
+Bấm ở dải trống bên ngoài hình vuông và kéo ra khỏi ô: đầu dò không được nhảy sang viên đá khác hoặc kẹt khi buông chuột.
 
 ## Ghép các phần lại
 

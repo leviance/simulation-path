@@ -129,8 +129,9 @@ const data = {
             "Vỏ iso 0.12/stride 2 chỉ định hướng; giải thích phần cung cấp sẵn, không giấu thuật toán đo trong renderer.",
         },
         {
-          title: "Cắt một góc",
-          explanation: "Vỏ được clip theo probe; ba cap dùng cùng scalar image với các ảnh phẳng.",
+          title: "Cưa qua hốc tinh thể",
+          explanation:
+            "Chọn XY, XZ hoặc YZ. Với đá mã não, cưa theo đúng mặt đó qua đầu dò và tô bằng cùng các số mẫu như ảnh phẳng; mẫu kiểm vẫn có sơ đồ ba mặt.",
         },
         {
           title: "Giữ phép đo độc lập camera",

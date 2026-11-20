@@ -14,6 +14,7 @@ interface Props {
   linear: boolean;
   camera: Camera;
   cut: boolean;
+  sectionView: number;
   cancelVersion: number;
   setCamera: Dispatch<SetStateAction<Camera>>;
   stop: () => void;
@@ -27,6 +28,7 @@ export function SceneView({
   linear,
   camera,
   cut,
+  sectionView,
   cancelVersion,
   setCamera,
   stop,
@@ -46,6 +48,7 @@ export function SceneView({
     camera.pitch,
     camera.distance,
     cut,
+    sectionView,
     colored,
     linear,
     displayWindow.level,
@@ -81,6 +84,7 @@ export function SceneView({
               cut,
               width,
               height,
+              sectionView,
             );
             const offscreen = document.createElement("canvas");
             offscreen.width = width;
@@ -118,6 +122,7 @@ export function SceneView({
     colored,
     camera,
     cut,
+    sectionView,
     size,
     interactive,
     key,

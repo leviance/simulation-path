@@ -9,6 +9,20 @@ export const textAt = (dir, file) =>
 // Read the ordered instructions in the lesson, not changedPaths or the final file list.
 export function workPaths(mdx, project, step) {
   const body = mdx.split("## Viết code từng bước")[1].split("## Ghép các phần lại")[0];
+  if (/^5[2-7]$/.test(project)) {
+    const tags = [
+      ...body.matchAll(/<CourseWorkFile project="(\d\d)" step=\{(\d+)\} path="([\w./-]+)"\s*\/>/g),
+    ];
+    assert.ok(tags.length, "No implementation steps");
+    const files = tags.map(([, id, number, file]) => {
+      assert.equal(id, project);
+      assert.equal(Number(number), step);
+      assert.match(file, /^(?:include|src|shaders)\/(?:[\w-]+\/)*[\w.-]+$/);
+      return file;
+    });
+    assert.equal(new Set(files).size, files.length, "A work file is assigned twice");
+    return files;
+  }
   const tags = [
     ...body.matchAll(/<VoxelWorkFile project="(\d\d)" step=\{(\d+)\} file="([a-z-]+)"\s*\/>/g),
   ];

@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Quét lát liên tục mà không tính lại mọi thứ
 
@@ -17,6 +18,11 @@ Quét không phải một solver vật lý: nó chỉ dời mặt cắt 12 mm/s.
 <InteractiveLab demo="volume-slicer" mode="slice53-8" />
 
 ## Viết code từng bước
+
+Quét xuyên viên đá giống như lật một chồng ảnh. Dời đầu dò cần lấy lại lát nhưng không cần sinh lại hàng triệu voxel. Hãy phân biệt «volume đổi» với «vị trí lát đổi».
+
+<CourseWorkFile project="53" step={8} path="include/state.hpp" />
+<CourseWorkFile project="53" step={8} path="include/input.hpp" />
 
 ### 1. Dời đúng trục theo thời gian
 
@@ -94,7 +100,7 @@ bool load(Preset nextPreset, int nextSide) {
     try {
         auto nextVolume = std::make_unique<Volume>(buildVolume(nextPreset, nextSide));
         Statistics nextStatistics = measure(*nextVolume);
-        Mesh nextMesh = buildContextMesh(*nextVolume);
+        Mesh nextMesh = buildContextMesh(*nextVolume, nextPreset == Preset::Specimen);
         mesh = std::move(nextMesh);
         volume = std::move(nextVolume);
         statistics = nextStatistics;
@@ -114,6 +120,13 @@ bool load(Preset nextPreset, int nextSide) {
 ```
 
 Canvas chia việc tạo volume/vỏ theo các slab, có AbortSignal và ngân sách 20 giây. Đổi dataset liên tiếp hoặc rời trang hủy job cũ; kết quả đến muộn không được ghi đè lựa chọn mới. C++ dùng vòng lặp có kích thước tối đa đã chặn; không tạo thread pool mới chỉ để trình xem có thêm kỹ thuật.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="53" step={8} path="include/stage.hpp" />
+<CourseWorkFile project="53" step={8} path="src/main.cpp" />
+
+Tạm dừng ngay khi tới hốc rỗng. Giữ viên đá đứng yên, xoay góc quan sát rồi tiếp tục; hai thao tác không được làm mất vị trí vừa chọn.
 
 ## Ghép các phần lại
 

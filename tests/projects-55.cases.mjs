@@ -4,12 +4,12 @@ import path from "node:path";
 import test from "node:test";
 import { workspace, authoredLessons, render } from "./site-support.mjs";
 const dir = path.join(workspace, "examples/project-55-xray-detector");
-test("Project55 publishes eight detector lessons with challenge and complete One Dark source", async () => {
+test("Project55 publishes ten detector lessons with challenge and complete One Dark source", async () => {
   const overview = await render("/projects/xray-detector");
   assert.equal(overview.status, 200);
   assert.match(await overview.text(), /THỬ SỨC TRƯỚC KHI XEM LỜI GIẢI/i);
   const lessons = (await authoredLessons()).filter((l) => l.project === "xray-detector");
-  assert.equal(lessons.length, 8);
+  assert.equal(lessons.length, 10);
   for (const l of lessons) {
     const r = await render(l.route),
       html = await r.text();
@@ -32,6 +32,8 @@ test("Project55 introduces image, ray, chord, attenuation, midpoint, log, spectr
     [6, "include/projection.hpp", "logProjection = -std::log"],
     [7, "include/projection.hpp", "settings.lowWeight * std::exp"],
     [8, "include/audit.hpp", "inline double audit("],
+    [9, "shaders/attenuation.frag", "vec2 exactDepth("],
+    [10, "include/gpu-detector.hpp", "inline double detectorError("],
   ]) {
     const now = await readFile(
         path.join(dir, "checkpoints", String(n).padStart(2, "0"), file),
@@ -58,7 +60,7 @@ test("Project55 documents finite beams, additive overlap, raw/display separation
     /-C Release/,
     /WaitForExit\(30000\)/,
     /không photon|Không noise/,
-    /Sắp ra mắt/,
+    /09-do-anh-tren-gpu/,
   ])
     assert.match(last, p);
 });
@@ -67,7 +69,11 @@ test("Project55 names scene materials and avoids rerendering the image when sele
   const materials = await readFile(path.join(dir, "source-template/include/materials.hpp"), "utf8");
   assert.match(materials, /return \{frontLayer, backLayer, smallInsert\}/);
   const main = await readFile(path.join(dir, "source-template/src/main.cpp"), "utf8");
-  assert.match(main, /if \(imageDirty\)\s*\{\s*xray::upload/);
+  assert.match(
+    main,
+    /if \(imageDirty\)[\s\S]+?detector\.integrate[\s\S]+?xray::upload\(texture, detector\.display/,
+  );
+  assert.match(materials, /preset == 3/);
   assert.match(main, /if \(inspectorDirty\)/);
   assert.doesNotMatch(main, /bool dirty = true/);
 });

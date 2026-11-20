@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Chọn đúng phần bên trong tam giác
 
@@ -29,6 +30,11 @@ w/u/v là trọng số của A/B/C. Ở A, w=1; ở B, u=1; ở C, v=1. Chúng l
 Chọn Triangle rồi nhấn “Ngắm đối tượng đã chọn”. Di chuyển tâm ngắm trong cửa sổ nhỏ, quan sát lúc trọng số tiến gần 0 và lúc hit chuyển thành MISS. Thí nghiệm “Triangle suy biến” cho C trùng B: hình không còn diện tích và không có normal mặt hợp lệ.
 
 ## Viết code từng bước
+
+Một tấm tam giác mỏng có một bề mặt, không có «bên trong vật» như quả cầu. Sau khi tìm giao với mặt phẳng chứa tấm, dùng hai tọa độ trên mặt để quyết định điểm có còn nằm trong ba cạnh không.
+
+<CourseWorkFile project="52" step={6} path="include/triangle.hpp" />
+<CourseWorkFile project="52" step={6} path="include/query.hpp" />
 
 ### 1. Viết một phép giao đủ các nhánh
 
@@ -90,6 +96,8 @@ inline std::array<std::optional<Hit>, 4> candidates(const Ray& ray, const Scene&
 ```
 
 Không phải thêm một event loop khác. Main vẫn gọi `readInput`, lấy ray hiện tại và vẽ workshop; `drawWorkshop` duyệt candidates như cũ. `drawPanel` đọc `hits[3]` để hiện t/point/normal và w/u/v khi chọn Triangle. Phần vẽ triangle dùng đúng ba đỉnh trong Scene, nên dịch vật thể là dịch cả ba đỉnh cùng một delta.
+
+Ngắm sát cạnh rồi nhích ra ngoài. Chấm hit phải biến mất dù đường tia vẫn xuyên qua mặt phẳng vô hạn; không vẽ dấu ra giả ở mặt sau.
 
 ## Ghép các phần lại
 

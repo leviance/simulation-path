@@ -42,6 +42,7 @@ struct Flight {
     bool escaped;
 };
 
+// [snippet flight-or-boundary]
 inline Flight sampleFlight(const Photon& value, Random& random, Settings settings) {
     const double boundary = exitDistance(value);
     const double muT = settings.muA + settings.muS;
@@ -59,6 +60,7 @@ inline Flight sampleFlight(const Photon& value, Random& random, Settings setting
     }
     return {endpoint, sampled, boundary, escaped};
 }
+// [/snippet flight-or-boundary]
 
 inline Flight firstFlight(Settings settings, int id) {
     validate(settings);

@@ -2,24 +2,82 @@ import {
   firstFlight,
   sampleFirst,
   type Experiment,
-  type Point,
   type Settings,
   type Trace,
 } from "@/lib/labs/photon-rain";
 import { setupCanvas, type CanvasSize } from "../lab-shared";
+import { chamber, ink, layout, line, screen, text, type Rect } from "./chamber";
+import { readout } from "./instrument-readout";
 
 export function timelineVertex(x: number, y: number, size: CanvasSize, vertices: number) {
-  const width = size.width * 0.62 - 32;
-  if (x < 16 || x > width + 16 || y < size.height - 44 || y > size.height - 8) return null;
-  return Math.round(((x - 16) / width) * (vertices - 1));
+  const { track } = layout(size);
+  if (
+    vertices < 1 ||
+    x < track.x ||
+    x > track.x + track.w ||
+    y < size.height - 44 ||
+    y > size.height - 8
+  )
+    return null;
+  return Math.round(((x - track.x) / track.w) * (vertices - 1));
 }
 const eventColor = {
-  emission: "#f7cb71",
-  candidate: "#f7cb71",
-  absorption: "#ff7088",
-  scatter: "#f7cb71",
-  escape: "#59ddbd",
+  emission: ink.gold,
+  candidate: ink.gold,
+  absorption: ink.coral,
+  scatter: ink.gold,
+  escape: ink.teal,
 };
+
+function path(
+  ctx: CanvasRenderingContext2D,
+  tank: Rect,
+  record: Trace,
+  through: number,
+  ghost: boolean,
+) {
+  if (!record.vertices.length) return;
+  const last = Math.min(record.vertices.length - 1, Math.max(0, through));
+  ctx.beginPath();
+  ctx.moveTo(...screen(tank, record.vertices[0].position));
+  for (let i = 1; i <= last; i++) ctx.lineTo(...screen(tank, record.vertices[i].position));
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.strokeStyle = ghost ? "#56818b" : "#917146";
+  ctx.lineWidth = ghost ? 0.85 : 3.7;
+  ctx.stroke();
+  if (ghost) return;
+  ctx.strokeStyle = ink.gold;
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+  for (let i = 1; i <= last; i++)
+    if (record.vertices[i].event === "scatter") {
+      const [x, y] = screen(tank, record.vertices[i].position);
+      ctx.fillStyle = "#ecf2c2";
+      ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+    }
+  const vertex = record.vertices[last],
+    [x, y] = screen(tank, vertex.position);
+  const color =
+    last === record.vertices.length - 1 && record.status === "censored"
+      ? ink.lilac
+      : eventColor[vertex.event];
+  if (vertex.event === "absorption") {
+    line(ctx, x - 4, y - 4, x + 4, y + 4, color);
+    line(ctx, x - 4, y + 4, x + 4, y - 4, color);
+  }
+  ctx.beginPath();
+  ctx.moveTo(x, y - 4.5);
+  ctx.lineTo(x + 4.5, y);
+  ctx.lineTo(x, y + 4.5);
+  ctx.lineTo(x - 4.5, y);
+  ctx.closePath();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+  ctx.fillStyle = ink.paper;
+  ctx.fillRect(x - 1, y - 1, 2, 2);
+}
 export function draw(
   ctx: CanvasRenderingContext2D,
   size: CanvasSize,
@@ -31,103 +89,39 @@ export function draw(
   stage: number,
 ) {
   setupCanvas(ctx, size);
-  ctx.font = "12px system-ui";
-  ctx.fillStyle = "#dae3f5";
-  ctx.fillText("Môi trường đồng nhất — XY", 16, 22);
-  const scale = Math.min((size.width * 0.62 - 40) / 3, (size.height - 150) / 2);
-  const cx = size.width * 0.31,
-    cy = 45 + scale;
-  const screen = (p: Point): [number, number] => [cx + p[0] * scale, cy - p[1] * scale];
-  ctx.fillStyle = "#192a42";
-  ctx.fillRect(cx - 1.5 * scale, cy - scale, 3 * scale, 2 * scale);
-  ctx.strokeStyle = "#7ca0c8";
-  ctx.strokeRect(cx - 1.5 * scale, cy - scale, 3 * scale, 2 * scale);
-  const path = (record: Trace, through: number, ghost: boolean) => {
-    ctx.beginPath();
-    ctx.moveTo(...screen(record.vertices[0].position));
-    for (let i = 1; i <= through; i++) ctx.lineTo(...screen(record.vertices[i].position));
-    ctx.strokeStyle = ghost ? "#40556b" : "#f7cb71";
-    ctx.lineWidth = ghost ? 1 : 2;
-    ctx.stroke();
-    if (ghost) return;
-    const vertex = record.vertices[through];
-    ctx.beginPath();
-    ctx.arc(...screen(vertex.position), 4, 0, 2 * Math.PI);
-    ctx.fillStyle =
-      through === record.vertices.length - 1 && record.status === "censored"
-        ? "#c492fa"
-        : eventColor[vertex.event];
-    ctx.fill();
-    if (record.vertices.length === 1) {
-      const p = screen(vertex.position);
-      ctx.beginPath();
-      ctx.moveTo(...p);
-      ctx.lineTo(p[0] + 25, p[1]);
-      ctx.stroke();
-    }
-  };
+  const geometry = layout(size),
+    { tank, track } = geometry;
+  chamber(ctx, size, tank, settings);
   if (stage >= 6)
     for (const recent of experiment.recent)
-      path(recent.trace, recent.trace.vertices.length - 1, true);
-  path(trace, visible, false);
+      path(ctx, tank, recent.trace, recent.trace.vertices.length - 1, true);
+  path(ctx, tank, trace, visible, false);
+  readout(ctx, geometry.readout, tank, experiment, stage, geometry.compact);
   if (stage >= 2) {
-    const sample = sampleFirst(settings, id);
-    const width = size.width * 0.62 - 32;
-    const y = size.height - 66;
-    ctx.fillStyle = "#cad6ed";
-    ctx.fillText("S lấy mẫu: trục 0–6, không phải đường đi", 16, y - 12);
-    ctx.strokeStyle = "#718cae";
-    ctx.beginPath();
-    ctx.moveTo(16, y);
-    ctx.lineTo(16 + width, y);
-    ctx.stroke();
-    const x = 16 + (Math.min(6, sample.distance) / 6) * width;
-    ctx.fillStyle = "#f7cb71";
-    ctx.fillRect(x - 2, y - 6, 4, 12);
-    if (stage >= 3) {
-      ctx.fillStyle = "#cad6ed";
-      const flight = firstFlight(settings, id);
-      ctx.fillText(
-        "S=" +
-          (Number.isFinite(flight.sampled) ? flight.sampled.toFixed(3) : "∞") +
-          "; biên=" +
-          flight.boundary.toFixed(3),
-        16,
-        cy + scale + 19,
-      );
-    }
+    const sample = sampleFirst(settings, id),
+      y = size.height - 56;
+    const free = Number.isFinite(sample.distance) ? sample.distance.toFixed(2) : "∞";
+    let note = "Quãng tự do S = " + free + "  ·  thước 0–6";
+    if (stage >= 3) note += "  ·  biên " + firstFlight(settings, id).boundary.toFixed(2);
+    text(ctx, note, track.x, y - 6, ink.muted, 10);
+    line(ctx, track.x, y, track.x + track.w, y, ink.divider, 2);
+    const x = track.x + (Math.min(6, sample.distance) * track.w) / 6;
+    ctx.fillStyle = ink.gold;
+    ctx.fillRect(x - 2, y - 4, 4, 8);
   }
   if (stage >= 5) {
-    const width = size.width * 0.62 - 32,
-      y = size.height - 26;
-    ctx.strokeStyle = "#718cae";
-    ctx.beginPath();
-    ctx.moveTo(16, y);
-    ctx.lineTo(16 + width, y);
-    ctx.stroke();
-    const x = 16 + (visible / Math.max(1, trace.vertices.length - 1)) * width;
-    ctx.fillStyle = "#dae3f5";
-    ctx.fillRect(x - 3, y - 7, 6, 14);
+    const y = size.height - 26;
+    text(
+      ctx,
+      `Sự kiện ${visible}/${Math.max(0, trace.vertices.length - 1)}  ·  kéo để xem đường đã ghi`,
+      track.x,
+      y - 5,
+      ink.muted,
+      10,
+    );
+    line(ctx, track.x, y, track.x + track.w, y, ink.divider, 2);
+    const x = track.x + (visible / Math.max(1, trace.vertices.length - 1)) * track.w;
+    ctx.fillStyle = ink.teal;
+    ctx.fillRect(x - 2, y - 4, 4, 9);
   }
-  const x = size.width * 0.68;
-  ctx.fillStyle = "#dae3f5";
-  if (stage < 6) {
-    ctx.fillText("Đếm nhiều photon từ Bài 06", x, 45);
-    return;
-  }
-  const c = experiment.counts;
-  const bars = [
-    ["Hấp thụ", c.absorbed, "#ff7088"],
-    ["Thoát mọi phía", c.escaped, "#59ddbd"],
-    ["Chưa biết (chạm giới hạn)", c.censored, "#c492fa"],
-    ["Thoát không tương tác", c.ballistic, "#f7cb71"],
-  ] as const;
-  bars.forEach(([label, count, color], i) => {
-    const y = 50 + i * 57;
-    ctx.fillStyle = "#dae3f5";
-    ctx.fillText(label, x, y);
-    ctx.fillStyle = color;
-    ctx.fillRect(x, y + 8, c.completed > 0 ? (size.width * 0.28 * count) / c.completed : 0, 12);
-    ctx.fillText(count + " / " + c.completed, x, y + 34);
-  });
 }

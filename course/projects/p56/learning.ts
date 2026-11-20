@@ -3,7 +3,8 @@ const data = {
   guides: {
     "p56-l01": {
       focus: "Vẽ được phantom bằng SDL3 trước khi tính một phép đo nào.",
-      expected: "Nền có đĩa lớn và hai insert, không nguồn quay hay sinogram giả.",
+      expected:
+        "Nhìn được vỏ, các vòng và mắt gỗ trước khi có số đo; ảnh mẫu không được dùng làm sinogram.",
       files: ["src/main.cpp", "include/model.hpp", "include/view.hpp"],
       steps: [
         {
@@ -200,6 +201,50 @@ const data = {
         },
       ],
     },
+    "p56-l10": {
+      focus:
+        "Giấu mặt cắt tham chiếu. Ta cần tìm mắt gỗ từ số đo chứ không phải từ dữ liệu đã dùng để tạo gỗ.",
+      expected: "Sau một góc có các vệt sáng theo hình quạt; đủ 180 góc thì mắt gỗ nổi rõ hơn hốc.",
+      files: ["include/backprojection.hpp", "include/timber-station.hpp", "src/main.cpp"],
+      steps: [
+        {
+          title: "Đặt tâm texel",
+          explanation: "Dùng cùng khung tọa độ cho hai ảnh; chỉ lật y ở biên hiển thị.",
+        },
+        {
+          title: "Tra hai cột gần nhất",
+          explanation:
+            "Chiếu điểm lên detector phẳng, đổi sang chỉ số tâm ô rồi nội suy các giá trị p.",
+        },
+        {
+          title: "Thêm một hàng đúng một lần",
+          explanation: "Đếm hàng đã trải ngược; pause hoặc đổi màu không làm thay đổi tổng.",
+        },
+      ],
+    },
+    "p56-l11": {
+      focus:
+        "Cạnh gỗ bị mờ là lỗi của máy đo hay kết quả của cách dựng ảnh? Đo hai việc này riêng.",
+      expected:
+        "Biết đọc hai kết quả khác nhau: sai số hàng đo so với đĩa chuẩn và RMSE hình dạng sau chuẩn hóa.",
+      files: ["include/backprojection.hpp", "tests/tests.cpp", "src/main.cpp"],
+      steps: [
+        {
+          title: "Tạo ảnh đối chứng",
+          explanation: "Đọc mật độ tại tâm các texel nhưng không chuyển dữ liệu đó vào hàm dựng.",
+        },
+        {
+          title: "So trên cùng miền",
+          explanation:
+            "Đưa hai ảnh về cực đại riêng, xử lý cả ảnh toàn 0, tính RMSE trên toàn khung.",
+        },
+        {
+          title: "Chạy bài làm",
+          explanation:
+            "Build target work và tests, thử H giấu mặt cắt trước khi đoán chỗ có mắt gỗ.",
+        },
+      ],
+    },
   },
   references: {
     "p56-l01": [
@@ -234,6 +279,8 @@ const data = {
     ],
     "p56-l08": [{ label: "Lấy mẫu góc", href: "/glossary#ct-angular-sampling", kind: "Thuật ngữ" }],
     "p56-l09": [{ label: "Sinogram", href: "/glossary#ct-sinogram", kind: "Thuật ngữ" }],
+    "p56-l10": [{ label: "Tia hình quạt", href: "/glossary#ct-fan-beam", kind: "Thuật ngữ" }],
+    "p56-l11": [{ label: "Số góc đo", href: "/glossary#ct-angular-sampling", kind: "Thuật ngữ" }],
   },
 } satisfies ProjectLearningAssets;
 export default data;

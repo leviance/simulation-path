@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Bắt đầu với môi trường chỉ hấp thụ
 
@@ -18,13 +19,23 @@ Với muS=0, muT=muA, chiều dài chùm ban đầu trong medium là3. Xác su�
 
 ## Viết code từng bước
 
+Tắt tán xạ để chỉ còn hai kết cục dễ kiểm: hấp thụ ở giữa bể hoặc đi thẳng tới màn. Ghi đúng điểm kết thúc rồi dừng hạt; đừng tô dần độ mờ lên một hạt được coi là đã biến mất.
+
+<CourseWorkFile project="57" step={4} path="include/transport.hpp" />
+
 ### Bước 1 — Khởi tạo lịch sử theo ID
 
+{/* snippet include/transport.hpp#escape-first */}
+
 ```cpp title="include/transport.hpp"
-    Random random(photonSeed(settings.seed, id));
-    Photon value = launch(random);
-    Trace trace;
-    trace.vertices.push_back({value.position, Event::Emission});
+const Flight flight = sampleFlight(value, random, settings);
+value.position = flight.endpoint;
+if (flight.escaped) {
+    trace.vertices.push_back({value.position, Event::Escape});
+    trace.status = Status::Escaped;
+    return;
+}
+++trace.collisions;
 ```
 
 tracePhoton validate settings trước đoạn này. Vertex đầu chỉ ghi phát photon; chưa phải collision. Trace giữ vertices, trạng thái cuối, số collision và số scatter. Màu hiển thị được chọn khi vẽ, không nằm trong dữ liệu vật lý.
@@ -60,6 +71,12 @@ Checkpoint 4 chỉ chạy một bước tới tương tác/biên đầu tiên. T
 ### Bước 4 — Vẽ kết cục nhưng giữ ý nghĩa dữ liệu
 
 preview gọi tracePhoton rồi drawTrace nối các vertex. Điểm Absorption màu hồng, điểm Escape màu xanh. Title đọc trạng thái cuối của preview. Chưa tally nhiều photon; đổi ID để xem đường khác không tạo một thống kê nào cả.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="57" step={4} path="include/view.hpp" />
+
+Trong mẫu chỉ hấp thụ, số điểm trên bản đồ hấp thụ phải bằng số photon hấp thụ; không có dấu tán xạ. So phần đến màn với dự đoán cho một chùm đi thẳng.
 
 ## Ghép các phần lại
 

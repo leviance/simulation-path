@@ -1,0 +1,59 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
+
+# Làm sao biết ảnh radio là một phép đo đúng?
+
+## Vấn đề cần giải quyết
+
+Một chiếc radio lộn đầu vẫn trông giống radio. Nếu bạn chỉ nhìn hình, lỗi lật trục y dễ lọt qua. Ta sẽ buộc CPU và GPU đo **cùng một tia**, rồi cho hai bộ tính trả lời bằng số trước khi tô màu.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chọn một ô $(x,y)$ và giữ nguyên nguồn, vật, góc cùng hệ số suy giảm. Đọc $T$ từ texture float của GPU. Phía CPU tính lại giao ray/hộp và phép suy giảm từ đầu. So $|T_{GPU}-T_{CPU}|$, lấy sai số lớn nhất trên một lưới điểm. Phép so này bắt được sai thứ tự hàng hay lỗi truyền uniform; đĩa chuẩn không có ở đây, ta dùng **tấm phẳng** đã kiểm độc lập ở Bài 8 để tránh hai bản cùng sai một công thức.
+
+<InteractiveLab demo="xray-detector" mode="xray55-10" />
+
+## Viết code từng bước
+
+### Bước 1 — So trước phép đổi thang màu
+
+{/* snippet include/gpu-detector.hpp#compare-raw */}
+
+```cpp title="include/gpu-detector.hpp — So hai bộ đo cùng một tia"
+inline double detectorError(const GpuDetector& gpu, const Scene& scene, Settings settings) {
+    double worst = 0;
+    for (int y = 0; y < imageHeight; y += 5) {
+        for (int x = 0; x < imageWidth; x += 5) {
+            const auto ray = detectorRay((x + 0.5) / imageWidth, (y + 0.5) / imageHeight);
+            const double expected = measure(ray, scene, settings).ratio;
+            worst = std::max(worst, std::abs(gpu.raw[x + imageWidth * y] - expected));
+        }
+    }
+    return worst;
+}
+```
+
+Bước nhảy năm ô giữ thời gian kiểm ngắn nhưng vẫn đi qua cả vùng trong và ngoài vật. Nhìn lại dòng tạo tia: $x+0.5$ và $y+0.5$ là tâm của **đúng ô** đang đọc. Dữ liệu `raw` chưa bị đảo màu, lấy log hay làm tròn. Một ca kiểm tại một ô chưa đủ để chứng minh toàn ảnh đúng.
+
+### Bước 2 — Đừng chỉ thử trường hợp đẹp nhất
+
+Trong `work/src/main.cpp`, nối phím V với phép kiểm. Thử riêng tấm phẳng, các lớp tách rời, hai lớp chồng và radio; xoay mẫu đi một ít. Khi chương trình được chạy với `--capture radio.png`, nó đo cả bốn ca trên GPU trước khi lưu ảnh màn hình. CTest vẫn kiểm code thuần không cần cửa sổ; không dùng việc CTest qua để tuyên bố GPU chạy được.
+
+<CourseWorkFile project="55" step={10} path="include/gpu-detector.hpp" />
+<CourseWorkFile project="55" step={10} path="src/main.cpp" />
+
+## Ghép các phần lại
+
+Chạy `project_55_work`. Hãy tìm pin mà không nhìn lớp vỏ bên phải trước. Sau đó đối chiếu với mô hình, nhấn A/D để xem hai pin có đổi chỗ tương đối so với gân loa như bạn đoán không. Tắt chế độ nhiều năng lượng, giảm strength về 0: bất kể hướng, toàn detector phải trả T bằng 1.
+
+## Thử làm sai để hiểu đúng
+
+Tạm đổi dấu góc xoay **ở shader**. Tấm phẳng ở góc 0 khó cho thấy lỗi; radio có linh kiện lệch tâm và góc khác 0 sẽ lộ sai khác. Hoàn nguyên rồi thử đảo thang xám hiển thị. Lần này số sai khác không được tăng.
+
+## Tự kiểm tra kết quả
+
+Tải ZIP, build target work và tests; kiểm tấm phẳng bằng nghiệm độc lập rồi mới so GPU. Nhìn được ba loại đường đi: không khí, chỉ vỏ, vỏ kèm linh kiện đặc. Khi giữ nguyên ô và góc, tăng exposure làm $I=I_0 T$ tăng nhưng tỷ số $T$ không đổi. Ghi sai số trên máy của bạn thay vì chép một dòng “PASS”.
+
+## Bài tập mở rộng
+
+Đặt thêm một khối vật liệu nhỏ sau bo mạch mà không đổi hàm đo. Nó lộ rõ ở góc nào nhất? Đây là lý do Project 56 sẽ chọn một vật khác và thu nhiều góc để tìm vị trí bên trong.

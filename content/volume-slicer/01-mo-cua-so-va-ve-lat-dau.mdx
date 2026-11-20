@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Mở cửa sổ rồi vẽ lát cắt đầu tiên
 
@@ -21,6 +22,11 @@ Thử dự đoán trước: ở z = 0, bán kính lát là 60 mm. Ở z = 40 mm,
 Thí nghiệm này chưa cấp phát volume. Nó gọi `sphereField` cho từng pixel; ta sẽ thay bước ấy bằng đọc mảng ở bài sau.
 
 ## Viết code từng bước
+
+Đừng bắt đầu với cả viên đá. Tạm cắt ngang một quả cầu có bán kính đã biết: qua tâm thì thấy một đĩa, dịch lát ra ngoài thì chỉ còn nền. Đây là phép thử đầu tiên cho đường đi từ một giá trị scalar đến pixel SDL.
+
+<CourseWorkFile project="53" step={1} path="include/field.hpp" />
+<CourseWorkFile project="53" step={1} path="include/slice.hpp" />
 
 ### 1. Chạy được cửa sổ trước
 
@@ -111,6 +117,14 @@ void upload(SDL_Texture* texture, const std::uint32_t* rgba, int width, int heig
 ```
 
 Mỗi hàng nguồn có `width * 4` byte, nhưng mỗi hàng đích bắt đầu cách nhau `pitch` byte. Phải ghi đủ dữ liệu mới: vùng nhớ lock là write-only, không phải nơi lưu bản ảnh cũ để đọc lại. Quy tắc này được nêu trong [tài liệu SDL_LockTexture](https://wiki.libsdl.org/SDL3/SDL_LockTexture).
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="53" step={1} path="include/stage.hpp" />
+<CourseWorkFile project="53" step={1} path="include/state.hpp" />
+<CourseWorkFile project="53" step={1} path="include/ui.hpp" />
+
+Giữ nguyên cách tô màu. Nếu dời lát qua tâm mà hình không nhỏ đi ở hai phía, kiểm trục được giữ cố định trước.
 
 ## Ghép các phần lại
 

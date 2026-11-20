@@ -1,3 +1,5 @@
+import { makeRadio, type RadioPart } from "./radio.ts";
+
 export type Point = [number, number, number];
 export interface Beam {
   origin: Point;
@@ -9,6 +11,7 @@ export interface Material {
   maximum: Point;
   muLow: number;
   muHigh: number;
+  part?: RadioPart;
 }
 export interface Settings {
   angle: number;
@@ -26,7 +29,7 @@ export interface Settings {
 export const defaultSettings: Settings = {
   angle: 0,
   strength: 1,
-  preset: 1,
+  preset: 3,
   numeric: false,
   stepLength: 0.1,
   logView: false,
@@ -56,7 +59,7 @@ export function validate(s: Settings) {
     s.strength > 3 ||
     !Number.isInteger(s.preset) ||
     s.preset < 0 ||
-    s.preset > 2
+    s.preset > 3
   )
     throw new RangeError("Invalid angle/strength/preset");
   if (
@@ -129,6 +132,7 @@ export function makeScene(preset: number, stage = 8): Material[] {
     muLow: 0.55,
     muHigh: 0.18,
   };
+  if (stage >= 4 && preset === 3) return makeRadio();
   if (stage >= 4 && preset === 1)
     return [
       { minimum: [-1.2, -1.05, -1.1], maximum: [1.2, 1.05, -0.25], muLow: 0.35, muHigh: 0.12 },
@@ -143,7 +147,7 @@ export function makeScene(preset: number, stage = 8): Material[] {
   return [slab];
 }
 export function validateScene(scene: Material[]) {
-  if (scene.length < 1 || scene.length > 8) throw new RangeError("1..8 boxes required");
+  if (scene.length < 1 || scene.length > 32) throw new RangeError("1..32 boxes required");
   for (const m of scene) {
     for (let a = 0; a < 3; a++)
       if (

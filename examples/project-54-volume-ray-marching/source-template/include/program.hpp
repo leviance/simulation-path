@@ -59,9 +59,9 @@ inline GLint uniform(GlApi& gl, GLuint program, const char* name) {
     return location;
 }
 
-inline std::filesystem::path shaderDirectory() {
+inline std::filesystem::path shaderDirectory([[maybe_unused]] const char* entry = "volume.frag") {
 #ifdef COURSE_SHADER_DIRECTORY
-    if (std::filesystem::exists(std::filesystem::path(COURSE_SHADER_DIRECTORY) / "volume.frag")) {
+    if (std::filesystem::exists(std::filesystem::path(COURSE_SHADER_DIRECTORY) / entry)) {
         return COURSE_SHADER_DIRECTORY;
     }
 #endif

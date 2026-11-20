@@ -7,7 +7,7 @@ import { SourceFile } from "@/components/source-file";
 import { SourceDiff } from "@/components/source-diff";
 
 import { diffLines } from "@/lib/diff-lines";
-import { hasVoxelWorkbook } from "@/lib/voxel-workbook";
+import { workbookOption } from "@/lib/voxel-workbook";
 
 function formatDiff(path: string, before: string, after: string) {
   const lines = diffLines(before, after);
@@ -55,7 +55,7 @@ export async function LessonSourceGuide({
   guide: LessonCodeGuide;
 }) {
   const isFinalLesson = lesson.order === project.lessons.length;
-  const workbook = hasVoxelWorkbook(project.id);
+  const workbook = workbookOption(project.id);
   const previousEdition = Boolean(getProjectRevision(project.id));
   const [bundle, previousBundle] = await Promise.all([
     getProjectSourceBundle(project.id, isFinalLesson ? "final" : lesson.order),

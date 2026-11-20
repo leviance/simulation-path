@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Hoàn thiện mưa photon và kiểm chứng mô hình
 
@@ -10,13 +11,18 @@ Ta cũng cần kiểm độc lập thay vì chỉ tin hình đường đi gấp 
 
 ## Hiểu ý tưởng trước khi viết code
 
-advance xử lý tối đa 32 photon mới mỗi lần, mỗi photon tối đa 64 bước. Một frame không được chạy cả lượt 8192 photon hoặc “bù” tất cả công việc sau frame chậm. Preview thêm một lịch sử hữu hạn; 24 trace mờ được lấy từ các mẫu đã tính, không mô phỏng lại toàn bộ dataset mỗi lần vẽ.
+advance xử lý tối đa 32 photon mới mỗi lần, mỗi photon tối đa 64 bước. Một frame không được chạy cả lượt 16.384 photon hoặc “bù” tất cả công việc sau frame chậm. Preview thêm một lịch sử hữu hạn; 24 trace mờ được lấy từ các mẫu đã tính, không mô phỏng lại toàn bộ dataset mỗi lần vẽ.
 
 Đổi muA,muS,seed,count hoặc eventLimit phải tạo Experiment mới và dừng. Xem ID/đỉnh không tally. Pause, blur/minimize, tab ẩn và reduced-motion đều dừng; quay lại cửa sổ không tự resume. Trong reduced motion vẫn thêm 1/32 mẫu bằng nút thủ công được.
 
 <InteractiveLab demo="photon-rain" mode="photon57-8" />
 
 ## Viết code từng bước
+
+Chạy ba bể thử theo thứ tự: trong suốt, chỉ hấp thụ, rồi vừa hấp thụ vừa tán xạ. Bể thứ nhất kiểm được màn thu, bể thứ hai có công thức mốc, bể thứ ba mới cho thấy vì sao cần theo dấu nhiều photon.
+
+<CourseWorkFile project="57" step={8} path="include/audit.hpp" />
+<CourseWorkFile project="57" step={8} path="include/controls.hpp" />
 
 ### Bước 1 — Cho lệnh thủ công ưu tiên trước auto
 
@@ -43,7 +49,10 @@ Pointer input native đổi qua SDL_ConvertEventToRenderCoordinates trước pic
 
 ### Bước 3 — Dùng fixture riêng cho toán và xác suất
 
+{/* snippet include/audit.hpp#absorption-oracle */}
+
 ```cpp title="include/audit.hpp"
+inline double audit() {
     Settings settings;
     settings.muA = 0.4;
     settings.muS = 0;
@@ -52,6 +61,18 @@ Pointer input native đổi qua SDL_ConvertEventToRenderCoordinates trước pic
     for (int batch = 0; batch < 128; ++batch) {
         advance(experiment, 32);
     }
+    const auto counts = experiment.counts;
+    const double expected = expectedBallistic(settings);
+    const double observed = static_cast<double>(counts.ballistic) / counts.completed;
+    const double tolerance = 5 * std::sqrt(expected * (1 - expected) / counts.completed) + 1.0 / counts.completed;
+
+    // Đây là fixture seed cố định, không phải bảo đảm mọi lượt nằm trong CI 95%.
+    if (counts.completed != 4096 || counts.censored != 0 || counts.escaped != counts.ballistic || std::abs(observed - expected) > tolerance) {
+        throw std::runtime_error("Pure absorption fixture failed");
+    }
+
+    return std::abs(observed - expected);
+}
 ```
 
 Audit seed 42,4096 photon, hấp thụ thuần. Expected là exp(−.4*3), không gọi lại tracePhoton để tự tạo “expected”. Tolerance bằng 5 sai số chuẩn lý thuyết cộng 1/N cho fixture này. Nó không biến thành lời hứa mọi seed phải khớp năm chữ số hoặc nằm trong CI 95%.
@@ -68,6 +89,12 @@ tests/tests.cpp bổ sung PRNG uint32 fixture, inverse CDF, boundary, direction 
 ```
 
 Nếu audit ném exception, main tới nhánh lỗi và không in PASS trước đó. Canvas nút Kiểm hấp thụ thuần dùng fixture nhỏ tương ứng, không sửa Experiment đang xem.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="57" step={8} path="src/main.cpp" />
+
+Với 16.384 photon, giữ seed và xem lại một ID; thanh thời gian phải chỉ đúng các sự kiện của nó mà tổng trên hai bản đồ không đổi. Đổi seed và ghi cả cỡ mẫu lẫn khoảng bất định.
 
 ## Ghép các phần lại
 
@@ -114,4 +141,4 @@ Phạm vi cuối: môi trường đồng nhất, analog unit photon, tán xạ �
 
 Export Counts kèm settings/seed và quy ước mô hình; hoặc thêm bảng số theo nhiều eventLimit nhỏ để đọc bất định do dừng sớm. Nếu muốn thêm vật liệu không đồng nhất hay tán xạ 3D, cần học sampler tương ứng, không chỉ đổi màu/đổi tên biến rồi giữ công thức hiện tại.
 
-Project 57 kết thúc phần Ray, Volume và giả lập X-ray. Tiếp theo là [Project 58 — Khối đất 16×16×16](/projects/voxel-chunk), mở đầu phần Voxel World. Các project chưa phát hành được đánh dấu **Sắp ra mắt** trong roadmap.
+Project 57 kết thúc phần Ray, Volume và giả lập X-ray. Tiếp theo là [Project 58 — Khối đất 16×16×16](/projects/voxel-chunk), mở đầu phần Voxel World. Hãy giữ lại thói quen phân biệt dữ liệu mô phỏng với cách thể hiện khi chuyển sang thế giới voxel.

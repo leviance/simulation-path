@@ -188,7 +188,7 @@ inline const char* modeName(Mode mode) {
 
 inline const char* presetName(Preset preset) {
     if (preset == Preset::Cloud)
-        return "CUMULUS / STATIC";
+        return "ANVIL CLOUD / STATIC";
     if (preset == Preset::Cores)
         return "TWIN CORES";
     if (preset == Preset::Slab)

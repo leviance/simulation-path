@@ -8,10 +8,12 @@ constexpr double aimAspect = 280.0 / 190.0;
 
 // A view camera is not the ray emitter. Orbiting must never change a held query.
 struct Orbit {
-    Vec3 target{0, 0.1, -1.5};
-    double yaw = 0.3;
-    double pitch = 0.3;
-    double distance = 10;
+    // Frame the three samples and the source in one oblique view. These
+    // settings only move the observer; they do not change a single query.
+    Vec3 target{0.12, 0.42, -1.82};
+    double yaw = -0.24;
+    double pitch = 0.35;
+    double distance = 8.55;
 
     Camera camera() const {
         const double horizontal = distance * std::cos(pitch);

@@ -63,7 +63,11 @@ struct Platform {
     void capture(const std::string& filename) {
         SDL_Surface* surface = SDL_RenderReadPixels(renderer, nullptr);
         if (!surface) throw std::runtime_error(SDL_GetError());
-        const bool saved = SDL_SaveBMP(surface, filename.c_str());
+        bool saved = false;
+        if (filename.ends_with(".bmp") || filename.ends_with(".BMP"))
+            saved = SDL_SaveBMP(surface, filename.c_str());
+        else
+            saved = SDL_SavePNG(surface, filename.c_str());
         SDL_DestroySurface(surface);
         if (!saved) throw std::runtime_error(SDL_GetError());
     }

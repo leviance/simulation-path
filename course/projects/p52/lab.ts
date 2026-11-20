@@ -1,5 +1,21 @@
 import type { ProjectLabMeta } from "../../labs/types";
 const data = {
+  native: {
+    directory: "/field-notes/optics",
+    withDemo: true,
+    overview: ["bench"],
+    lessons: { "ray52-8": ["bench"] },
+    takes: {
+      bench: {
+        title: "Bàn đo tia",
+        source: "Project 52 · C++/SDL3 · Release",
+        poster: "bench.png",
+        alt: "Nguồn phát, quả cầu, hộp và tấm tam giác trên mặt bàn có vạch; một tia đánh dấu chỗ đi vào và ra.",
+        caption:
+          "Tia màu hổ phách cho biết đoạn nằm bên trong vật; nhìn hình thoi ở điểm ra thay vì nhầm nó với mũi tên pháp tuyến.",
+      },
+    },
+  },
   base: {
     label: "RAY INTERSECTION LAB",
     title: "Một tia, bốn loại bề mặt",

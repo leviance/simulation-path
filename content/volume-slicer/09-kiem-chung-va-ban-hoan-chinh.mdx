@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Kiểm chứng rồi chạy toàn bộ project
 
@@ -19,6 +20,11 @@ Fixture cần đủ nhỏ để tự tính đáp số. Với `x+10y+100z`, ta bi
 Nút kiểm trên Canvas kiểm dữ liệu CPU và fixture. Nó không kiểm driver, mouse capture của Windows hoặc chứng nhận công cụ y khoa.
 
 ## Viết code từng bước
+
+Hốc đá cho ta một câu chuyện dễ nhìn nhưng không cho đáp án toán học ở mọi điểm. Khi kiểm chỉ số và nội suy, hãy chuyển sang Ramp hay Sphere trước, sau đó quay lại đá để xác nhận chúng phục vụ được cùng một bộ đọc.
+
+<CourseWorkFile project="53" step={9} path="include/analysis.hpp" />
+<CourseWorkFile project="53" step={9} path="include/state.hpp" />
 
 ### 1. Dùng check thực sự chạy trong Release
 
@@ -96,6 +102,14 @@ if (options.verify && options.frames == 0) options.frames = 3;
 ```
 
 Ảnh nghiệm thu được đọc sau khi vẽ và trước present, đúng thời điểm mô tả trong [SDL_RenderReadPixels](https://wiki.libsdl.org/SDL3/SDL_RenderReadPixels). Bản chụp là bằng chứng hình ảnh của một trạng thái, không chứng minh mọi control đã hoạt động.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="53" step={9} path="include/input.hpp" />
+<CourseWorkFile project="53" step={9} path="include/stage.hpp" />
+<CourseWorkFile project="53" step={9} path="src/main.cpp" />
+
+Trên 128³, đọc theo đường y = −9, z = −14 mm: hốc khoảng 0,015; tinh thể tại x = −40 khoảng 0,928. Nêu rõ dùng trilinear và đơn vị mm khi ghi kết quả.
 
 ## Ghép các phần lại
 

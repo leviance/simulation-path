@@ -14,6 +14,8 @@ export interface NativeTake {
 }
 
 export interface NativeMedia {
+  /** Show the captured native result and keep the separate browser experiment available. */
+  withDemo?: boolean;
   directory: string;
   takes: Record<string, NativeTake>;
   overview: string[];

@@ -100,9 +100,16 @@ test("P53 camera, image picks and letterbox retain their distinct meanings", asy
   const after = (await probe(page))!.split(",").map(Number);
   expect(Math.abs(after[0])).toBeLessThan(2);
   expect(Math.abs(after[1])).toBeLessThan(2);
-  expect(after[2]).toBe(-8);
+  expect(after[2]).toBe(-14); // XY keeps the depth of the off-centre geode cavity.
   await xy.press("PageUp");
-  expect(Number((await probe(page))!.split(",")[2])).toBeCloseTo(-6.25);
+  expect(Number((await probe(page))!.split(",")[2])).toBeCloseTo(after[2] + 1.75);
+  const inspected = await probe(page);
+  const pixels = () => scene.evaluate((element) => (element as HTMLCanvasElement).toDataURL());
+  await expect(page.locator('[data-scene-ready="true"]')).toBeVisible();
+  const xyContext = await pixels();
+  await page.getByRole("combobox", { name: "Hướng quét" }).selectOption("2");
+  await expect.poll(pixels).not.toBe(xyContext);
+  expect(await probe(page)).toBe(inspected);
 });
 test("P53 cancelled dataset jobs cannot overwrite the latest selection", async ({ page }) => {
   await ready(page, "06-dat-lat-cat-trong-khoi-3d");

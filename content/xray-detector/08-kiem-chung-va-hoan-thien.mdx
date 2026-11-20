@@ -1,6 +1,7 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
-# Kiểm máy X-ray ảo rồi chạy project hoàn chỉnh
+# Kiểm bộ đo CPU trước khi giao việc cho GPU
 
 ## Vấn đề cần giải quyết
 
@@ -20,9 +21,15 @@ Audit chỉ vài phép đo scalar, không render ảnh lớn, không chạy benc
 
 ## Viết code từng bước
 
+Một đường gân trông hợp lý vẫn chưa chứng minh máy đo đúng. Mang tấm phẳng trở lại và tính tay chiều dài, độ sâu quang học, tỷ số T ở một tia biết trước; dùng những số đó làm bài kiểm trước khi chuyển sang GPU.
+
+<CourseWorkFile project="55" step={8} path="include/audit.hpp" />
+
 ### Bước 1 — Thêm audit nhỏ có nghiệm biết trước
 
 audit.hpp dùng scene độc lập và so với .605:
+
+{/* snippet include/audit.hpp#slab-audit */}
 
 ```cpp title="include/audit.hpp"
 inline double audit() {
@@ -33,6 +40,7 @@ inline double audit() {
     if (std::abs(exact.depth.low - 0.605) > 1e-12 || std::abs(exact.ratio - std::exp(-0.605)) > 1e-12) {
         throw std::runtime_error("Independent slab oracle failed");
     }
+
     double maximumError = 0;
     for (double step : {0.05, 0.11, 0.25}) {
         settings.numeric = true;
@@ -45,6 +53,7 @@ inline double audit() {
         }
         maximumError = std::max(maximumError, error);
     }
+
     return maximumError;
 }
 ```
@@ -74,9 +83,11 @@ Tests cố ý đưa nonunit/NaN/bounds lỗi. Không biến request quality sai 
 
 Settings validation cũng được kiểm bằng test:
 
+{/* snippet include/model.hpp#measurement-settings */}
+
 ```cpp title="include/model.hpp"
 inline void validate(Settings settings) {
-    if (!std::isfinite(settings.angle) || std::abs(settings.angle) > pi || !std::isfinite(settings.strength) || settings.strength < 0 || settings.strength > 3 || settings.preset < 0 || settings.preset > 2) {
+    if (!std::isfinite(settings.angle) || std::abs(settings.angle) > pi || !std::isfinite(settings.strength) || settings.strength < 0 || settings.strength > 3 || settings.preset < 0 || settings.preset > 3) {
         throw std::invalid_argument("Invalid angle, strength or preset");
     }
     if (!std::isfinite(settings.stepLength) || settings.stepLength < 0.05 || settings.stepLength > 0.5 || !std::isfinite(settings.logRange) || settings.logRange < 0.5 || settings.logRange > 12) {
@@ -89,6 +100,12 @@ inline void validate(Settings settings) {
 ```
 
 tests/tests.cpp dùng check(bool condition,std::string_view label), tăng failures và trả EXIT_FAILURE nếu có lỗi. Không dùng assert làm mất phép kiểm khi NDEBUG bật. Code đầy đủ của tests và final có ở phần source cuối bài.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="55" step={8} path="src/main.cpp" />
+
+Cho tia đi qua lớp không khí và thử xoay tấm phẳng. Ghi riêng sai số của nghiệm giải tích với sai số lấy mẫu giữa bước; chúng có nguyên nhân khác nhau.
 
 ## Ghép các phần lại
 
@@ -122,7 +139,7 @@ Không chạy lại liên tục khi timeout. Timeout process không bảo đảm
 
 Final controls: click/kéo/mũi tên chọn pixel; A/D xoay, Space quay/dừng, P scene, W/S strength, N exact/midpoint, Q step, L log, I invert, +/− exposure, B spectral, J/K weight, V audit, R reset, Escape thoát. Blur/minimize/reset hủy capture và dừng; không tự resume.
 
-Source cuối bài có toàn bộ headers/main/tests. ZIP có README, starter, checkpoint và final; đừng chỉ chép main.cpp. [Project 56](/projects/ct-sinogram) tiếp tục với nguồn và detector cùng quay quanh vật thể để dựng sinogram theo lát cắt 2D. Các project chưa phát hành được đánh dấu Sắp ra mắt trong roadmap.
+Đến đây ta có bộ đo CPU để đối chiếu. Sang [Bài 9: Soi radio bằng shader](/projects/xray-detector/09-do-anh-tren-gpu), chính GPU sẽ tạo ảnh detector.
 
 ## Thử làm sai để hiểu đúng
 

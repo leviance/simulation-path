@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Chọn màu và làm rõ cấu trúc trong sương
 
@@ -20,6 +21,12 @@ Palette chỉ gán RGB cho rho'. Đổi palette không đổi T. Gradient lighti
 
 ## Viết code từng bước
 
+Mặt hướng về mặt trời sáng và đáy đám mây tối giúp người xem đọc được hai tháp. Ánh sáng chỉ giúp nhìn hình: bảng mật độ và độ truyền qua vẫn phải đo từ trường scalar trước khi nhuộm màu.
+
+<CourseWorkFile project="54" step={7} path="include/cloud-context.hpp" />
+<CourseWorkFile project="54" step={7} path="include/reference.hpp" />
+<CourseWorkFile project="54" step={7} path="shaders/volume.frag" />
+
 ### 1. Chọn màu bằng nội suy giữa các mốc
 
 Đoạn này là thân `transferColor` CPU. Palette có năm màu mốc trong [0,1]; nội suy giữ màu bounded, điều sẽ quan trọng khi chặn sai số early termination.
@@ -27,7 +34,7 @@ Palette chỉ gán RGB cho rho'. Đổi palette không đổi T. Gradient lighti
 {/* snippet include/reference.hpp#transfer-color */}
 
 ```cpp title="include/reference.hpp — Palette không sửa mật độ"
-constexpr std::array<Vec3, 5> warm{{{0.38, 0.49, 0.58}, {0.65, 0.72, 0.77}, {0.82, 0.86, 0.89}, {0.95, 0.96, 0.96}, {1, 0.98, 0.94}}};
+constexpr std::array<Vec3, 5> warm{{{0.42, 0.55, 0.70}, {0.68, 0.78, 0.88}, {0.88, 0.91, 0.95}, {0.98, 0.97, 0.93}, {1, 0.98, 0.90}}};
 constexpr std::array<Vec3, 5> cool{{{0.07, 0.16, 0.24}, {0.08, 0.49, 0.57}, {0.35, 0.78, 0.74}, {1, 0.55, 0.22}, {1, 0.92, 0.72}}};
 if (palette == 2)
     return {1, 1, 1};
@@ -60,12 +67,14 @@ inline Vec3 litColor(const Volume& volume, Vec3 point, double density, Settings 
         offset[axis] = h;
         gradient[axis] = (sampleDensity(volume, point + offset) - sampleDensity(volume, point - offset)) / (2 * h);
     }
-    if (dot(gradient, gradient) < 1e-6)
-        return color;
-    const Vec3 normal = unit(gradient * -1);
     const Vec3 light = unit({-0.6, 0.8, 0.5});
-    const double diffuse = std::max(0.0, dot(normal, light));
-    return color * (0.55 + 0.45 * diffuse);
+    const double facing = std::max(0.0, -dot(gradient, light) / std::sqrt(dot(gradient, gradient) + 0.25));
+    const double nearDensity = sampleDensity(volume, point + light * 0.13);
+    const double farDensity = sampleDensity(volume, point + light * 0.32);
+    const double sun = std::exp(-2.3 * (0.64 * nearDensity + 0.36 * farDensity));
+    const double direct = sun * (0.55 + 0.45 * facing);
+    const Vec3 shade = Vec3{0.21, 0.34, 0.53} * (1 - direct) + Vec3{1, 0.98, 0.86} * direct;
+    return {color.x * shade.x, color.y * shade.y, color.z * shade.z};
 }
 ```
 
@@ -85,16 +94,30 @@ vec3 lightColor(vec3 point, float density) {
     for (int axis = 0; axis < 3; ++axis) {
         vec3 offset = vec3(0.0);
         offset[axis] = uSpacing;
-        gradient[axis] = (densityAt(point+offset)-densityAt(point-offset))/(2.0*uSpacing);
+        gradient[axis] = (densityAt(point + offset) - densityAt(point - offset)) / (2.0 * uSpacing);
     }
-    if (dot(gradient,gradient) < 1e-6) return color;
-    vec3 normal = normalize(-gradient);
-    float diffuse = max(0.0,dot(normal,normalize(vec3(-0.6,0.8,0.5))));
-    return color * (0.55+0.45*diffuse);
+    vec3 light = normalize(vec3(-0.6, 0.8, 0.5));
+    float facing = max(0.0, -dot(gradient, light) / sqrt(dot(gradient, gradient) + 0.25));
+    float nearDensity = densityAt(point + 0.13 * light);
+    float farDensity = densityAt(point + 0.32 * light);
+    float sun = exp(-2.3 * (0.64 * nearDensity + 0.36 * farDensity));
+    float direct = sun * (0.55 + 0.45 * facing);
+    return color * mix(vec3(0.21, 0.34, 0.53), vec3(1.0, 0.98, 0.86), direct);
 }
 ```
 
 Trong nhánh alpha đã có, emission dùng màu này trước khi nhân `T*alpha`. Cả lighting on/off vẫn dùng cùng density để cập nhật T. Vì cần thêm sáu texture reads cho mỗi sample, đây không phải hiệu ứng “miễn phí”; bảng đo ở Bài 9 cần giữ lựa chọn lighting cố định.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="54" step={7} path="include/input.hpp" />
+<CourseWorkFile project="54" step={7} path="include/renderer.hpp" />
+<CourseWorkFile project="54" step={7} path="include/stage.hpp" />
+<CourseWorkFile project="54" step={7} path="include/state.hpp" />
+<CourseWorkFile project="54" step={7} path="include/ui.hpp" />
+<CourseWorkFile project="54" step={7} path="shaders/present.frag" />
+
+Tắt phần chiếu sáng rồi nhìn lại cùng tia. Bầu trời và cảm giác nổi thay đổi, nhưng vị trí hai đỉnh mật độ không được đổi.
 
 ## Ghép các phần lại
 

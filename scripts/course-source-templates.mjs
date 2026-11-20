@@ -20,6 +20,14 @@ export function courseSourceTemplates(workspace, project) {
     }
   }
   collect(path.join(workspace, "examples", project.sourceDirectory, "source-template"), "", 0);
+  // The learner already linked a GLSL program in P54. Ship those authored helpers
+  // inside the P55 ZIP without maintaining a second copy or requiring a sibling ZIP.
+  if (project.id === "55") {
+    const gl = path.join(workspace, "examples/project-54-volume-ray-marching/source-template");
+    for (const header of ["gl_api.hpp", "program.hpp"])
+      add(path.join("include", "gl-support", header), path.join(gl, "include", header), 0, 10);
+    add(path.join("shaders", "fullscreen.vert"), path.join(gl, "shaders/fullscreen.vert"), 0, 10);
+  }
   if (project.sourceSeries === "flock-workbench") {
     const prerequisite = path.join(
       workspace,

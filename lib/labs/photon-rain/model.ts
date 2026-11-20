@@ -22,13 +22,13 @@ export const left = -1.5,
   right = 1.5,
   bottom = -1,
   top = 1;
-export const maximumPhotons = 8192,
+export const maximumPhotons = 16384,
   maximumEvents = 64;
 export const defaultSettings: Settings = {
   muA: 0.4,
   muS: 0.9,
   seed: 42,
-  count: 2048,
+  count: 16384,
   eventLimit: 64,
 };
 export function settingsForStage(stage: number): Settings {

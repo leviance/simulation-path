@@ -51,10 +51,17 @@ test("Photon inverse CDF and boundary fixtures are independent of transport", ()
   close(direction[0], 0);
   close(direction[1], 1);
 });
+function totals({ detectorBins, absorptionMap, scatterMap, ...scalar }) {
+  const sum = (bins) => bins.reduce((a, b) => a + b, 0);
+  assert.equal(sum(absorptionMap), scalar.absorbed);
+  assert.equal(sum(scatterMap), scalar.scatterEvents);
+  assert.ok(sum(detectorBins) <= scalar.escaped && sum(detectorBins) >= scalar.ballistic);
+  return scalar;
+}
 test("Photon vacuum never interacts and does not consume a free-path draw", () => {
   const settings = { ...defaultSettings, muA: 0, muS: 0, count: 512 };
   const e = run(settings);
-  assert.deepEqual(e.counts, {
+  assert.deepEqual(totals(e.counts), {
     completed: 512,
     absorbed: 0,
     escaped: 512,
@@ -72,7 +79,7 @@ test("Photon vacuum never interacts and does not consume a free-path draw", () =
 });
 test("Photon absorption and mixed fixtures match C++, independent of batch size", () => {
   const settings = { ...defaultSettings, muS: 0, count: 512 };
-  assert.deepEqual(run(settings).counts, {
+  assert.deepEqual(totals(run(settings).counts), {
     completed: 512,
     absorbed: 338,
     escaped: 174,
@@ -83,7 +90,7 @@ test("Photon absorption and mixed fixtures match C++, independent of batch size"
   });
   settings.muS = 0.9;
   const batched = run(settings);
-  assert.deepEqual(batched.counts, {
+  assert.deepEqual(totals(batched.counts), {
     completed: 512,
     absorbed: 259,
     escaped: 253,
@@ -101,7 +108,7 @@ test("Photon absorption and mixed fixtures match C++, independent of batch size"
 });
 test("Photon event cap is censored, never absorption, and longer traces retain their prefix", () => {
   const settings = { ...defaultSettings, muA: 0, muS: 2, count: 512, eventLimit: 1 };
-  assert.deepEqual(run(settings).counts, {
+  assert.deepEqual(totals(run(settings).counts), {
     completed: 512,
     absorbed: 0,
     escaped: 0,
@@ -168,7 +175,7 @@ test("Photon convergence checkpoints are bounded, batch-independent and use the 
   const before = structuredClone(one.convergence);
   advance(one, 32);
   assert.deepEqual(one.convergence, before);
-  const max = run({ ...settings, count: 8192 });
+  const max = run({ ...settings, count: 16384 });
   assert.ok(max.convergence.length <= 15);
   close(wilson(154, 512)[0], 0.2626619417224134);
   close(wilson(154, 512)[1], 0.34186771266717264);
@@ -179,14 +186,14 @@ test("Photon validation rejects invalid uniforms, geometry, budgets, seeds and p
   for (const muT of [-1, 7, NaN, Infinity]) assert.throws(() => freePath(muT, 0.5), RangeError);
   for (const seed of [-1, 0x100000000, NaN])
     assert.throws(() => makeExperiment({ ...defaultSettings, seed }), RangeError);
-  for (const count of [0, 8193, 1.5])
+  for (const count of [0, 16385, 1.5])
     assert.throws(() => makeExperiment({ ...defaultSettings, count }), RangeError);
   for (const eventLimit of [0, 65, 1.5])
     assert.throws(() => makeExperiment({ ...defaultSettings, eventLimit }), RangeError);
   for (const budget of [-1, 33, 1.5])
     assert.throws(() => advance(makeExperiment(defaultSettings), budget), RangeError);
   assert.throws(() => exitDistance({ position: [0, 0], direction: [2, 0] }), RangeError);
-  assert.throws(() => photonSeed(42, 8192), RangeError);
+  assert.throws(() => photonSeed(42, 16384), RangeError);
   assert.throws(() => wilson(0, 0), RangeError);
   assert.throws(() => wilson(2, 1), RangeError);
   assert.throws(() => tracePhoton(defaultSettings, 0, 4), RangeError);

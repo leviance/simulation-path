@@ -15,7 +15,7 @@ int main(int argc, char** argv) {
         std::cerr << SDL_GetError() << '\n';
         return EXIT_FAILURE;
     }
-    SDL_Window* window = SDL_CreateWindow("Project 52 - Ray geometry workshop", picking::viewWidth, picking::viewHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_Window* window = SDL_CreateWindow("Project 52 - Optical measurement bench", picking::viewWidth, picking::viewHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (window == nullptr) {
         std::cerr << SDL_GetError() << '\n';
         SDL_Quit();
@@ -79,9 +79,20 @@ int main(int argc, char** argv) {
         const auto now = SDL_GetTicksNS();
         [[maybe_unused]] const double dt = static_cast<double>(now - previous) / 1e9;
         previous = now;
+        // The samples are static while a measurement is held. Keep servicing
+        // input, but do not rerasterize two viewports while the learner reads.
+        bool redraw = input.redraw || options.frames > 0;
 #if LAB_CHECKPOINT >= 7
         state.update(dt);
+        if (!state.paused) {
+            redraw = true;
+        }
 #endif
+        if (!redraw) {
+            SDL_Delay(16);
+            continue;
+        }
+        input.redraw = false;
         SDL_SetRenderDrawColor(renderer, 12, 20, 35, 255);
         if (!SDL_RenderClear(renderer)) {
             failed = true;
@@ -97,12 +108,9 @@ int main(int argc, char** argv) {
         // [/snippet frame-presentation]
 #if LAB_CHECKPOINT >= 1
         picking::drawPanel(renderer, state);
-        picking::text(renderer, 22, 22, "GEOMETRY WORKSHOP", true);
-        picking::text(renderer, 22, 48, "RMB orbit / Shift+RMB pan / wheel zoom");
-        picking::text(renderer, 22, 68, "Keyboard: Ctrl+arrows / +Shift pan / PgUp-Dn zoom");
+        picking::drawHeading(renderer);
         if (state.debug) {
             picking::drawLabels(renderer, state);
-            picking::text(renderer, 22, 94, "RGB = world X/Y/Z. Dim dashes = hidden ray.");
         }
 #endif
 #if LAB_CHECKPOINT >= 2
@@ -111,13 +119,8 @@ int main(int argc, char** argv) {
             failed = true;
             break;
         }
-        SDL_SetRenderDrawColor(renderer, 105, 201, 219, 255);
-        SDL_RenderRect(renderer, &picking::aimRect);
-        const float x = picking::aimRect.x + static_cast<float>(state.u) * picking::aimRect.w;
-        const float y = picking::aimRect.y + static_cast<float>(state.v) * picking::aimRect.h;
-        SDL_RenderLine(renderer, x - 7, y, x + 7, y);
-        SDL_RenderLine(renderer, x, y - 7, x, y + 7);
-        picking::text(renderer, 22, 526, "AIM VIEW / drag here or use arrows");
+        picking::aimOverlay(renderer, state);
+        picking::distanceStrip(renderer, state);
 #endif
         ++frame;
         if (frame == options.frames && !options.capture.empty()) {
@@ -125,7 +128,13 @@ int main(int argc, char** argv) {
             if (capture == nullptr) {
                 failed = true;
             } else {
-                if (!SDL_SaveBMP(capture, options.capture.c_str())) {
+                bool saved = false;
+                if (options.capture.ends_with(".png") || options.capture.ends_with(".PNG")) {
+                    saved = SDL_SavePNG(capture, options.capture.c_str());
+                } else {
+                    saved = SDL_SaveBMP(capture, options.capture.c_str());
+                }
+                if (!saved) {
                     failed = true;
                 }
                 SDL_DestroySurface(capture);

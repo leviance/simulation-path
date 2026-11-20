@@ -1,11 +1,13 @@
 export function courseCmake(project, { hasSnapshotShaders = false } = {}) {
   const projectNumber = Number(project.id);
   const voxel = project.sourceSeries === "voxel-expedition";
+  const hasWorkbook = voxel || (projectNumber >= 52 && projectNumber <= 57);
+  const workOption = voxel ? "VOXEL_WORKBOOK" : "COURSE_WORKBOOK";
   // Seed the learner's tree once; a second configure must never overwrite their edits.
-  const workbook = voxel
+  const workbook = hasWorkbook
     ? `
-option(VOXEL_WORKBOOK "Build the learner's editable copy and test its own headers" OFF)
-if(VOXEL_WORKBOOK)
+option(${workOption} "Build the learner's editable copy and test its own headers" OFF)
+if(${workOption})
     if(NOT EXISTS "\${CMAKE_CURRENT_SOURCE_DIR}/work")
         file(COPY "\${CMAKE_CURRENT_SOURCE_DIR}/starter/" DESTINATION "\${CMAKE_CURRENT_SOURCE_DIR}/work")
     endif()
@@ -130,14 +132,14 @@ ${workbook}if(BUILD_CHECKPOINTS)
     endforeach()
 endif()
 
-${voxel ? "# Tests dùng header trong work/include khi bật VOXEL_WORKBOOK; ở bản mẫu dùng final/include." : "# Tests chỉ include code thuần trong final/include và không cần mở SDL window."}
+${hasWorkbook ? `# Tests dùng header trong work/include khi bật ${workOption}; ở bản mẫu dùng final/include.` : "# Tests chỉ include code thuần trong final/include và không cần mở SDL window."}
 include(CTest)
 if(BUILD_TESTING)
     file(GLOB_RECURSE test_sources CONFIGURE_DEPENDS "\${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp")
     add_executable(project_${projectNumber}_tests \${test_sources})
 ${
-  voxel
-    ? `    if(VOXEL_WORKBOOK)
+  hasWorkbook
+    ? `    if(${workOption})
         target_include_directories(project_${projectNumber}_tests PRIVATE work/include)
     else()
         target_include_directories(project_${projectNumber}_tests PRIVATE final/include)

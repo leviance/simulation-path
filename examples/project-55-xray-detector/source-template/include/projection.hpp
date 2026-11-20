@@ -10,6 +10,7 @@ struct Depth {
     int samples = 0;
 };
 
+// [snippet add-depths]
 inline Depth exactDepth(Beam beam, const Scene& scene, double strength) {
     Depth depth;
     for (const auto& material : scene) {
@@ -19,9 +20,11 @@ inline Depth exactDepth(Beam beam, const Scene& scene, double strength) {
     }
     return depth;
 }
+// [/snippet add-depths]
 #endif
 
 #if LAB_CHECKPOINT >= 5
+// [snippet midpoint-depth]
 inline Depth midpointDepth(Beam beam, const Scene& scene, double strength, double stepLength) {
     validateBeam(beam);
     if (!std::isfinite(stepLength) || stepLength < 0.05 || stepLength > 0.5) {
@@ -46,9 +49,11 @@ inline Depth midpointDepth(Beam beam, const Scene& scene, double strength, doubl
     }
     return depth;
 }
+// [/snippet midpoint-depth]
 #endif
 
 #if LAB_CHECKPOINT >= 4
+// [snippet two-bands]
 inline double transmission(Depth depth, [[maybe_unused]] Settings settings) {
 #if LAB_CHECKPOINT >= 7
     if (settings.spectral) {
@@ -57,6 +62,7 @@ inline double transmission(Depth depth, [[maybe_unused]] Settings settings) {
 #endif
     return std::exp(-depth.low);
 }
+// [/snippet two-bands]
 
 struct Measurement {
     Depth depth;

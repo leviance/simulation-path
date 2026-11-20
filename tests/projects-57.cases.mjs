@@ -65,7 +65,7 @@ test("Project57 explains analog accounting, finite paths, censoring, sampling un
     /-C Release/,
     /WaitForExit\(30000\)/,
     /Không dùng kết quả này/,
-    /Sắp ra mắt/,
+    /\/projects\/voxel-chunk/,
   ])
     assert.match(last, p);
 });

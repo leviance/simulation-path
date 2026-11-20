@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Mỗi pixel nhìn theo một tia nào?
 
@@ -19,6 +20,11 @@ Ta dùng FOV dọc 50°. Khoảng lệch ngang cần nhân aspect = width/height
 <InteractiveLab demo="volume-ray-marching" mode="fog54-2" />
 
 ## Viết code từng bước
+
+Nhìn cảnh như qua một khung cửa. Tia ở giữa nhìn thẳng, còn tia ở góc phải nghiêng sang phải. Tất cả xuất phát từ cùng camera; đừng đặt một camera khác nhau tại mỗi pixel.
+
+<CourseWorkFile project="54" step={2} path="include/model.hpp" />
+<CourseWorkFile project="54" step={2} path="shaders/volume.frag" />
 
 ### 1. Đọc camera basis trước
 
@@ -74,6 +80,15 @@ vec3 direction = normalize(uForward + horizontal + vertical);
 ```
 
 Sau đoạn này, checkpoint 2 đưa `0.5*direction+0.5` ra ảnh. Direction trong [-1,1] được ánh xạ về [0,1] để nhìn bằng RGB; màu ấy chưa phải màu của sương.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="54" step={2} path="include/input.hpp" />
+<CourseWorkFile project="54" step={2} path="include/renderer.hpp" />
+<CourseWorkFile project="54" step={2} path="include/stage.hpp" />
+<CourseWorkFile project="54" step={2} path="include/ui.hpp" />
+
+Thay tỉ lệ khung cửa sổ: hình chiếu không được bẹt đi. Quay camera và kiểm xem tia giữa còn chỉ đúng hướng nhìn.
 
 ## Ghép các phần lại
 

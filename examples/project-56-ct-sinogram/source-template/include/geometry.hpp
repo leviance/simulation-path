@@ -10,6 +10,7 @@ struct Beam {
 };
 
 // u is a continuous detector coordinate, not an array index.
+// [snippet fan-ray]
 inline Beam detectorRay(double angle, double u) {
     if (!std::isfinite(angle) || !std::isfinite(u) || u < 0 || u > 1) {
         throw std::invalid_argument("Invalid angle or detector coordinate");
@@ -24,6 +25,7 @@ inline Beam detectorRay(double angle, double u) {
     const double maximum = length(delta);
     return {source, multiply(delta, 1 / maximum), maximum};
 }
+// [/snippet fan-ray]
 
 inline Point at(const Beam& beam, double distance) {
     return add(beam.origin, multiply(beam.direction, distance));
@@ -37,11 +39,12 @@ inline void validateBeam(const Beam& beam) {
 }
 
 // Intersect a disk with the finite source-to-detector segment.
-inline double chordLength(const Beam& beam, const Disk& disk) {
-    const Point delta = subtract(disk.centre, beam.origin);
+// [snippet outer-chord]
+inline double diskChord(const Beam& beam, Point centre, double radius) {
+    const Point delta = subtract(centre, beam.origin);
     const double along = dot(delta, beam.direction);
     const double perpendicularSquared = std::max(0.0, dot(delta, delta) - along * along);
-    const double halfChordSquared = disk.radius * disk.radius - perpendicularSquared;
+    const double halfChordSquared = radius * radius - perpendicularSquared;
     if (halfChordSquared <= 0) {
         return 0;
     }
@@ -50,10 +53,20 @@ inline double chordLength(const Beam& beam, const Disk& disk) {
     const double exit = std::min(beam.maximum, along + halfChord);
     return std::max(0.0, exit - entry);
 }
+// [/snippet outer-chord]
+
+inline double chordLength(const Beam& beam, const Disk& disk) {
+    const double outer = diskChord(beam, disk.centre, disk.radius);
+    if (disk.innerRadius == 0) {
+        return outer;
+    }
+    return std::max(0.0, outer - diskChord(beam, disk.centre, disk.innerRadius));
+}
 #endif
 
 #if LAB_CHECKPOINT >= 7
 // Project a point onto a flat fan detector; this is not a parallel-beam sine.
+// [snippet fan-detector-offset]
 inline double pointOffset(double angle, Point point) {
     if (!std::isfinite(angle) || !std::isfinite(point[0]) || !std::isfinite(point[1]) || length(point) > 1.5) {
         throw std::invalid_argument("Point outside supported field of view");
@@ -64,6 +77,7 @@ inline double pointOffset(double angle, Point point) {
     const double tangentDistance = dot(point, tangent);
     return (sourceRadius + detectorRadius) * tangentDistance / (sourceRadius - radialDistance);
 }
+// [/snippet fan-detector-offset]
 #endif
 #endif
 } // namespace ct

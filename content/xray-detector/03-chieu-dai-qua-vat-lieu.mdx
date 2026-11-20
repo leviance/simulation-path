@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Tính chiều dài tia đi trong một lớp vật liệu
 
@@ -23,6 +24,11 @@ $$
 <InteractiveLab demo="xray-detector" mode="xray55-3" />
 
 ## Viết code từng bước
+
+Trước khi nhét pin vào vỏ, hãy đặt lên bàn một tấm vật liệu đơn giản. Ta cần cả nơi tia đi vào lẫn nơi nó ra khỏi tấm. Lấy hiệu hai khoảng cách đó, không lấy khoảng cách từ nguồn đến mặt trước.
+
+<CourseWorkFile project="55" step={3} path="include/geometry.hpp" />
+<CourseWorkFile project="55" step={3} path="include/materials.hpp" />
 
 ### Bước 1 — Giao slab và clip vào detector
 
@@ -77,6 +83,8 @@ Hàm rotateY ở model.hpp là cùng rotation đã học trước đó. Không s
 
 materialLength trả zero khi miss:
 
+{/* snippet include/materials.hpp#path-length */}
+
 ```cpp title="include/materials.hpp"
 inline double materialLength(Beam beam, const Material& material) {
     const auto interval = boxInterval(beam, material.minimum, material.maximum);
@@ -88,6 +96,14 @@ inline double materialLength(Beam beam, const Material& material) {
 ```
 
 brightness lấy detectorRay→objectBeam, gọi materialLength cho slab rồi chia4/clamp thành gray. Sơ đồ vẽ footprint XZ xoay của box; hit vẫn xét ba trục, không suy từ đường vẽ 2D.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="55" step={3} path="include/detector.hpp" />
+<CourseWorkFile project="55" step={3} path="include/view.hpp" />
+<CourseWorkFile project="55" step={3} path="src/main.cpp" />
+
+Chọn tia vuông góc trước rồi thử tia xiên. Xê tấm ra sau detector: khi đó nó không được gây suy giảm dù đường thẳng kéo dài vẫn đi qua.
 
 ## Ghép các phần lại
 

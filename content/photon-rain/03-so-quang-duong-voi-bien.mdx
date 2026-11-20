@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Photon gặp tương tác hay thoát qua biên trước?
 
@@ -20,18 +21,36 @@ Nếu S>=boundary, photon thoát. Nếu S nhỏ hơn boundary, nó gặp tương
 
 ## Viết code từng bước
 
+Có hai đích đang tranh nhau: chỗ tương tác vừa rút ngẫu nhiên và thành bể gần nhất theo hướng bay. Chọn đích gần hơn. Ra mặt trên cũng là thoát bể nhưng không phải chạm màn bên phải.
+
+<CourseWorkFile project="57" step={3} path="include/geometry.hpp" />
+
 ### Bước 1 — Kiểm hợp đồng của ray
 
 validatePhoton kiểm vị trí finite, nằm trong medium với tolerance số học nhỏ và norm direction gần 1. Không dùng marker8×8 để mở rộng medium. Hai direction(1,0) và(2,0) không thể dùng chung công thức distance mà cho cùng đơn vị.
 
 ### Bước 2 — Tìm cạnh theo từng trục
 
+{/* snippet include/geometry.hpp#flight-or-boundary */}
+
 ```cpp title="include/geometry.hpp"
-    for (int axis = 0; axis < 2; ++axis) {
-        const double direction = value.direction[axis];
-        if (direction == 0) {
-            continue;
-        }
+inline Flight sampleFlight(const Photon& value, Random& random, Settings settings) {
+    const double boundary = exitDistance(value);
+    const double muT = settings.muA + settings.muS;
+    double sampled = std::numeric_limits<double>::infinity();
+    if (muT > 0) {
+        sampled = freePath(muT, random.uniform());
+    }
+    const double distance = std::min(sampled, boundary);
+    Point endpoint = move(value.position, value.direction, distance);
+    const bool escaped = sampled >= boundary;
+    if (escaped) {
+        // Chỉ sửa sai số số học ở điểm thoát, không đẩy photon vào trong vật liệu.
+        endpoint[0] = std::clamp(endpoint[0], left, right);
+        endpoint[1] = std::clamp(endpoint[1], bottom, top);
+    }
+    return {endpoint, sampled, boundary, escaped};
+}
 ```
 
 Trong vòng lặp này, chọn right/top cho hướng dương, left/bottom cho hướng âm. Sau khi đã chọn đúng boundary:
@@ -53,6 +72,13 @@ exitDistance bắt đầu với∞, xét hai trục rồi trả max(0,distance).
 sampleFlight lấy S từ phân bố mũ khi muT>0. Khi muT=0, sampled giữ∞ và không lấy thêm RNG draw cho free path. Nếu escaped, clamp endpoint vào rectangle để sửa sai số cỡ máy tại cạnh; đây không phải clamp mọi điểm tương tác về biên.
 
 firstFlight dựng lại seed/ID, launch photon và gọi sampleFlight. Nó dùng cùng thứ tự RNG với sampleFirst của bài trước, nên S đầu tiên phải khớp readout cũ.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="57" step={3} path="include/view.hpp" />
+<CourseWorkFile project="57" step={3} path="src/main.cpp" />
+
+Trong môi trường trong suốt, photon bay từ tâm mặt trái theo +x phải đi đủ ba đơn vị tới màn. Cho nó quay về trái ngay tại nguồn, quãng đường tới biên phải bằng 0.
 
 ## Ghép các phần lại
 

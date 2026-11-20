@@ -4,6 +4,7 @@
 namespace ct {
 #if LAB_CHECKPOINT >= 9
 // Independent circular phantom oracle: distance from origin to the infinite line.
+// [snippet circle-oracle]
 inline double audit() {
     const Scene disk{{{0, 0}, 1, 0.5}};
     double maximumError = 0;
@@ -28,5 +29,6 @@ inline double audit() {
 
     return maximumError;
 }
+// [/snippet circle-oracle]
 #endif
 } // namespace ct

@@ -3,6 +3,7 @@
 
 namespace photon {
 #if LAB_CHECKPOINT >= 5
+// [snippet turn-after-event]
 inline Point scatterDirection(double u) {
     if (!std::isfinite(u) || u <= 0 || u >= 1) {
         throw std::invalid_argument("Invalid scattering sample");
@@ -10,6 +11,7 @@ inline Point scatterDirection(double u) {
     const double angle = 2 * std::numbers::pi * u;
     return {std::cos(angle), std::sin(angle)};
 }
+// [/snippet turn-after-event]
 #endif
 
 #if LAB_CHECKPOINT >= 4
@@ -18,6 +20,7 @@ inline void advancePhoton(Photon& value, Random& random, Settings settings, Trac
     if (trace.status != Status::Alive) {
         throw std::invalid_argument("Cannot advance a terminal trace");
     }
+    // [snippet escape-first]
     const Flight flight = sampleFlight(value, random, settings);
     value.position = flight.endpoint;
     if (flight.escaped) {
@@ -26,6 +29,7 @@ inline void advancePhoton(Photon& value, Random& random, Settings settings, Trac
         return;
     }
     ++trace.collisions;
+    // [/snippet escape-first]
 #if LAB_CHECKPOINT >= 5
     const double absorptionProbability = settings.muA / (settings.muA + settings.muS);
     if (random.uniform() < absorptionProbability) {

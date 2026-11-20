@@ -1,7 +1,7 @@
 import type { PublishedProjectEditorial } from "../../types";
 const data = {
   summary:
-    "Xây một Volume Lightbox: xoay khối dữ liệu 128³, chuyển MIP/average/alpha, chọn một tia để đọc từng mẫu rồi đo cái giá của bước lấy mẫu nhỏ hơn. C++ chạy fragment shader thật; Canvas giúp đọc và kiểm công thức.",
+    "Tự viết trình quan sát một đám mây dông hình đe. Cùng một tia nhìn xuyên tháp gần, khe trời rồi tháp xa: so ảnh lấy cực đại, ảnh lấy trung bình và ảnh che khuất theo thứ tự trước–sau.",
   duration: "14–20 giờ học, chưa tính setup/build đầu",
   prerequisites: [
     "Project 33–36: tạo SDL/OpenGL context, compile shader và fullscreen triangle. Bộ khung GL được cung cấp, không dùng engine.",
@@ -21,13 +21,13 @@ const data = {
   challenge: {
     timebox: "Tự thử 2–3 giờ trước khi đọc lời giải; thời gian này không phải thước đo năng lực",
     mission:
-      "Tự xây một ứng dụng C++/SDL3 cho phép nhìn xuyên một khối dữ liệu 3D. Hãy để người xem xoay, đi gần hoặc vào trong khối, rồi thay cách gộp các mẫu trên mỗi tia để khám phá cấu trúc bên trong.",
+      "Dựng một đài quan sát mây dông có hai tháp và tán trải theo chiều gió. Hãy để người xem tìm khe giữa hai tháp bằng đồ thị mật độ của chính tia nhìn, không vẽ thêm khe giả lên ảnh.",
     outcome:
-      "Một viewport 3D lớn với sương tổng hợp có cấu trúc; bộ chọn MIP/average/alpha, camera, step/transfer controls, inspector của một tia và bảng so chất lượng–thời gian. Có chế độ quan sát sạch và ứng dụng C++ chạy độc lập.",
+      "Viewport 3D có mây với tán rộng, lõi đặc và mép loãng; ba chế độ MIP, average và alpha đọc cùng một volume 128³. Người học xoay camera, chọn tia và đo sai số khi thay độ dài bước.",
     requirements: [
       "Bản cuối mặc định 128³ = 2.097.152 Float32 / 8 MiB trên CPU và texture R32F tương ứng trên GPU. 64³ chỉ dùng để học/so sánh.",
       "World box [-1,1]³; mẫu nằm ở -1+(i+0.5)*2/N. Một world unit là đơn vị tùy chọn, không phải mm hoặc HU.",
-      "Có sáu dataset: sương xoắn tổng hợp, hai lõi mật độ, slab, hằng 0.25, ramp XYZ và rỗng. Mỗi lần đổi dữ liệu phải cấp phát/điền thật, không thay tên preset trên ảnh cũ.",
+      "Có sáu dataset: mây dông hình đe, hai lõi mật độ, slab, hằng 0.25, ramp XYZ và rỗng. Khi đổi mẫu, số đo phải lấy từ dữ liệu mới.",
       "MIP giữ giá trị lớn nhất; average lấy trung bình theo độ dài đoạn; alpha tích lũy màu và transmittance có thứ tự. Các mode phải cho khác biệt quan sát được.",
       "Orbit bằng kéo/phím, zoom và camera trong box. Các tham số vẫn dùng được khi dừng quay tự động; khối scalar là dữ liệu tĩnh, không giả làm fluid simulation.",
       "Step 0.008..0.16 world units, sigma 0..12, cutoff 0..0.8, ba palette. Sigma/gradient lighting chỉ ảnh hưởng alpha; early chỉ áp dụng alpha.",

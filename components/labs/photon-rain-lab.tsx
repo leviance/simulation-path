@@ -391,7 +391,7 @@ function ExperimentLab({ stage }: { stage: number }) {
             value={settings.count}
             onChange={(e) => replace({ ...settings, count: Number(e.target.value) })}
           >
-            {[512, 2048, 8192].map((n) => (
+            {[512, 2048, 8192, 16384].map((n) => (
               <option key={n} value={n}>
                 {n}
               </option>

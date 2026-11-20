@@ -19,9 +19,12 @@ import {
   makeScan,
   makeScene,
   project,
+  shapeError,
+  supportedViews,
   viewAngle,
   type Settings,
 } from "@/lib/labs/ct-sinogram";
+import { specimenField } from "@/lib/labs/ct-sinogram/specimen";
 import {
   LabReadout,
   canvasPoint,
@@ -31,8 +34,8 @@ import {
 } from "./lab-shared";
 import { draw, pickCell } from "./ct-sinogram/draw";
 
-function initialScan() {
-  const scan = makeScan(defaultSettings);
+function initialScan(stage: number) {
+  const scan = makeScan(defaultSettings, stage >= 10);
   acquireOne(scan);
   return scan;
 }
@@ -48,10 +51,12 @@ function Experiment({ stage }: { stage: number }) {
   const [displayRange, setDisplayRange] = useState(2);
   const [invert, setInvert] = useState(false);
   const [trace, setTrace] = useState(false);
+  const [hideReference, setHideReference] = useState(false);
   const [auditResult, setAuditResult] = useState("Chưa kiểm");
   const [error, setError] = useState("");
   const scan = useRef<ReturnType<typeof makeScan> | null>(null);
-  if (!scan.current) scan.current = initialScan();
+  if (!scan.current) scan.current = initialScan(stage);
+  const current = scan.current;
   const pointer = useRef<number | null>(null);
   const running = useRef(false);
   const release = useCallback(() => {
@@ -80,15 +85,27 @@ function Experiment({ stage }: { stage: number }) {
   }, [release, stop]);
   const scene = useMemo(() => makeScene(settings.preset), [settings.preset]);
   const angle = viewAngle(selection.row, settings.views);
-  const preview = useMemo(
-    () => (stage >= 4 ? project(angle, scene, settings.strength) : []),
-    [angle, scene, settings.strength, stage],
+  const preview = useMemo(() => {
+    if (stage < 4) return [];
+    if (selection.row >= current.acquired) return project(angle, scene, settings.strength);
+    return Array.from(
+      current.values.subarray(selection.row * 128, (selection.row + 1) * 128),
+      (p) => ({ projection: p, ratio: Math.exp(-p) }),
+    );
+  }, [angle, current, current.acquired, scene, selection.row, settings.strength, stage]);
+  const reference = useMemo(
+    () => (stage >= 11 && !hideReference ? specimenField(scene, settings.strength) : null),
+    [hideReference, scene, settings.strength, stage],
+  );
+  const errorMetric = useMemo(
+    () => (reference && current.image?.rows ? shapeError(current.image, reference) : null),
+    [current, current.image?.rows, reference],
   );
   const beam = detectorRay(angle, (selection.column + 0.5) / 128);
   const measurement = preview[selection.column];
   const replace = (next: Settings) => {
     stop();
-    scan.current = makeScan(next);
+    scan.current = makeScan(next, stage >= 10);
     setSettings(next);
     setSelection((s) => ({ ...s, row: 0 }));
     setVersion((v) => v + 1);
@@ -99,6 +116,7 @@ function Experiment({ stage }: { stage: number }) {
     setDisplayRange(2);
     setInvert(false);
     setTrace(false);
+    setHideReference(false);
     setAuditResult("Chưa kiểm");
     setError("");
   };
@@ -140,11 +158,23 @@ function Experiment({ stage }: { stage: number }) {
   useEffect(() => {
     const ctx = canvas.current?.getContext("2d");
     if (ctx && scan.current)
-      draw(ctx, size, scan.current, scene, selection, preview, stage, displayRange, invert, trace);
-  }, [size, scene, selection, preview, stage, displayRange, invert, trace, version]);
+      draw(
+        ctx,
+        size,
+        scan.current,
+        scene,
+        selection,
+        preview,
+        stage,
+        displayRange,
+        invert,
+        trace,
+        hideReference,
+      );
+  }, [size, scene, selection, preview, stage, displayRange, invert, trace, hideReference, version]);
   const pick = (e: PointerEvent<HTMLCanvasElement>) => {
     const p = canvasPoint(e, e.currentTarget);
-    const cell = pickCell(p.x, p.y, size, settings.views);
+    const cell = pickCell(p.x, p.y, size, settings.views, stage);
     if (cell) setSelection(cell);
     return cell;
   };
@@ -163,6 +193,7 @@ function Experiment({ stage }: { stage: number }) {
     if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "].includes(e.key))
       e.preventDefault();
     if (e.key.toLowerCase() === "r") reset();
+    if (stage >= 10 && e.key.toLowerCase() === "h" && !e.repeat) setHideReference((v) => !v);
     if (stage >= 2 && e.key.startsWith("Arrow")) {
       stop();
       setSelection((s) => ({
@@ -182,7 +213,6 @@ function Experiment({ stage }: { stage: number }) {
     if (stage >= 5 && e.key.toLowerCase() === "n" && !e.repeat) step();
     if (stage >= 6 && e.key === " " && !e.repeat && !reduced) setPaused((p) => !p);
   };
-  const current = scan.current;
   const stored = current.values[selection.column + 128 * selection.row];
   const items = [
     {
@@ -190,10 +220,10 @@ function Experiment({ stage }: { stage: number }) {
       value: ((angle * 180) / Math.PI).toFixed(1) + "° / " + selection.column,
     },
   ];
-  if (stage >= 3)
+  if (stage >= 3 && !hideReference)
     items.push({
-      label: "Chiều dài từng đĩa",
-      value: scene.map((d) => chordLength(beam, d).toFixed(6)).join(" / "),
+      label: "Quãng đường trong từng vùng vật liệu",
+      value: scene.map((d) => chordLength(beam, d).toFixed(3)).join(" / "),
     });
   if (measurement)
     items.push({
@@ -210,12 +240,24 @@ function Experiment({ stage }: { stage: number }) {
       { label: "Bước góc", value: (360 / settings.views).toFixed(1) + "°; không lặp hàng 360°" },
     );
   if (stage >= 9) items.push({ label: "Oracle hình tròn", value: auditResult });
+  if (stage >= 10)
+    items.push({
+      label: "Lát cắt 112 × 112",
+      value: `${current.image?.rows ?? 0} hàng đã trải ngược`,
+    });
+  if (stage >= 11)
+    items.push({
+      label: "RMSE hình dạng (chuẩn hóa theo đỉnh)",
+      value: errorMetric === null ? "Chưa so sánh" : errorMetric.toFixed(4),
+    });
   return (
     <>
       <p id={help}>
         Lát cắt XY, dữ liệu tự tạo. Chọn góc bằng thanh trượt; mũi tên chọn góc/pixel khi focus
         Canvas. Từ Bài 05, click/kéo sinogram để đọc ô, N đo một hàng. Space quét/dừng, R đặt lại.
         Xanh là chưa đo; đường hồng chỉ là dự đoán vị trí điểm, không phải dữ liệu detector.
+        {stage >= 10 &&
+          " Nhấn H để che vật mẫu: thử tìm mắt gỗ trong ảnh dựng, rồi mở ô đối chiếu để kiểm tra."}
       </p>
       <div className="lab-controls">
         <label>
@@ -228,7 +270,7 @@ function Experiment({ stage }: { stage: number }) {
           >
             <option value="0">Đĩa tròn ở tâm</option>
             <option value="1">Đĩa nhỏ lệch tâm</option>
-            <option value="2">Nền và hai insert cộng mu</option>
+            <option value="2">Khoanh gỗ có lõi rỗng và mắt gỗ</option>
           </select>
         </label>
         <label>
@@ -284,7 +326,7 @@ function Experiment({ stage }: { stage: number }) {
             value={settings.views}
             onChange={(e) => replace({ ...settings, views: Number(e.target.value) })}
           >
-            {[30, 60, 120].map((n) => (
+            {supportedViews.map((n) => (
               <option key={n} value={n}>
                 {n}
               </option>
@@ -343,6 +385,16 @@ function Experiment({ stage }: { stage: number }) {
         <button type="button" onClick={reset}>
           Đặt lại
         </button>
+        {stage >= 10 && (
+          <label>
+            <input
+              type="checkbox"
+              checked={hideReference}
+              onChange={(e) => setHideReference(e.target.checked)}
+            />{" "}
+            Che vật mẫu
+          </label>
+        )}
         <button
           type="button"
           disabled={stage < 9}
@@ -361,7 +413,7 @@ function Experiment({ stage }: { stage: number }) {
       <canvas
         ref={canvas}
         className="lab-canvas"
-        style={{ touchAction: "none" }}
+        style={{ touchAction: "none", minHeight: stage >= 10 ? "360px" : undefined }}
         tabIndex={0}
         aria-label="CT Sinogram Lab"
         aria-describedby={help}
@@ -377,14 +429,16 @@ function Experiment({ stage }: { stage: number }) {
       <LabReadout items={items} />
       {error && <p role="alert">{error}</p>}
       <p>
-        Sinogram chứa p=-ln(I/I0), không phải ảnh lát cắt đã tái dựng. Mỗi frame đo tối đa 2 hàng ×
-        128 tia; không benchmark, không WebGL hay dữ liệu y khoa. Reduced motion chỉ cho đo từng
-        hàng. Đổi phantom, strength hoặc số góc xóa lượt quét; đổi góc xem/palette không sửa số đo.
+        Mỗi hàng sinogram lưu 128 số đo p = −ln(I/I₀). Bấm “Đo một hàng” để đi từng góc; khi quét
+        liên tục, mỗi khung hình thêm nhiều nhất hai hàng. Đổi mẫu, hệ số hoặc số góc sẽ bắt đầu
+        lượt đo mới. Việc chọn ô hay đổi màu không làm thay đổi số đo.
+        {stage >= 10 &&
+          " Ảnh bên phải chỉ dùng những hàng đã đo. Các vệt dọc tia và viền nhòe là hệ quả của trải ngược không lọc, không phải bề mặt thật của gỗ."}
       </p>
     </>
   );
 }
-export default function CtSinogramLab({ mode = "ct56-9" }: { mode?: string }) {
-  const stage = Math.max(1, Math.min(9, Number(mode.match(/^ct56-([1-9])$/)?.[1] ?? 9)));
+export default function CtSinogramLab({ mode = "ct56-11" }: { mode?: string }) {
+  const stage = Number(mode.match(/^ct56-(10|11|[1-9])$/)?.[1] ?? 11);
   return <Experiment key={stage} stage={stage} />;
 }

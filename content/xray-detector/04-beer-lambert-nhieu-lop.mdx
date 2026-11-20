@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Từ chiều dài qua nhiều lớp đến tín hiệu detector
 
@@ -23,6 +24,12 @@ Các layer cộng tau nên đổi thứ tự danh sách không đổi T. Overlap
 <InteractiveLab demo="xray-detector" mode="xray55-4" />
 
 ## Viết code từng bước
+
+Lắp vỏ mỏng, các viên pin, bo mạch và thanh gân của loa vào cùng một hệ tọa độ. Mỗi khối có hai vai trò: xuất hiện ở hình nhìn ngoài và góp một đoạn vật liệu vào đúng phép đo. Nếu bỏ pin khỏi danh sách, bóng của pin trên detector cũng phải mất.
+
+<CourseWorkFile project="55" step={4} path="include/materials.hpp" />
+<CourseWorkFile project="55" step={4} path="include/projection.hpp" />
+<CourseWorkFile project="55" step={4} path="include/radio-plate.hpp" />
 
 ### Bước 1 — Tạo các box có hệ số riêng
 
@@ -59,6 +66,8 @@ return {frontLayer, backLayer, smallInsert};
 
 exactDepth dùng từng materialLength:
 
+{/* snippet include/projection.hpp#add-depths */}
+
 ```cpp title="include/projection.hpp"
 inline Depth exactDepth(Beam beam, const Scene& scene, double strength) {
     Depth depth;
@@ -84,6 +93,29 @@ inline double transmission(Depth depth, [[maybe_unused]] Settings settings) {
 ```
 
 measure lưu depth, ratio và I=settings.exposure*ratio. brightness trả ratio rồi quantize thành byte. I0 là flat-field không vật thể tại từng pixel, được mô hình này đặt đồng nhất; **không phải công suất nguồn**. Chưa có inverse-square/solid-angle/cosine response hoặc photon noise.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="55" step={4} path="include/detector.hpp" />
+<CourseWorkFile project="55" step={4} path="include/model.hpp" />
+<CourseWorkFile project="55" step={4} path="include/view.hpp" />
+<CourseWorkFile project="55" step={4} path="src/main.cpp" />
+
+Ở tư thế chính diện, so ô (32,42) với khe giữa hai pin ở (40,40). Vùng đi qua pin phải cho tỷ số truyền nhỏ hơn vùng chỉ xuyên qua vỏ.
+
+Mỗi lần gọi add tạo cả vật liệu để đo lẫn khối để nhìn. Đổi chỗ một viên pin ở đây rồi soi lại; không có ảnh thứ hai phải chỉnh bằng tay.
+
+{/* snippet include/materials.hpp#board-and-cells */}
+
+```cpp title="include/materials.hpp — Đặt bo mạch và hai viên pin"
+add(Part::Board, {-0.49, -0.13, 0.08}, {0.49, 0.40, 0.17});
+add(Part::Chip, {-0.35, 0.09, -0.05}, {-0.12, 0.28, 0.08});
+add(Part::Chip, {0.14, -0.05, -0.03}, {0.31, 0.08, 0.08});
+for (double left : {-0.48, 0.05}) {
+    add(Part::Cell, {left, -0.71, -0.19}, {left + 0.43, -0.21, 0.18});
+    add(Part::Contact, {left + 0.13, -0.21, -0.10}, {left + 0.29, -0.145, 0.09});
+}
+```
 
 ## Ghép các phần lại
 

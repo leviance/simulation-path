@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Lưu cả khối thay vì tính riêng từng ảnh
 
@@ -19,6 +20,12 @@ Ta chọn Float32 để lưu scalar: 64³ có 262.144 mẫu, chiếm 1 MiB; 128�
 <InteractiveLab demo="volume-slicer" mode="slice53-2" />
 
 ## Viết code từng bước
+
+Bây giờ mới đổi mẫu thử thành đá mã não. Vỏ, các dải khoáng và tinh thể không phải ba ảnh dán lên nhau: mỗi vị trí 3D trả một giá trị, rồi ta ghi giá trị đó đúng một lần vào volume. Có thể tắt cửa sổ hiển thị mà dữ liệu này vẫn tồn tại.
+
+<CourseWorkFile project="53" step={2} path="include/geode.hpp" />
+<CourseWorkFile project="53" step={2} path="include/field.hpp" />
+<CourseWorkFile project="53" step={2} path="include/volume.hpp" />
 
 ### 1. Kiểm kích thước trước khi cấp phát
 
@@ -88,7 +95,7 @@ Phần lưu trữ được giữ private. `set` từ chối scalar không hữu 
 
 ### 4. Điền toàn bộ dữ liệu một lần
 
-`buildVolume` duyệt hết x/y/z và gọi `fieldValue` tại các tâm mẫu. Ngoài Sphere còn có Gaussian, các lớp theo z, ramp kiểm hướng và mẫu vật có lõi/lỗ khoan. Tất cả đều cho scalar tổng hợp; không dataset nào là dữ liệu bệnh nhân.
+`buildVolume` duyệt hết x/y/z và gọi `fieldValue` tại các tâm mẫu. Ngoài Sphere còn có Gaussian, các lớp theo z, ramp kiểm hướng và đá mã não có vành khoáng và hốc tinh thể. Tất cả đều cho scalar tổng hợp; không dataset nào là dữ liệu bệnh nhân.
 
 {/* snippet include/field.hpp#fill-volume */}
 
@@ -111,6 +118,57 @@ inline Volume buildVolume(Preset preset, int side) {
 ```
 
 Đây là lúc công thức tạo dataset được gọi N³ lần. Khi `State::load` nhận volume mới thành công, nó mới thay dữ liệu đang xem. Ở checkpoint này, ảnh XY đọc trực tiếp chỉ số gần nhất theo từng trục; tham số view và linear chưa dùng vì hai khả năng ấy sẽ được thêm ở Bài 3–4.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="53" step={2} path="include/analysis.hpp" />
+<CourseWorkFile project="53" step={2} path="include/input.hpp" />
+<CourseWorkFile project="53" step={2} path="include/slice.hpp" />
+<CourseWorkFile project="53" step={2} path="include/stage.hpp" />
+<CourseWorkFile project="53" step={2} path="include/state.hpp" />
+<CourseWorkFile project="53" step={2} path="include/ui.hpp" />
+<CourseWorkFile project="53" step={2} path="src/main.cpp" />
+
+Từ tâm hốc (−16,−9,−14) mm dịch x sang trái, giữ y và z. Ở lưới 128³, x = −40 mm đi vào tinh thể sáng, còn x = −70 mm đã ở ngoài đá.
+
+Màu lam hay tím do bước hiển thị chọn. Hàm tạo đá chỉ trả một số: đi từ ngoài vào trong, nó phân biệt vỏ, vành khoáng, vùng rỗng và tinh thể.
+
+{/* snippet include/geode.hpp#agate-field */}
+
+```cpp title="include/geode.hpp — Từ vỏ đá tới hốc tinh thể"
+inline double geodeField(Vec3 point) {
+    // Two different boundaries: the outside of the nodule and the inside of its cavity.
+    const double x = point.x, y = point.y, z = point.z;
+    const Vec3 shell{(x - 3 + 0.09 * y) / 67, (y - 3 - 0.07 * z) / 78, (z - 5) / 91};
+    const double outer = length(shell);
+    if (outer > 1.14)
+        return 0;
+    const double grain = std::sin(0.19 * x + 0.14 * y) * std::sin(0.16 * z - 0.09 * x);
+    const double relief = 0.05 * std::sin(0.077 * x + 0.032 * z) * std::cos(0.063 * y) + 0.032 * std::sin(0.062 * z - 0.073 * y) + 0.021 * grain;
+    const double skinDepth = (1 + relief - outer) * 68;
+    if (skinDepth <= 0)
+        return 0;
+    if (skinDepth < 5.1 + 1.3 * grain)
+        return 0.25 + 0.055 * grain + 0.018 * std::sin(0.37 * z);
+
+    const Vec3 d = point - geodeCentre;
+    const Vec3 inner{(d.x + 0.10 * d.y) / cavityRadii.x, d.y / cavityRadii.y, (d.z - 0.08 * d.x) / cavityRadii.z};
+    const double ripple = 0.068 * std::sin(d.x * 0.082 + d.z * 0.051) * std::cos(d.y * 0.081);
+    const double wallDepth = (length(inner) - 1 - ripple) * 32;
+    if (wallDepth < 0)
+        return crystalDensity(point);
+    if (wallDepth < 2.6)
+        return 0.91 + 0.018 * grain;
+
+    // A band is a 3D layer between the two boundaries, not a ring painted onto a slice.
+    const double position = wallDepth / (wallDepth + skinDepth);
+    const double phase = 6.283185307179586 * (5.2 * position + 0.12 * std::sin(9 * position));
+    const double wave = 0.5 + 0.5 * std::cos(phase);
+    if (position > 0.74 && position < 0.80)
+        return 0.32 + 0.06 * wave;
+    return 0.45 + 0.19 * wave + 0.17 * std::pow(wave, 5) + 0.024 * std::sin(phase * 2.7);
+}
+```
 
 ## Ghép các phần lại
 

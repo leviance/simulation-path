@@ -1,0 +1,63 @@
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
+
+# Mắt gỗ nằm đúng chỗ, vì sao ảnh vẫn mờ?
+
+## Vấn đề cần giải quyết
+
+Bạn đã dựng được một vùng sáng đúng chỗ có mắt gỗ. Nhưng cạnh vỏ trên ảnh mẫu sắc, còn trên ảnh dựng nó loang ra cả vùng trống. Đây là lỗi ở máy đo hay là giới hạn của thuật toán dựng ảnh? Ta cần **hai phép kiểm khác nhau**.
+
+## Hiểu ý tưởng trước khi viết code
+
+Bài 9 dùng đĩa tròn có nghiệm hình học để kiểm từng số đo $p$. Một máy đo đúng vẫn có thể cho ảnh dựng mờ. Vì phép trải ngược chưa lọc cho ra trung bình các tích phân đường, giá trị này **không cùng đại lượng** với mật độ tại một điểm. Không trừ thẳng hai mảng rồi gọi đó là sai số vật lý.
+
+Ở đây ta chỉ so **hình dạng**: chia từng ảnh cho cực đại riêng trên cùng miền vuông, sau đó tính căn trung bình bình phương chênh lệch giữa các cặp texel. Ô trống ngoài gỗ vẫn được tính; ảnh toàn số 0 được giữ bằng 0. Đây là quy ước so sánh được công bố của bài, không phải thước đo chất lượng máy CT thật.
+
+<InteractiveLab demo="ct-sinogram" mode="ct56-11" />
+
+## Viết code từng bước
+
+### Bước 1 — Giữ ảnh đối chứng bên ngoài hàm dựng
+
+Trong `work/include/backprojection.hpp`, thêm `shapeError` **sau** `backproject`. Đặt ảnh vật mẫu trên đúng các điểm `slicePoint(x,y)` đã dùng để dựng. Một ảnh lấy từ góc texel và một ảnh lấy từ tâm gây lệch nửa ô dù công thức bên dưới đúng.
+
+{/* snippet include/backprojection.hpp#shape-rmse */}
+
+```cpp title="include/backprojection.hpp — Hai ảnh cùng khung, cùng thang tương đối"
+double squared = 0;
+for (size_t i = 0; i < truth.size(); ++i) {
+    double expected = 0;
+    double estimate = 0;
+    if (peakTruth > 0) {
+        expected = truth[i] / peakTruth;
+    }
+    if (peakEstimate > 0) {
+        estimate = averageAt(image, static_cast<int>(i)) / peakEstimate;
+    }
+    squared += (expected - estimate) * (expected - estimate);
+}
+return std::sqrt(squared / truth.size());
+```
+
+### Bước 2 — Chỉ tính chỉ số cuối lượt
+
+Trong `work/src/main.cpp`, đợi `image.rows == scan.settings.views` rồi mới gọi `shapeError`. Giữ lại con số cho tới khi đổi dữ liệu. Kéo con trỏ hoặc đảo màu sinogram không phải lý do để tính lại. Khi chưa đo góc nào, hiển thị “chưa có số đo”, không báo sai số bằng 0.
+
+<CourseWorkFile project="56" step={11} path="include/backprojection.hpp" />
+<CourseWorkFile project="56" step={11} path="src/main.cpp" />
+
+## Ghép các phần lại
+
+Trong thư mục build của bài làm, build `project_56_work` và `project_56_tests` rồi chạy `ctest --test-dir build-work -C Release --output-on-failure --timeout 20`. Ứng dụng mở ba ô: vật mẫu, các hàng detector đã đo, và ảnh trải ngược. Khi đo đủ 180 góc, chỉ số hình dạng xuất hiện dưới ảnh dựng; phím V in sai số của **phép chiếu** riêng.
+
+## Thử làm sai để hiểu đúng
+
+Tạm thay dữ liệu đưa vào `backproject` bằng một hàng toàn số 0. Phép kiểm hình tròn của máy đo vẫn có thể qua vì nó không gọi bộ dựng. Kiểm “mắt gỗ sáng hơn hốc” phải thất bại. Hoàn nguyên thay đổi trước khi chạy lại.
+
+## Tự kiểm tra kết quả
+
+Kiểm lần lượt: tia qua đường kính của đĩa chuẩn; hàng chỉ sáng một ô; hai hàng hằng; mẫu gỗ chưa biết, che ảnh đối chứng. Ghi lại vị trí mắt gỗ, vùng tối của hốc và nơi còn quầng mờ. Nếu ảnh trùng khít từng vân như đã chép vật mẫu trong khi không hề lọc, hãy kiểm tra lại xem texture đối chứng có bị vẽ nhầm vào ô tái dựng không.
+
+## Bài tập mở rộng
+
+Giữ nguyên số góc, chỉ tính sai số trên vùng nằm trong vỏ cây; giải thích vì sao con số đổi dù ảnh không đổi. Phần sau ta chuyển sang một câu hỏi khác: thay vì một tia mang giá trị trung bình, điều gì xảy ra nếu theo từng photon?

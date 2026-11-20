@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Kiểm máy CT đồ chơi và chạy bản hoàn chỉnh
 
@@ -22,9 +23,21 @@ Do đĩa ở tâm bất biến khi quay, các hàng sinogram phải giống nhau
 
 ## Viết code từng bước
 
+Trước khi viết bộ tái dựng, kiểm xem máy quét đưa cho nó số liệu đáng tin không. Đĩa tròn ở tâm có nghiệm chiều dài độc lập với hàm cắt của chương trình. Khoanh gỗ đẹp không thể thay bài kiểm này.
+
+<CourseWorkFile project="56" step={9} path="include/audit.hpp" />
+
 ### Bước 1 — Tạo expected từ một công thức khác
 
+{/* snippet include/audit.hpp#circle-oracle */}
+
 ```cpp title="include/audit.hpp"
+inline double audit() {
+    const Scene disk{{{0, 0}, 1, 0.5}};
+    double maximumError = 0;
+    for (int row = 0; row < 30; ++row) {
+        const double angle = viewAngle(row, 30);
+        for (int column = 0; column < detectorCount; ++column) {
             const double s = ((column + 0.5) / detectorCount - 0.5) * detectorWidth;
             const double distance = sourceRadius * std::abs(s) / std::hypot(sourceRadius + detectorRadius, s);
             double expected = 0;
@@ -33,6 +46,16 @@ Do đĩa ở tâm bất biến khi quay, các hàng sinogram phải giống nhau
             }
             const auto actual = measure(detectorRay(angle, (column + 0.5) / detectorCount), disk, 1);
             maximumError = std::max(maximumError, std::abs(actual.projection - expected));
+        }
+    }
+
+    // Fail before reporting a successful audit.
+    if (maximumError > 1e-10) {
+        throw std::runtime_error("Circular phantom oracle failed");
+    }
+
+    return maximumError;
+}
 ```
 
 Audit kiểm 30 góc×128 tia, báo maximumError và fail nếu lớn hơn 1e−10. Đây là fixture nhỏ, có số phép tính cố định. Không tự chạy benchmark lặp lại đến khi “đủ ổn định”. V trong SDL hoặc nút Kiểm phantom tròn trong Canvas chạy audit mà không sửa scan hiện tại.
@@ -76,6 +99,12 @@ void check(bool condition, std::string_view label) {
 
 Cuối main của test, failures khác 0 trả EXIT_FAILURE. Vì đây là nhánh if thông thường, build Release không loại mất kiểm tra. Toàn bộ fixtures và nhánh kết thúc nằm trong source cuối trang.
 
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="56" step={9} path="src/main.cpp" />
+
+Giữ kết quả kiểm phép chiếu để dùng ở bài 11. Sai số p rất nhỏ không bảo đảm ảnh dựng sắc nét: đến bước này bạn vẫn chỉ có các hàng số đo.
+
 ## Ghép các phần lại
 
 ```bash title="Terminal — build và CTest"
@@ -113,10 +142,10 @@ Không tự lặp khi timeout. Deadline này không bảo đảm preempt công v
 
 Tất cả target build Debug/Release, pure CTest pass và audit error≤1e−10. Kiểm desktop riêng: chọn ô bằng mouse/keyboard, bỏ letterbox, drag ra ngoài rồi thả, resize/DPI, pause/blur/reset, thay views và tải ZIP. Smoke hoặc kiểm toán học không thay thế những thao tác này.
 
-Sản phẩm là **forward projection mono lý tưởng của lát cắt 2D**. Không reconstruction, HU/DICOM, hiệu chuẩn/liều, noise, scatter, phổ đa năng lượng hay thiết bị phát tia. Không suy chất lượng chẩn đoán hoặc cấu trúc vật thể thật từ mô hình này. Mỗi detector pixel chỉ lấy một ray tâm; không tích phân diện tích pixel.
+Ở bước này ta vừa kiểm xong **phép chiếu của lát cắt 2D**. Bộ tái dựng sẽ học ở Bài 10. Không dùng HU/DICOM, hiệu chuẩn/liều, noise, scatter, phổ đa năng lượng hay thiết bị phát tia. Không suy chất lượng chẩn đoán hoặc cấu trúc vật thể thật từ mô hình này. Mỗi detector pixel chỉ lấy một ray tâm; không tích phân diện tích pixel.
 
 ## Bài tập mở rộng
 
-Thêm export dữ liệu kèm metadata hoặc thử một phantom khác trong bounds hiện có. Nếu muốn tái dựng ảnh, cần thiết kế bước mới tương thích fan-beam (hoặc chuyển/rebin sang parallel đúng cách); không gọi thẳng inverse Radon của mô hình tia song song rồi coi là lời giải chuẩn.
+Thêm export dữ liệu kèm metadata hoặc thử một phantom khác trong bounds hiện có. Bài sau sẽ trải từng hàng trên đúng hình học fan-beam, không dùng nhầm công thức cho tia song song.
 
-Tiếp theo là [Project 57 — Mưa photon ngẫu nhiên](/projects/photon-rain), bổ sung các hiện tượng hấp thụ/tán xạ ngẫu nhiên mà máy CT đồ chơi này chủ động bỏ qua. Các project chưa phát hành được đánh dấu **Sắp ra mắt** trong roadmap.
+Tiếp tục [Bài 10: Trải ngược từng hàng](/projects/ct-sinogram/10-trai-nguoc-tung-hang).

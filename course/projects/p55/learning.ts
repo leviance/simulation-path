@@ -181,6 +181,32 @@ const data = {
         },
       ],
     },
+    "p55-l09": {
+      focus:
+        "Dùng chính hình học chiếc radio để GPU đo độ truyền qua; không tô màu dựa vào ảnh mô hình.",
+      expected:
+        "Vỏ, khe loa và pin cho ba vùng khác nhau trên detector. Đổi tương phản vẫn giữ số đo thô.",
+      files: ["shaders/attenuation.frag", "include/gpu-detector.hpp", "src/main.cpp"],
+      steps: [
+        { title: "Đặt detector float", explanation: "Dùng R32F để giữ T trước bước hiển thị." },
+        {
+          title: "Cộng các đoạn vật liệu",
+          explanation: "Xoay tia về hệ radio và tích lũy độ sâu của từng lớp.",
+        },
+        { title: "Hiện kết quả", explanation: "Ảnh SDL đọc từ framebuffer vừa được shader vẽ." },
+      ],
+    },
+    "p55-l10": {
+      focus: "Phân biệt ảnh nhìn hợp lý với phép đo đúng trên cùng một tia.",
+      expected:
+        "So được tấm phẳng, hai lớp, vùng chồng và chiếc radio; V báo sai số raw giữa GPU với CPU.",
+      files: ["include/gpu-detector.hpp", "src/main.cpp", "tests/tests.cpp"],
+      steps: [
+        { title: "So từng ô", explanation: "Cả hai phép tính dùng tâm của cùng một ô." },
+        { title: "Làm lộ lỗi trục", explanation: "Xoay mẫu không đối xứng trước khi đối chiếu." },
+        { title: "Kiểm đổi thang màu", explanation: "Đảo màu không làm các số T lệch nhau." },
+      ],
+    },
   },
   references: {
     "p55-l01": [
@@ -239,6 +265,10 @@ const data = {
         kind: "Thuật ngữ",
       },
     ],
+    "p55-l09": [
+      { label: "Độ sâu quang học", href: "/glossary#xray-optical-depth", kind: "Thuật ngữ" },
+    ],
+    "p55-l10": [{ label: "Ảnh log", href: "/glossary#xray-flat-field-log", kind: "Thuật ngữ" }],
   },
 } satisfies ProjectLearningAssets;
 export default data;

@@ -24,6 +24,8 @@ class Raster {
   readonly width: number;
   readonly height: number;
   private depth: Float32Array;
+  sectionAxis = -1;
+  sectionPlane = 0;
   constructor(width: number, height: number) {
     if (
       !Number.isInteger(width) ||
@@ -117,6 +119,11 @@ class Raster {
           ),
         );
         let color: Color = [0.66, 0.73, 0.73];
+        const material =
+          (vertices[0].material ?? -1) * a +
+          (vertices[1].material ?? -1) * b +
+          (vertices[2].material ?? -1) * c;
+        if (colored && material >= 0) color = scalarColor(material, window, true);
         if (slice) {
           const u =
             (point[axes.horizontal] - volume.grid.origin[axes.horizontal]) / size[axes.horizontal];
@@ -131,13 +138,26 @@ class Raster {
         const direction = unit(sub(frame.eye, point));
         if (dot(normal, direction) < 0) normal = mul(normal, -1);
         let light =
-          0.45 + 0.4 * Math.max(0, dot(normal, lightA)) + 0.15 * Math.max(0, dot(normal, lightB));
+          0.48 + 0.46 * Math.max(0, dot(normal, lightA)) + 0.15 * Math.max(0, dot(normal, lightB));
+        let glint = 0;
         if (slice)
           light =
-            0.56 +
-            0.38 * Math.max(0, dot(normal, lightA)) +
+            0.72 +
+            0.22 * Math.max(0, dot(normal, lightA)) +
             0.06 * Math.max(0, dot(normal, direction));
-        this.color(index, color.map((value) => value * light) as Color);
+        else if (material > 0.84) {
+          let exposure = 1;
+          if (this.sectionAxis >= 0) {
+            const setback = Math.max(
+              0,
+              Math.min(1, (this.sectionPlane - point[this.sectionAxis]) / 37),
+            );
+            exposure = 1 - 0.66 * setback;
+          }
+          light *= exposure;
+          glint = 0.24 * exposure * Math.max(0, dot(normal, unit(add(lightA, direction)))) ** 18;
+        }
+        this.color(index, color.map((value) => value * light + glint) as Color);
         this.depth[index] = z;
       }
   }
@@ -147,6 +167,7 @@ function vertex(mesh: Mesh, offset: number): Vertex {
   return {
     point: [d[offset], d[offset + 1], d[offset + 2]],
     normal: [d[offset + 3], d[offset + 4], d[offset + 5]],
+    material: mesh.materials?.[offset / 6],
   };
 }
 export function renderContext(
@@ -160,16 +181,21 @@ export function renderContext(
   cut: boolean,
   width = 420,
   height = 360,
+  sectionView = 0,
 ) {
   if (
     !Number.isInteger(mesh.triangles) ||
     mesh.triangles < 0 ||
     mesh.triangles > 240000 ||
-    mesh.vertices.length !== mesh.triangles * 18
+    mesh.vertices.length !== mesh.triangles * 18 ||
+    (mesh.materials !== undefined && mesh.materials.length !== mesh.triangles * 3)
   )
     throw new RangeError("Invalid context mesh");
   const raster = new Raster(width, height),
     frame = cameraFrame(camera, width, height);
+  const sectionAxis = cut && mesh.materials ? axesFor(sectionView).fixed : -1;
+  raster.sectionAxis = sectionAxis;
+  if (sectionAxis >= 0) raster.sectionPlane = probe[sectionAxis];
   raster.background(frame);
   for (let offset = 0; offset < mesh.vertices.length; offset += 18) {
     const triangle: Triangle = [
@@ -177,6 +203,28 @@ export function renderContext(
       vertex(mesh, offset + 6),
       vertex(mesh, offset + 12),
     ];
+    if (sectionAxis >= 0) {
+      const plane = probe[sectionAxis];
+      const a = triangle[0].point[sectionAxis],
+        b = triangle[1].point[sectionAxis],
+        c = triangle[2].point[sectionAxis];
+      if (Math.max(a, b, c) <= plane)
+        raster.triangle(frame, triangle, volume, undefined, 0, window, colored);
+      else if (Math.min(a, b, c) < plane) {
+        const face = clipPolygon(triangle, sectionAxis, plane, true);
+        for (let i = 1; i + 1 < face.length; i++)
+          raster.triangle(
+            frame,
+            [face[0], face[i], face[i + 1]],
+            volume,
+            undefined,
+            0,
+            window,
+            colored,
+          );
+      }
+      continue;
+    }
     if (!cut || [0, 1, 2].some((axis) => triangle.every((v) => v.point[axis] <= probe[axis]))) {
       raster.triangle(frame, triangle, volume, undefined, 0, window, colored);
       continue;
@@ -201,13 +249,18 @@ export function renderContext(
   if (cut) {
     const upper = add(volume.grid.origin, extent(volume.grid));
     for (let view = 0; view < 3; view++) {
+      if (sectionAxis >= 0 && view !== sectionView) continue;
       const axes = axesFor(view),
         normal: Vec3 = [0, 0, 0];
       normal[axes.fixed] = 1;
-      const a: Vec3 = [...probe],
-        b: Vec3 = [...probe],
-        c: Vec3 = [...probe],
-        d: Vec3 = [...probe];
+      const a: Vec3 = [...probe];
+      if (sectionAxis >= 0) {
+        a[axes.horizontal] = volume.grid.origin[axes.horizontal];
+        a[axes.vertical] = volume.grid.origin[axes.vertical];
+      }
+      const b: Vec3 = [...a],
+        c: Vec3 = [...a],
+        d: Vec3 = [...a];
       b[axes.horizontal] = upper[axes.horizontal];
       c[axes.horizontal] = upper[axes.horizontal];
       c[axes.vertical] = upper[axes.vertical];

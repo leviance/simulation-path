@@ -29,16 +29,21 @@ inline Color scalarColor(double scalar, Window window, bool colored) {
     t = windowValue(scalar, window);
     if (colored) {
         // The transfer table is display only. Never interpolate these colors as volume data.
-        constexpr std::array<Color, 6> stops{{
-            {0.025, 0.035, 0.055},
-            {0.10, 0.27, 0.35},
-            {0.24, 0.51, 0.52},
-            {0.86, 0.67, 0.42},
-            {0.98, 0.42, 0.24},
-            {1.0, 0.94, 0.78}
+        constexpr std::array<Color, 11> stops{{
+            {0.018, 0.029, 0.048}, // void
+            {0.102, 0.118, 0.141},
+            {0.235, 0.165, 0.145}, // rough outer rock
+            {0.650, 0.415, 0.260},
+            {0.202, 0.193, 0.290},
+            {0.105, 0.320, 0.411}, // agate bands
+            {0.170, 0.613, 0.646},
+            {0.550, 0.810, 0.756},
+            {0.960, 0.903, 0.725},
+            {0.732, 0.574, 0.842}, // crystals
+            {0.987, 0.944, 1.000}
         }};
-        const double position = t * 5;
-        const int lower = std::min(static_cast<int>(position), 4);
+        const double position = t * 10;
+        const int lower = std::min(static_cast<int>(position), 9);
         return mix(stops[lower], stops[lower + 1], position - lower);
     }
 #else

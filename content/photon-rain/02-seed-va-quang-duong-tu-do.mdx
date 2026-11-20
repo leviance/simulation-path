@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Từ số ngẫu nhiên đến quãng đường tự do
 
@@ -22,15 +23,21 @@ S không phải tốc độ, không nhân dt và không mặc định dừng ở
 
 ## Viết code từng bước
 
+Một chiếc đồng hồ ngẫu nhiên quyết định quãng đường tới tương tác đầu, không quyết định luôn điểm cuối. Hãy cho mỗi ID một chuỗi số riêng để xem lại đúng đường đi ấy sau khi đã phát hàng nghìn photon.
+
+<CourseWorkFile project="57" step={2} path="include/random.hpp" />
+
 ### Bước 1 — Tạo chuỗi uint32 tái lập
 
+{/* snippet include/random.hpp#next-draw */}
+
 ```cpp title="include/random.hpp"
-    std::uint32_t next() {
-        state ^= state << 13;
-        state ^= state >> 17;
-        state ^= state << 5;
-        return state;
-    }
+std::uint32_t next() {
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return state;
+}
 ```
 
 Đây là xorshift32. Dùng uint32_t để phép dịch phải là logical shift và phép toán được hiểu theo 32 bit. State 0 sẽ kẹt mãi ở 0; constructor ánh xạ seed 0 sang 0x6d2b79f5. PRNG này phục vụ học/tái lập, không dùng cho mật mã và không chứng minh các mẫu độc lập tuyệt đối.
@@ -73,6 +80,14 @@ photonSeed kiểm id trong [0,8191] trước khi trộn. Bước avalanche dùng
 Mỗi lần dựng photon, Random bắt đầu từ seed đã trộn này. Mẫu U đầu dùng chọn y=.75*(2U−1), mẫu sau mới chọn S. Ghi đúng thứ tự dùng RNG: thay thứ tự sẽ thay kết quả dù seed không đổi.
 
 Không nói các ID tạo ra nguồn ngẫu nhiên độc lập về mặt chứng minh toán học. Điều ta bảo đảm là photon sau không bị dịch chuỗi chỉ vì photon trước đã tán xạ nhiều lần; đổi cách chia batch không đổi luồng của cùng ID.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="57" step={2} path="include/controls.hpp" />
+<CourseWorkFile project="57" step={2} path="include/view.hpp" />
+<CourseWorkFile project="57" step={2} path="src/main.cpp" />
+
+Ghi seed và ID, chạy lại hai lần rồi so từng điểm. Đổi seed và chỉ so phân bố của cả nhóm, không đòi từng hạt phải đi cùng đường.
 
 ## Ghép các phần lại
 

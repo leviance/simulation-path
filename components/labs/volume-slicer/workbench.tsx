@@ -8,6 +8,7 @@ import {
   coordinate,
   defaultWindow,
   extent,
+  geodeCentre,
   makeGrid,
   presetNames,
   presets,
@@ -28,7 +29,7 @@ function Experiment({ stage }: { stage: number }) {
     reduced = useReducedMotion();
   const [side, setSide] = useState(stage >= 9 ? 128 : 64);
   const [preset, setPreset] = useState<Preset>(stage < 2 ? "sphere" : "specimen");
-  const [probe, setProbe] = useState<Vec3>(stage < 2 ? [0, 0, 0] : [-8, -4, -8]);
+  const [probe, setProbe] = useState<Vec3>(stage < 2 ? [0, 0, 0] : [...geodeCentre]);
   const [camera, setCamera] = useState({ ...defaultCamera }),
     [window, setWindow] = useState({ ...defaultWindow });
   const [linear, setLinear] = useState(stage >= 4),
@@ -93,7 +94,7 @@ function Experiment({ stage }: { stage: number }) {
   };
   const reset = () => {
     cancel();
-    setProbe(stage < 2 ? [0, 0, 0] : [-8, -4, -8]);
+    setProbe(stage < 2 ? [0, 0, 0] : [...geodeCentre]);
     setCamera({ ...defaultCamera });
     setWindow({ ...defaultWindow });
     setActive(0);
@@ -212,6 +213,7 @@ function Experiment({ stage }: { stage: number }) {
               linear={linear}
               camera={camera}
               cut={cut}
+              sectionView={active}
               cancelVersion={cancelVersion}
               setCamera={setCamera}
               stop={stop}

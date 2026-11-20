@@ -33,11 +33,11 @@ export interface Result {
   profile: Sample[];
 }
 const warm: Point[] = [
-  [0.38, 0.49, 0.58],
-  [0.65, 0.72, 0.77],
-  [0.82, 0.86, 0.89],
-  [0.95, 0.96, 0.96],
-  [1, 0.98, 0.94],
+  [0.42, 0.55, 0.7],
+  [0.68, 0.78, 0.88],
+  [0.88, 0.91, 0.95],
+  [0.98, 0.97, 0.93],
+  [1, 0.98, 0.9],
 ];
 const cool: Point[] = [
   [0.07, 0.16, 0.24],
@@ -80,10 +80,26 @@ function litColor(
     (sampleFast(volume, x, y + h, z) - sampleFast(volume, x, y - h, z)) / (2 * h),
     (sampleFast(volume, x, y, z + h) - sampleFast(volume, x, y, z - h)) / (2 * h),
   ];
-  const squared = dot(gradient, gradient);
-  if (squared < 1e-6) return color;
-  const diffuse = Math.max(0, -dot(gradient, light) / Math.sqrt(squared));
-  return color.map((value) => value * (0.55 + 0.45 * diffuse)) as Point;
+  const facing = Math.max(0, -dot(gradient, light) / Math.sqrt(dot(gradient, gradient) + 0.25));
+  const nearDensity = sampleFast(
+    volume,
+    x + 0.13 * light[0],
+    y + 0.13 * light[1],
+    z + 0.13 * light[2],
+  );
+  const farDensity = sampleFast(
+    volume,
+    x + 0.32 * light[0],
+    y + 0.32 * light[1],
+    z + 0.32 * light[2],
+  );
+  const sun = Math.exp(-2.3 * (0.64 * nearDensity + 0.36 * farDensity));
+  const direct = sun * (0.55 + 0.45 * facing);
+  return [
+    color[0] * (0.21 * (1 - direct) + direct),
+    color[1] * (0.34 * (1 - direct) + 0.98 * direct),
+    color[2] * (0.53 * (1 - direct) + 0.86 * direct),
+  ];
 }
 export function integrate(
   ray: Ray,
@@ -132,7 +148,7 @@ export function integrate(
     weighted += density * ds;
     covered += ds;
     result.samples++;
-    if (settings.mode === "alpha") {
+    if (settings.mode === "alpha" && density > 0 && settings.sigma > 0) {
       const alpha = -Math.expm1(-settings.sigma * density * ds),
         color = litColor(volume, x, y, z, density, settings);
       const contribution = result.transmittance * alpha;
@@ -165,29 +181,19 @@ export function rawOutput(result: Result, mode: Mode): [number, number, number, 
   if (mode === "average") return [result.mean, result.mean, result.mean, 1];
   return [...result.color, result.transmittance];
 }
-export function background(ray: Ray, v: number): Point {
-  const color: Point = [
-    0.0015 + (0.004 - 0.0015) * (1 - v),
-    0.003 + (0.008 - 0.003) * (1 - v),
-    0.006 + (0.012 - 0.006) * (1 - v),
-  ];
-  if (Math.abs(ray.direction[1]) > 0.0001) {
-    const t = (-1.08 - ray.origin[1]) / ray.direction[1];
-    if (t > 0 && t < 30) {
-      const point = at(ray, t);
-      const fract = (n: number) => n - Math.floor(n);
-      const cell = Math.min(
-        Math.abs(fract(point[0] * 4 + 0.5) - 0.5),
-        Math.abs(fract(point[2] * 4 + 0.5) - 0.5),
-      );
-      const q = Math.max(0, Math.min(1, (cell - 0.012) / (0.025 - 0.012)));
-      const line = (1 - q * q * (3 - 2 * q)) * Math.exp(-0.035 * t * t);
-      color[0] += 0.005 * line;
-      color[1] += 0.011 * line;
-      color[2] += 0.016 * line;
-    }
-  }
-  return color;
+export function background(ray: Ray): Point {
+  const smooth = (first: number, last: number, value: number) => {
+    const q = Math.max(0, Math.min(1, (value - first) / (last - first)));
+    return q * q * (3 - 2 * q);
+  };
+  const up = smooth(-0.12, 0.67, ray.direction[1]);
+  const down = smooth(0, 0.66, -ray.direction[1]);
+  const horizon: Point = [0.17, 0.29, 0.42];
+  const zenith: Point = [0.029, 0.106, 0.235];
+  const low: Point = [0.065, 0.143, 0.225];
+  return horizon.map(
+    (value, i) => (value + (zenith[i] - value) * up) * (1 - down) + low[i] * down,
+  ) as Point;
 }
 export function pixel(
   camera: Camera,
@@ -213,7 +219,7 @@ export function pixel(
     return [d, d, d];
   }
   const result = march(ray, volume, settings);
-  const bg = background(ray, v);
+  const bg = background(ray);
   if (settings.mode === "alpha")
     return result.color.map((value, i) => value + result.transmittance * bg[i]) as Point;
   const density = settings.mode === "mip" ? result.maximum : result.mean,

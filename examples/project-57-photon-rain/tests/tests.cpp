@@ -29,6 +29,10 @@ void rejects(Action action, std::string_view label) {
     check(rejected, label);
 }
 
+std::array<int, 7> totals(const photon::Counts& c) {
+    return {c.completed, c.absorbed, c.escaped, c.censored, c.ballistic, c.scatteredPhotons, c.scatterEvents};
+}
+
 photon::Experiment run(photon::Settings settings, int budget) {
     auto result = photon::makeExperiment(settings);
     for (int batch = 0; batch < settings.count; ++batch) {
@@ -66,7 +70,7 @@ int main() {
     settings.muS = 0;
     settings.count = 512;
     const auto vacuum = run(settings, 32);
-    check(vacuum.counts == Counts{512, 0, 512, 0, 512, 0, 0}, "vacuum all escape without interaction");
+    check(totals(vacuum.counts) == std::array<int, 7>{512, 0, 512, 0, 512, 0, 0}, "vacuum all escape without interaction");
     const auto trace = tracePhoton(settings, 0);
     check(trace.vertices.size() == 2 && trace.vertices.back().position[0] == right && trace.collisions == 0, "vacuum endpoint and no collisions");
     Random vacuumRandom(7);
@@ -76,11 +80,11 @@ int main() {
 
     settings.muA = 0.4;
     const auto absorption = run(settings, 32);
-    check(absorption.counts == Counts{512, 338, 174, 0, 174, 0, 0}, "pure absorption counts shared with TS");
+    check(totals(absorption.counts) == std::array<int, 7>{512, 338, 174, 0, 174, 0, 0}, "pure absorption counts shared with TS");
     check(run(settings, 1).counts == absorption.counts, "batch1 and32 agree");
     settings.muS = 0.9;
     const auto mixed = run(settings, 32);
-    check(mixed.counts == Counts{512, 259, 253, 0, 8, 368, 681}, "mixed counts shared with TS");
+    check(totals(mixed.counts) == std::array<int, 7>{512, 259, 253, 0, 8, 368, 681}, "mixed counts shared with TS");
     check(mixed.recent.size() == 24, "recent history is bounded");
     check(run(settings, 1).counts == mixed.counts, "mixed batch invariance");
     auto experiment = makeExperiment(settings);
@@ -100,7 +104,7 @@ int main() {
     settings.count = 512;
     settings.eventLimit = 1;
     const auto limited = run(settings, 32);
-    check(limited.counts == Counts{512, 0, 0, 512, 0, 512, 512}, "event cap never becomes absorption");
+    check(totals(limited.counts) == std::array<int, 7>{512, 0, 0, 512, 0, 512, 512}, "event cap never becomes absorption");
     for (int id = 0; id < 128; ++id) {
         const auto shortTrace = tracePhoton(settings, id);
         settings.eventLimit = 64;
@@ -141,7 +145,7 @@ int main() {
     },
             "outside origin rejected");
     rejects([] {
-        (void)photonSeed(42, 8192);
+        (void)photonSeed(42, maximumPhotons);
     },
             "out of range id rejected");
     rejects([] {
@@ -172,6 +176,18 @@ int main() {
         (void)makeExperiment(settings);
     },
             "huge allocation rejected");
+    Settings tank;
+    const auto full = run(tank, 32);
+    const auto sum = [](const auto& bins) {
+        int total = 0;
+        for (int value : bins) total += value;
+        return total;
+    };
+    check(full.counts.completed == 16384, "complete the full-size seeded run");
+    check(sum(full.counts.absorptionMap) == full.counts.absorbed, "one dot for every absorbed photon");
+    check(sum(full.counts.scatterMap) == full.counts.scatterEvents, "all scattering events including repeats");
+    check(sum(vacuum.counts.detectorBins) == 512, "in a vacuum every photon reaches the far screen");
+    check(sum(full.counts.detectorBins) >= full.counts.ballistic && sum(full.counts.detectorBins) < full.counts.escaped, "far screen is a subset of all escapes");
     if (failures != 0) {
         return EXIT_FAILURE;
     }

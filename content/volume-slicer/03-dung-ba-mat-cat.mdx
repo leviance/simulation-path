@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Nhìn một điểm từ ba hướng
 
@@ -19,6 +20,11 @@ Muốn đọc scalar tại một world point, bước đầu đơn giản nhất
 <InteractiveLab demo="volume-slicer" mode="slice53-3" />
 
 ## Viết code từng bước
+
+Chọn một tinh thể và đặt ngón tay vào vị trí ấy. XY và XZ cùng có trục x; vì thế khi dịch x, dấu chọn phải dời ngang trong cả hai ảnh. YZ thì thay **lát** chứ không dời dấu ngang theo x.
+
+<CourseWorkFile project="53" step={3} path="include/sampling.hpp" />
+<CourseWorkFile project="53" step={3} path="include/slice.hpp" />
 
 ### 1. Đọc mẫu gần nhất tại một điểm world
 
@@ -107,6 +113,15 @@ inline Rect sliceRect(const Grid& grid, int view, Rect area) {
 ```
 
 Một scale chung cho cả hai chiều giữ đúng tỉ lệ vật thể; phần thừa là khoảng trống quanh ảnh. Về sau picking phải dùng đúng rectangle này, không dùng toàn panel rồi chọn nhầm trong letterbox.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="53" step={3} path="include/input.hpp" />
+<CourseWorkFile project="53" step={3} path="include/stage.hpp" />
+<CourseWorkFile project="53" step={3} path="include/state.hpp" />
+<CourseWorkFile project="53" step={3} path="include/ui.hpp" />
+
+Thử trước với Ramp có hướng đã biết, rồi quay lại hốc đá. Nếu hai hình đẹp nhưng không chỉ về cùng một điểm, tìm chỗ hoán đổi hàng và cột.
 
 ## Ghép các phần lại
 

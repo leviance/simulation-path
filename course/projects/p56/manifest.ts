@@ -1,8 +1,8 @@
 import type { PublishedProjectEditorial } from "../../types";
 const data = {
   summary:
-    "Tự xây máy CT đồ chơi theo lát cắt 2D: quay nguồn và detector quanh phantom, đo mức suy giảm ở từng góc rồi ghép thành sinogram. Theo dõi một đĩa nhỏ lệch tâm, kiểm cách lấy mẫu góc và phân biệt dữ liệu đo với ảnh đã tái dựng.",
-  duration: "12–16 giờ",
+    "Bên trong khoanh gỗ có một mắt gỗ và một hốc rỗng. Liệu có tìm được chúng mà không nhìn mặt cắt? Tự viết máy quét hình quạt, thu 180 hàng số đo rồi dựng lại mặt cắt ngay bên cạnh vật mẫu.",
+  duration: "15–20 giờ",
   prerequisites: [
     "Project 01–05 — SDL3, framebuffer, input và đổi hệ tọa độ",
     "Project 52 — ray normalized và giao điểm hình học",
@@ -17,30 +17,31 @@ const data = {
     "Quét tăng dần, dừng/tiếp tục và xóa dữ liệu khi thông số vật lý đổi.",
     "Giải thích vệt của điểm lệch tâm trong hình học fan-beam, không dùng nhầm công thức tia song song.",
     "So các lưới 30/60/120 góc tại cùng góc vật lý và kiểm với oracle hình tròn.",
+    "Dựng ảnh chỉ từ các hàng đã đo; tách sai số phép chiếu khỏi độ mờ của phép trải ngược không lọc.",
   ],
   challenge: {
     timebox: "120–180 phút tự thử trước khi đọc lời giải",
     mission:
-      "Tự xây dựng một mô phỏng 2D có vật thể gồm các đĩa tròn, một nguồn điểm và một dãy detector phẳng. Quay cả nguồn lẫn detector quanh vật thể đứng yên; ở mỗi góc, đo tín hiệu của 128 tia rồi thêm một hàng vào sinogram.",
+      "Hãy viết một trạm kiểm gỗ: giấu ảnh mặt cắt, đo từ nhiều phía, rồi chỉ vị trí mắt gỗ bằng ảnh bạn tự dựng từ các số đo. Giữ hai mẫu thử đơn giản để biết lỗi xảy ra ở máy đo hay ở bước dựng ảnh.",
     outcome:
-      "Cửa sổ SDL3 có sơ đồ máy quét, dải tín hiệu detector và sinogram đang hình thành. Chọn một ô để xem lại đúng góc/tia; đổi phantom để nhận ra mẫu hình của đĩa ở tâm và đĩa lệch tâm.",
+      "Ba ô cùng kể một phép đo: mặt cắt gốc, sinogram đang hình thành và lát dựng lại. Có thể giấu mặt cắt, dừng sau một hàng để thấy dải sáng, rồi quét đủ 180 góc để tìm mắt gỗ.",
     requirements: [
-      "C++20, CMake 3.24+, SDL3 3.4.8; ZIP độc lập gồm starter, 9 checkpoint, final và pure tests.",
+      "C++20, CMake 3.24+, SDL3 3.4.8; ZIP có starter, 11 bước chạy độc lập, bản hoàn chỉnh và bộ kiểm.",
       "Lát cắt XY, y hướng lên; nguồn cách tâm 4, tâm detector ở phía đối diện cách tâm 4, detector rộng 8 world units.",
       "128 pixel detector, u=(column+0.5)/128; direction normalized, maximum là khoảng cách nguồn→pixel.",
-      "Ba phantom: đĩa ở tâm, đĩa nhỏ lệch tâm, nền có hai insert cộng mu. Không thay thế vật liệu theo draw order.",
+      "Ba vật mẫu: đĩa chuẩn ở tâm, đĩa nhỏ lệch tâm, khoanh gỗ có vỏ, vòng năm, hốc và mắt gỗ; phần vật liệu chồng nhau cộng hệ số suy giảm.",
       "Tính chord hữu hạn, tau=sum(strength*mu*L), T=exp(-tau), p=-ln(T). Dùng dữ liệu mono lý tưởng của Project 55, không mang phổ hai năng lượng vào oracle tuyến tính.",
-      "Quét 30/60/120 góc trên [0,2π), không lặp 360°. Mỗi hàng chứa p của một góc; index=column+128*row.",
+      "Quét 30, 60, 120 hoặc 180 góc trên [0,2π). Mỗi hàng chứa p của một góc; index=column+128*row.",
       "Ô chưa đo dùng NaN và màu riêng. Preview tia/góc chưa đo không được ghi vào bộ dữ liệu.",
-      "Mở paused; đo từng hàng hoặc quét tự động tối đa hai hàng/frame. Đổi phantom, strength, số góc phải tạo lượt quét mới.",
+      "Bản hoàn chỉnh bắt đầu quét; có thể dừng, đo từng hàng và khởi động lại. Không quá hai góc mới mỗi frame tương tác. Đổi vật mẫu, mức suy giảm hay số góc phải xóa cả sinogram và ảnh tích lũy.",
       "Display range/palette chỉ đổi màu. Chọn ô/góc xem không làm mất lượt quét hoặc đo lại toàn bộ sinogram.",
       "Keyboard, pointer capture, letterbox, DPR, reset, blur/minimize và reduced-motion có xử lý rõ ràng.",
     ],
     constraints: [
-      "Đây là forward projection của một lát cắt 2D; chưa tái dựng ảnh CT, không HU/DICOM hay mô hình thiết bị y khoa.",
+      "Dùng phép trải ngược không lọc đúng hình học chùm tia quạt. Đây là mô hình học đồ họa 2D, không phải phần mềm chẩn đoán; không cần HU, DICOM hoặc lọc Fourier.",
       "Fan-beam có nguồn điểm và detector phẳng. Không khẳng định vệt lệch tâm là đường sin thuần hoặc hàng θ+π là đảo cột của hàng θ.",
       "Mỗi pixel lấy một tia ở tâm, không tích phân diện tích detector. Không noise, scatter, phổ năng lượng hay inverse-square response.",
-      "Tối đa 3 đĩa, mu trong [0,2], strength trong [0,2], mỗi đĩa nằm trong bán kính 1.5; độ phân giải không tăng khi resize.",
+      "Đĩa và vành khăn nằm trong bán kính 1,5; phóng to cửa sổ không thêm mẫu đo. Bộ tái dựng không đọc hình học của mẫu gỗ.",
       "Bộ quét có ngân sách công việc cố định, không vòng lặp catch-up theo thời gian thực, benchmark lớn hoặc tự mở server.",
     ],
     definitionOfDone: [
@@ -50,6 +51,7 @@ const data = {
       "Đĩa ở tâm cho các hàng bằng nhau; đĩa lệch tâm cho vệt di chuyển, trace được kiểm bằng ray đi qua điểm.",
       "Quét hết đúng views hàng; gọi thêm không sửa dữ liệu, pause không tiến, đổi cấu hình không trộn phép đo cũ.",
       "Các góc chung của lưới 30 và 120 cho cùng projection; ảnh phóng to không được quảng cáo là thêm mẫu đo.",
+      "Đo đủ 180 góc, ảnh nhận ra mắt gỗ nhưng còn quầng mờ; báo riêng sai số hình dạng sau khi chuẩn hóa từng ảnh bằng cực đại của nó.",
       "CTest Debug/Release và audit nhỏ chạy có timeout; kiểm tương tác desktop được báo riêng, không đánh đồng với smoke.",
       "Roadmap/search/glossary/ZIP đồng bộ; các project chưa phát hành hiển thị Sắp ra mắt và generated output không đưa vào Git.",
     ],
@@ -130,11 +132,31 @@ const data = {
     {
       id: "p56-l09",
       slug: "09-kiem-chung-va-hoan-thien",
-      title: "Kiểm máy CT đồ chơi và chạy bản hoàn chỉnh",
+      title: "Kiểm máy đo trước khi dựng lại mặt cắt",
       summary: "Oracle hình tròn, CTest Debug/Release, smoke có deadline và phạm vi mô hình.",
       order: 9,
       estimatedMinutes: 90,
       demoId: "ct-sinogram",
+    },
+    {
+      id: "p56-l10",
+      slug: "10-trai-nguoc-tung-hang",
+      order: 10,
+      estimatedMinutes: 95,
+      demoId: "ct-sinogram",
+      title: "Trải ngược từng hàng để tìm mắt gỗ",
+      summary:
+        "Chỉ dùng góc và số đo: tìm ô detector ứng với từng texel, nội suy và tích lũy các góc.",
+    },
+    {
+      id: "p56-l11",
+      slug: "11-do-do-mo-cua-lat-cat",
+      order: 11,
+      estimatedMinutes: 70,
+      demoId: "ct-sinogram",
+      title: "Mắt gỗ nằm đúng chỗ, vì sao ảnh vẫn mờ?",
+      summary:
+        "Đối chiếu ảnh đo với vật mẫu, tách sai số hình dạng khỏi phép kiểm máy đo rồi chạy sản phẩm hoàn chỉnh.",
     },
   ],
 } satisfies PublishedProjectEditorial;

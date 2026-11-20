@@ -1,9 +1,26 @@
 import type { ProjectLabMeta } from "../../labs/types";
 const data = {
+  native: {
+    directory: "/field-notes/optics",
+    withDemo: true,
+    overview: ["timber"],
+    lessons: { "ct56-11": ["timber"] },
+    takes: {
+      timber: {
+        title: "Bên trong khoanh gỗ",
+        source: "Project 56 · C++/SDL3 · Release",
+        poster: "timber.png",
+        alt: "Ba ô cho mặt cắt gỗ, sinogram theo 180 góc và ảnh dựng không lọc có mắt gỗ sáng.",
+        caption:
+          "Tìm mắt gỗ ở phía dưới bên phải của ô thứ ba rồi so với ô đầu. Hai hình không trùng khít vì phép trải ngược không lọc làm mờ cạnh.",
+      },
+    },
+  },
   base: {
     label: "CT SINOGRAM LAB",
-    title: "Nhìn sinogram hình thành qua từng góc đo",
-    description: "Lát cắt XY tổng hợp, nguồn điểm và detector phẳng; chưa tái dựng ảnh CT.",
+    title: "Trạm soi khoanh gỗ",
+    description:
+      "Tìm hốc và mắt gỗ qua 180 góc: đối chiếu vật mẫu, các hàng số đo và ảnh trải ngược.",
   },
   modes: {
     "ct56-1": {
@@ -39,8 +56,16 @@ const data = {
       description: "So 30/60/120 góc, giữ nguyên 128 pixel detector.",
     },
     "ct56-9": {
-      title: "Kiểm máy CT đồ chơi và chạy bản hoàn chỉnh",
+      title: "Kiểm máy đo trên đĩa chuẩn",
       description: "Audit độc lập theo khoảng cách từ tâm đến đường tia.",
+    },
+    "ct56-10": {
+      title: "Dựng lại khoanh gỗ từ số đo",
+      description: "Dừng sau một góc rồi theo dõi các dải sáng hội tụ khi đo tiếp.",
+    },
+    "ct56-11": {
+      title: "Mắt gỗ và quầng mờ",
+      description: "Đối chiếu ảnh dựng không lọc với vật mẫu, đọc sai số trên cùng miền.",
     },
   },
 } satisfies ProjectLabMeta;

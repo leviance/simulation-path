@@ -42,6 +42,7 @@ import {
   useReducedMotion,
 } from "./lab-shared";
 import { aimRect, drawPicking } from "./ray-intersections/draw";
+import { isReadout } from "./ray-intersections/hud";
 import { TranslationControls } from "./ray-intersections/translation-controls";
 import { useClientReady } from "../use-client-ready";
 
@@ -212,6 +213,7 @@ function PickingExperiment({ stage }: { stage: number }) {
       point.y >= rect.y &&
       point.y <= rect.y + rect.height;
     if (event.button === 0 && !inAim) {
+      if (stage >= 2 && isReadout(size, point.x, point.y)) return;
       if (stage >= 7) {
         const pickRay = cameraRay(
           observer,
@@ -381,10 +383,11 @@ function PickingExperiment({ stage }: { stage: number }) {
   return (
     <>
       <p id={help}>
-        Cửa sổ nhỏ là góc nhìn ngắm bắn: kéo tâm ngắm hoặc dùng mũi tên để đổi tia. Ở góc nhìn lớn,
-        kéo chuột phải để xoay, giữ Shift để pan, lăn chuột để zoom. Ctrl+mũi tên, Ctrl+Shift+mũi
-        tên và PageUp/PageDown là các thao tác tương đương bằng phím. Đổi góc nhìn không đổi tia
-        đang giữ.
+        Kéo chuột phải để nhìn bàn đo từ phía khác; giữ thêm Shift để dời camera, lăn chuột để đến
+        gần mẫu. Nếu dùng bàn phím, hãy chọn khung hình rồi dùng Ctrl+mũi tên, Ctrl+Shift+mũi tên
+        hoặc PageUp/PageDown.
+        {stage >= 2 &&
+          " Muốn đổi hướng tia, kéo trong ô ngắm nhỏ hoặc nhấn phím mũi tên. Xoay quanh bàn không làm tia đổi hướng."}
       </p>
       {!ready && <p role="status">Đang chuẩn bị điều khiển…</p>}
       <fieldset
@@ -477,7 +480,7 @@ function PickingExperiment({ stage }: { stage: number }) {
           Đặt lại
         </button>
         <button type="button" aria-pressed={debug} onClick={() => setDebug((old) => !old)}>
-          Lưới và trục
+          Nhãn và trục tọa độ
         </button>
         {stage >= 8 && (
           <button
@@ -531,10 +534,13 @@ function PickingExperiment({ stage }: { stage: number }) {
         </p>
       )}
       <p>
-        Sphere/AABB có khoảng thể tích; plane/triangle chỉ có giao bề mặt. Tia bắt đầu trong solid
-        có thể có entry âm, nhưng chỉ chọn mặt nằm trong [tMin,tMax]. Normal giữ hướng hình học;
-        điểm ra màu vàng, điểm gần nhất màu xanh lá. Cảnh dùng renderer CPU, không chạy C++ hoặc GPU
-        trong trình duyệt. Lưới plane hữu hạn chỉ để minh họa một mặt phẳng vô hạn.
+        Mỗi ô lớn trên bàn dài một đơn vị. Bàn chia độ minh họa một phần của mặt phẳng vô hạn.
+        {stage >= 2 && " Đường xanh ngọc là tia tới; nét đứt cho biết tia bị vật che."}
+        {stage >= 3 &&
+          " Mũi tên xanh lá là pháp tuyến tại giao điểm đang xét, không phải tia phản xạ."}
+        {stage >= 4 &&
+          " Với mẫu đặc, thước tô hổ phách phần tia nằm trong mẫu. Vòng tròn đánh dấu điểm vào, hình thoi đánh dấu điểm ra. Nếu nguồn nằm sẵn trong vật, vạch màu bắt đầu ngay ở nguồn."}
+        {stage >= 6 && " Mặt phẳng và tấm tam giác chỉ có bề mặt: không có đoạn bên trong để tô."}
       </p>
     </>
   );

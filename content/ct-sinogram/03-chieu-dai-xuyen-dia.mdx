@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Đo chiều dài tia đi trong một đĩa
 
@@ -22,16 +23,28 @@ Nhưng hai giao điểm đó thuộc **đường thẳng vô hạn**. Ta còn ph
 
 ## Viết code từng bước
 
+Một vành gỗ mỏng không đặc kín. Tính đoạn qua đĩa ngoài rồi trừ đoạn qua lỗ trong; làm cả hai phép cắt trên cùng đoạn hữu hạn nguồn–detector. Tia còn lại ngoài vỏ thì đóng góp bằng 0.
+
+<CourseWorkFile project="56" step={3} path="include/geometry.hpp" />
+
 ### Bước 1 — Chiếu tâm lên hướng tia
 
+{/* snippet include/geometry.hpp#outer-chord */}
+
 ```cpp title="include/geometry.hpp"
-    const Point delta = subtract(disk.centre, beam.origin);
+inline double diskChord(const Beam& beam, Point centre, double radius) {
+    const Point delta = subtract(centre, beam.origin);
     const double along = dot(delta, beam.direction);
     const double perpendicularSquared = std::max(0.0, dot(delta, delta) - along * along);
-    const double halfChordSquared = disk.radius * disk.radius - perpendicularSquared;
+    const double halfChordSquared = radius * radius - perpendicularSquared;
     if (halfChordSquared <= 0) {
         return 0;
     }
+    const double halfChord = std::sqrt(halfChordSquared);
+    const double entry = std::max(0.0, along - halfChord);
+    const double exit = std::min(beam.maximum, along + halfChord);
+    return std::max(0.0, exit - entry);
+}
 ```
 
 max với 0 xử lý sai số làm tròn nhỏ của h². Không dùng nó để che direction sai norm: validateBeam kiểm finite, norm² gần 1, maximum trong (0,12]. chordLength là hàm hình học cấp thấp nhận đầu vào đã hợp lệ; từ Bài 04, measure sẽ gọi các bước validate trước khi dùng nó.
@@ -51,7 +64,13 @@ max với 0 xử lý sai số làm tròn nhỏ của h². Không dùng nó để
 
 Main chọn beam từ row/column và in L0, chiều dài qua đĩa đầu tiên, ở title. Canvas đọc riêng chiều dài qua từng đĩa. Các chiều dài không bị đổi khi thay màu vật thể hoặc phóng cửa sổ.
 
-Tại checkpoint này, phantom mặc định vẫn là nền có hai insert. Các phím chọn preset/strength được thêm ở Bài 04. Muốn kiểm đĩa đơn bằng tay trước đó, dùng fixture dưới đây trong một chương trình test nhỏ hoặc đọc test hoàn chỉnh ở cuối module.
+Tại checkpoint này, vật mặc định là khoanh gỗ; mỗi vành dùng chiều dài qua đĩa ngoài trừ đi đĩa trong. Các phím chọn preset/strength được thêm ở Bài 04. Muốn kiểm đĩa đơn bằng tay trước đó, dùng fixture dưới đây trong một chương trình test nhỏ hoặc đọc test hoàn chỉnh ở cuối module.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="56" step={3} path="src/main.cpp" />
+
+Tấm thử có bán kính ngoài 1, bán kính lỗ 0,25. Tia xuyên tâm đi qua 2 − 0,5 = 1,5 đơn vị vật liệu. Tia tiếp xúc mép ngoài phải cho 0.
 
 ## Ghép các phần lại
 

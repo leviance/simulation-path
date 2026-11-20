@@ -73,7 +73,7 @@ float classify(float density) {
 #if LAB_CHECKPOINT >= 6
 vec3 transferColor(float density) {
 #if LAB_CHECKPOINT >= 7
-    const vec3 warm[5] = vec3[5](vec3(0.38, 0.49, 0.58), vec3(0.65, 0.72, 0.77), vec3(0.82, 0.86, 0.89), vec3(0.95, 0.96, 0.96), vec3(1.0, 0.98, 0.94));
+    const vec3 warm[5] = vec3[5](vec3(0.42, 0.55, 0.70), vec3(0.68, 0.78, 0.88), vec3(0.88, 0.91, 0.95), vec3(0.98, 0.97, 0.93), vec3(1.0, 0.98, 0.90));
     const vec3 cool[5] = vec3[5](vec3(0.07, 0.16, 0.24), vec3(0.08, 0.49, 0.57), vec3(0.35, 0.78, 0.74), vec3(1.0, 0.55, 0.22), vec3(1.0, 0.92, 0.72));
     if (uPalette == 2) return vec3(1.0);
     float position = clamp(density, 0.0, 1.0) * 4.0;
@@ -96,12 +96,15 @@ vec3 lightColor(vec3 point, float density) {
     for (int axis = 0; axis < 3; ++axis) {
         vec3 offset = vec3(0.0);
         offset[axis] = uSpacing;
-        gradient[axis] = (densityAt(point+offset)-densityAt(point-offset))/(2.0*uSpacing);
+        gradient[axis] = (densityAt(point + offset) - densityAt(point - offset)) / (2.0 * uSpacing);
     }
-    if (dot(gradient,gradient) < 1e-6) return color;
-    vec3 normal = normalize(-gradient);
-    float diffuse = max(0.0,dot(normal,normalize(vec3(-0.6,0.8,0.5))));
-    return color * (0.55+0.45*diffuse);
+    vec3 light = normalize(vec3(-0.6, 0.8, 0.5));
+    float facing = max(0.0, -dot(gradient, light) / sqrt(dot(gradient, gradient) + 0.25));
+    float nearDensity = densityAt(point + 0.13 * light);
+    float farDensity = densityAt(point + 0.32 * light);
+    float sun = exp(-2.3 * (0.64 * nearDensity + 0.36 * farDensity));
+    float direct = sun * (0.55 + 0.45 * facing);
+    return color * mix(vec3(0.21, 0.34, 0.53), vec3(1.0, 0.98, 0.86), direct);
 }
 // [/snippet shader-light]
 #endif
@@ -163,12 +166,12 @@ void main() {
         // [/snippet shader-projections]
 #if LAB_CHECKPOINT >= 6
         // [snippet shader-alpha]
-        if (uMode == 2) {
+        if (uMode == 2 && density > 0.0 && uSigma > 0.0) {
             float segmentT = exp(-uSigma * density * ds);
             float alpha = 1.0 - segmentT;
             vec3 emission = transferColor(density);
 #if LAB_CHECKPOINT >= 7
-            emission = lightColor(point,density);
+            emission = lightColor(point, density);
 #endif
             color += transmittance * alpha * emission;
             transmittance *= segmentT;

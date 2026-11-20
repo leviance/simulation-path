@@ -94,9 +94,12 @@ inline void keyDown(SDL_Keycode key, Controls& controls, [[maybe_unused]] int ve
         controls.requested = 32;
     }
     if (key == SDLK_Q) {
-        controls.settings.count *= 4;
-        if (controls.settings.count > maximumPhotons) {
-            controls.settings.count = 512;
+        const std::array<int, 4> sizes{512, 2048, 8192, maximumPhotons};
+        for (size_t i = 0; i < sizes.size(); ++i) {
+            if (sizes[i] == controls.settings.count) {
+                controls.settings.count = sizes[(i + 1) % sizes.size()];
+                break;
+            }
         }
         controls.id = 0;
     }

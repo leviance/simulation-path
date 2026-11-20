@@ -15,7 +15,7 @@ test("X-ray lab gates stages, separates exposure/display and keeps reduced-motio
 }) => {
   await page.goto("/projects/xray-detector/01-anh-detector-dau-tien");
   await expect(page.getByLabel("Midpoint sampling", { exact: true })).toBeDisabled();
-  await page.goto("/projects/xray-detector/08-kiem-chung-va-hoan-thien");
+  await page.goto("/projects/xray-detector/10-doi-chieu-anh-radio");
   const read = (label: string) =>
     page
       .locator(".lab-readout div")

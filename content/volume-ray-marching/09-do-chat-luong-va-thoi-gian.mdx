@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Đổi step rồi đo chất lượng và thời gian
 
@@ -19,6 +20,12 @@ Bound này áp cho C/T linear, không phải chênh lệch pixel sau gamma hoặ
 <InteractiveLab demo="volume-ray-marching" mode="fog54-9" />
 
 ## Viết code từng bước
+
+Tìm một núm chỉnh chất lượng bằng một câu hỏi cụ thể: bước nào vẫn cho thấy được khe giữa hai tháp mà không lãng phí lần đọc texture? Đo cùng camera và khung hình; không so hai cảnh khác nhau chỉ vì một cảnh có FPS cao hơn.
+
+<CourseWorkFile project="54" step={9} path="include/benchmark.hpp" />
+<CourseWorkFile project="54" step={9} path="include/renderer.hpp" />
+<CourseWorkFile project="54" step={9} path="shaders/volume.frag" />
 
 ### 1. Giữ early stop tách khỏi cap
 
@@ -146,6 +153,16 @@ void resize(int requestedWidth, int requestedHeight) {
 ```
 
 Drawable pixels có thể khác kích thước logical trên màn hình DPI cao; xem [SDL_GetWindowSizeInPixels](https://wiki.libsdl.org/SDL3/SDL_GetWindowSizeInPixels). Không phóng ảnh 240×180 thành “full viewport” rồi bỏ qua số ray thực đã chạy.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="54" step={9} path="include/input.hpp" />
+<CourseWorkFile project="54" step={9} path="include/reference.hpp" />
+<CourseWorkFile project="54" step={9} path="include/stage.hpp" />
+<CourseWorkFile project="54" step={9} path="include/state.hpp" />
+<CourseWorkFile project="54" step={9} path="src/main.cpp" />
+
+Ghi cả sai số so với bước mịn và thời gian GPU. Máy khác có thể cho số ms khác; thí nghiệm phải lặp lại được về cách đo chứ không phải về con số tuyệt đối.
 
 ## Ghép các phần lại
 

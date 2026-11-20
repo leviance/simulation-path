@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Vẽ vật thể trước khi xây máy quét
 
@@ -8,11 +9,11 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 Trước khi đọc lời giải, thử challenge ở [trang tổng quan](/projects/ct-sinogram). Nếu chưa biết bắt đầu từ đâu, mục tiêu đầu tiên rất nhỏ: mở cửa sổ và vẽ vật thể cần quét. Chưa cần tia, công thức suy giảm hay mảng sinogram.
 
-Tải ZIP của Project 56. Đây là project độc lập, không cần chép file từ Project 55. Starter có CMake, window/renderer, event loop và nền tối; checkpoint 1 thêm ba đĩa tròn. Ta dùng một **lát cắt XY** để nhìn rõ quá trình đo, không dựng máy CT 3D hay đọc dữ liệu y khoa.
+Tải ZIP của Project 56. Đây là project độc lập, không cần chép file từ Project 55. Starter có CMake, window/renderer, event loop và nền tối; bài đầu thêm mặt cắt gỗ và hai mẫu tròn để kiểm. Ta dùng một **lát cắt XY** để nhìn rõ quá trình đo, không dựng máy CT 3D hay đọc dữ liệu y khoa.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Vật thể thử nghiệm gọi là *phantom*. Trong project này nó chỉ là danh sách các đĩa: tâm `centre`, bán kính `radius`, hệ số suy giảm `mu`. Đơn vị chiều dài do ta tự chọn; mu có đơn vị nghịch đảo chiều dài, không ứng với một vật liệu thật.
+Vật thể thử nghiệm gọi là *phantom*. Trong project này ta ghép các đĩa và vành khăn: cùng có tâm `centre`, bán kính `radius`, hệ số suy giảm `mu`. Đơn vị chiều dài do ta tự chọn; mu có đơn vị nghịch đảo chiều dài, không ứng với một vật liệu thật.
 
 Giữ dữ liệu này trong world space, y hướng lên. Khi vẽ mới đổi sang tọa độ SDL, y hướng xuống. Một world unit chiếm 45 logical pixel:
 
@@ -25,6 +26,12 @@ $$x_s=260+45x,\qquad y_s=310-45y.$$
 Canvas ở bài này chỉ cho thấy hình dạng. Màu của đĩa giúp phân biệt chúng, **không phải kết quả đo**; nơi các đĩa chồng nhau cũng chưa được hiển thị như một tích phân mu.
 
 ## Viết code từng bước
+
+Vẽ mặt cắt khoanh gỗ ở ô trái khi chưa có bất cứ số đo nào: đường vỏ, vòng năm, hốc và mắt gỗ sáng lệch tâm. Bức hình này là vật để kiểm sau cùng; ta sẽ **không** đưa ảnh của nó cho máy dựng.
+
+<CourseWorkFile project="56" step={1} path="include/model.hpp" />
+<CourseWorkFile project="56" step={1} path="include/timber-station.hpp" />
+<CourseWorkFile project="56" step={1} path="include/view.hpp" />
 
 ### Bước 1 — Chạy bộ khung trước
 
@@ -40,26 +47,30 @@ Trên Windows/Visual Studio, cửa sổ tối phải mở được và Escape ph
 
 ### Bước 2 — Khai báo dữ liệu của vật thể
 
+{/* snippet include/model.hpp#annulus */}
+
 ```cpp title="include/model.hpp"
 struct Disk {
     Point centre;
     double radius;
     double mu;
+    double innerRadius = 0;
     bool operator==(const Disk&) const = default;
 };
-using Scene = std::vector<Disk>;
 ```
 
-`Point` là `std::array<double, 2>`. `Scene` không giữ renderer, texture hay màu SDL; nhờ vậy CTest có thể kiểm hình học mà không mở window. `makeScene(2)` tạo một đĩa nền và hai insert nhỏ. Đến Bài 04 ta mới quy định insert **cộng thêm mu** vào nền, không thay thế nền.
+`Point` là `std::array<double, 2>`. `Scene` không giữ renderer, texture hay màu SDL; nhờ vậy CTest có thể kiểm hình học mà không mở window. `makeScene(2)` tạo khoanh gỗ từ gỗ nền, vỏ, các vòng và mắt gỗ lệch tâm. Bán kính trong bằng 0 cho một đĩa đặc; lớn hơn 0 cho một vành có lỗ. Vùng giao nhau cộng hệ số suy giảm.
 
 ### Bước 3 — Vẽ đĩa bằng các dải ngang
 
 SDL_Renderer không có hàm fill circle trực tiếp. Với một hàng cách tâm y pixel, nửa bề rộng của đĩa là căn của r²−y². Ta vẽ một rectangle cao một pixel ở mỗi hàng:
 
+{/* snippet include/view.hpp#scanner-disk */}
+
 ```cpp title="include/view.hpp"
 inline void drawDisk(SDL_Renderer* renderer, const Disk& disk) {
     const auto centre = screen(disk.centre);
-    const float radius = static_cast<float>(45 * disk.radius);
+    const float radius = static_cast<float>(12 * disk.radius);
     for (int y = -static_cast<int>(radius); y <= static_cast<int>(radius); ++y) {
         const float halfWidth = std::sqrt(std::max(0.0f, radius * radius - y * static_cast<float>(y)));
         const SDL_FRect span{centre.x - halfWidth, centre.y + y, 2 * halfWidth, 1};
@@ -73,6 +84,12 @@ inline void drawDisk(SDL_Renderer* renderer, const Disk& disk) {
 ### Bước 4 — Đặt lệnh vẽ vào đúng chỗ
 
 Trong vòng lặp của main: xử lý events → clear nền → gọi drawScene → present. drawScene chọn màu rồi gọi drawDisk cho từng phần tử. Main đặt logical presentation 1080×720 letterbox, nên resize không thay đổi tỷ lệ vật thể hoặc thông số mô hình.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="56" step={1} path="src/main.cpp" />
+
+Chuyển sang đĩa chuẩn nếu cần kiểm phép đổi tọa độ. Hãy chỉ vị trí mắt gỗ và hốc trên mặt cắt trước khi thêm nguồn và detector.
 
 ## Ghép các phần lại
 

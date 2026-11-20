@@ -2,15 +2,22 @@ import {
   add,
   subtract,
   multiply,
-  normalize,
   dot,
-  cross,
   cameraBasis,
   type Camera,
   type Vec3,
-} from "@/lib/labs/ray-intersections";
+} from "../../../lib/labs/ray-intersections.ts";
 
 export type Color = [number, number, number];
+export interface Vertex {
+  point: Vec3;
+  color: Color;
+}
+export const mixInk = (a: Color, b: Color, t: number): Color => [
+  a[0] + t * (b[0] - a[0]),
+  a[1] + t * (b[1] - a[1]),
+  a[2] + t * (b[2] - a[2]),
+];
 interface ScreenVertex {
   x: number;
   y: number;
@@ -23,18 +30,20 @@ export class Raster {
   inverseDepth: Float64Array;
   background: Uint8ClampedArray;
   basis: ReturnType<typeof cameraBasis>;
-  constructor(
-    public width: number,
-    public height: number,
-    public camera: Camera,
-  ) {
+  width: number;
+  height: number;
+  camera: Camera;
+  constructor(width: number, height: number, camera: Camera) {
+    this.width = width;
+    this.height = height;
+    this.camera = camera;
     this.pixels = new Uint8ClampedArray(width * height * 4);
     this.inverseDepth = new Float64Array(width * height);
     this.basis = cameraBasis(camera);
     for (let y = 0; y < height; y++) {
-      const gradient = y / height;
-      for (let x = 0; x < width; x++)
-        this.write(y * width + x, [12 + 9 * gradient, 20 + 12 * gradient, 35 + 16 * gradient]);
+      const sky = 1 - Math.abs((2 * y) / height - 0.85);
+      const color: Color = [17 + 12 * sky, 26 + 20 * sky, 36 + 22 * sky];
+      for (let x = 0; x < width; x++) this.write(y * width + x, color);
     }
     this.background = this.pixels.slice();
   }
@@ -69,10 +78,10 @@ export class Raster {
   edge(a: ScreenVertex, b: ScreenVertex, x: number, y: number) {
     return (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
   }
-  rasterTriangle(a: Vec3, b: Vec3, c: Vec3, color: Color) {
-    const p = this.toScreen(a),
-      q = this.toScreen(b),
-      r = this.toScreen(c);
+  rasterTriangle(a: Vertex, b: Vertex, c: Vertex, opacity: number, smooth: boolean) {
+    const p = this.toScreen(a.point),
+      q = this.toScreen(b.point),
+      r = this.toScreen(c.point);
     const area = this.edge(p, q, r.x, r.y);
     if (!Number.isFinite(area) || Math.abs(area) < 1e-9) return;
     const x0 = Math.max(0, Math.floor(Math.min(p.x, q.x, r.x))),
@@ -87,35 +96,59 @@ export class Raster {
         if (wa < -1e-10 || wb < -1e-10 || wc < -1e-10) continue;
         const depth = wa * p.inverseDepth + wb * q.inverseDepth + wc * r.inverseDepth;
         const index = y * this.width + x;
-        if (depth > this.inverseDepth[index]) {
+        const base = index * 4;
+        if (opacity < 1) {
+          if (
+            this.inverseDepth[index] > 0 &&
+            Math.abs(depth - this.inverseDepth[index]) <= depth * 0.0001
+          ) {
+            for (let channel = 0; channel < 3; channel++)
+              this.pixels[base + channel] +=
+                (a.color[channel] - this.pixels[base + channel]) * opacity;
+          }
+        } else if (depth > this.inverseDepth[index]) {
           this.inverseDepth[index] = depth;
-          this.write(index, color);
+          if (smooth) {
+            const u = (wa * p.inverseDepth) / depth;
+            const v = (wb * q.inverseDepth) / depth;
+            const w = 1 - u - v;
+            for (let channel = 0; channel < 3; channel++)
+              this.pixels[base + channel] =
+                u * a.color[channel] + v * b.color[channel] + w * c.color[channel];
+          } else {
+            this.write(index, a.color);
+          }
         }
       }
   }
-  triangle(a: Vec3, b: Vec3, c: Vec3, color: Color) {
-    let normal = normalize(cross(subtract(b, a), subtract(c, a)));
-    const center = multiply(add(add(a, b), c), 1 / 3);
-    if (dot(normal, subtract(this.camera.origin, center)) < 0) normal = multiply(normal, -1);
-    const light = 0.24 + 0.76 * Math.max(0, dot(normal, normalize({ x: -0.4, y: 0.85, z: -0.35 })));
-    const shaded: Color = [color[0] * light, color[1] * light, color[2] * light];
-    const input = [a, b, c].map((point) => this.toCamera(point)),
-      output: Vec3[] = [];
+  paint(a: Vertex, b: Vertex, c: Vertex, opacity = 1, smooth = true) {
+    const input = [a, b, c].map(({ point, color }) => ({ point: this.toCamera(point), color }));
+    if (input.every((vertex) => vertex.point.z >= 0.06)) {
+      this.rasterTriangle(input[0], input[1], input[2], opacity, smooth);
+      return;
+    }
+    const output: Vertex[] = [];
     for (let i = 0; i < 3; i++) {
       const start = input[i],
         end = input[(i + 1) % 3];
-      const insideStart = start.z >= 0.06,
-        insideEnd = end.z >= 0.06;
+      const insideStart = start.point.z >= 0.06,
+        insideEnd = end.point.z >= 0.06;
       if (insideStart) output.push(start);
-      if (insideStart !== insideEnd)
-        output.push(
-          add(start, multiply(subtract(end, start), (0.06 - start.z) / (end.z - start.z))),
-        );
+      if (insideStart !== insideEnd) {
+        const t = (0.06 - start.point.z) / (end.point.z - start.point.z);
+        output.push({
+          point: add(start.point, multiply(subtract(end.point, start.point), t)),
+          color: mixInk(start.color, end.color, t),
+        });
+      }
     }
     for (let i = 1; i + 1 < output.length; i++)
-      this.rasterTriangle(output[0], output[i], output[i + 1], shaded);
+      this.rasterTriangle(output[0], output[i], output[i + 1], opacity, smooth);
   }
-  line(start: Vec3, end: Vec3, color: Color, xray = false, radius = 0) {
+  triangle(a: Vec3, b: Vec3, c: Vec3, color: Color, opacity = 1) {
+    this.paint({ point: a, color }, { point: b, color }, { point: c, color }, opacity, false);
+  }
+  line(start: Vec3, end: Vec3, color: Color, xray = false, radius = 0, hiddenLight = 0.4) {
     let a = this.toCamera(start),
       b = this.toCamera(end);
     if (a.z < 0.061 && b.z < 0.061) return;
@@ -154,11 +187,11 @@ export class Raster {
           if (x + ox < 0 || x + ox >= this.width || y + oy < 0 || y + oy >= this.height) continue;
           const index = (y + oy) * this.width + x + ox;
           if (depth >= this.inverseDepth[index] * 0.998) this.write(index, color);
-          else if (xray && i % 10 < 4) this.write(index, color, 0.4);
+          else if (xray && i % 10 < 4) this.write(index, color, hiddenLight);
         }
     }
   }
-  marker(point: Vec3, color: Color, size = 4) {
+  marker(point: Vec3, color: Color, size = 4, shape: "disc" | "ring" | "diamond" = "disc") {
     const p = this.toCamera(point);
     if (p.z <= 0.061) return;
     const screen = this.toScreen(p),
@@ -166,13 +199,12 @@ export class Raster {
       py = Math.round(screen.y);
     for (let y = -size; y <= size; y++)
       for (let x = -size; x <= size; x++) {
-        if (
-          x * x + y * y <= size * size &&
-          px + x >= 0 &&
-          px + x < this.width &&
-          py + y >= 0 &&
-          py + y < this.height
-        )
+        const r2 = x * x + y * y;
+        const inside =
+          shape === "diamond"
+            ? Math.abs(x) + Math.abs(y) === size
+            : r2 <= size * size && (shape === "disc" || r2 > (size - 1) ** 2);
+        if (inside && px + x >= 0 && px + x < this.width && py + y >= 0 && py + y < this.height)
           this.write((py + y) * this.width + px + x, color);
       }
   }

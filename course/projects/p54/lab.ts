@@ -1,5 +1,21 @@
 import type { ProjectLabMeta } from "../../labs/types";
 const data = {
+  native: {
+    directory: "/field-notes/optics",
+    withDemo: true,
+    overview: ["anvil"],
+    lessons: { "fog54-10": ["anvil"] },
+    takes: {
+      anvil: {
+        title: "Hai tháp mây và một khe trời",
+        source: "Project 54 · C++/SDL3 · Release",
+        poster: "anvil.png",
+        alt: "Mây hình đe trên trời xanh, ba ảnh nhỏ cùng cảnh so cực đại, trung bình và độ che phủ.",
+        caption:
+          "Hai tháp và khoảng trống thuộc cùng mảng mật độ. Ba hình nhỏ không phải ba dataset khác nhau.",
+      },
+    },
+  },
   base: {
     label: "VOLUME / LIGHTBOX",
     title: "Một khối dữ liệu, ba cách nhìn",

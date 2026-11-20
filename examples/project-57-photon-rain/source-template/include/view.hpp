@@ -1,24 +1,11 @@
 #pragma once
+#include "chamber-readout.hpp"
+#include "chamber.hpp"
 #include "statistics.hpp"
-#include <SDL3/SDL.h>
 #include <optional>
 #include <string>
 
 namespace photon {
-constexpr int viewWidth = 1080;
-constexpr int viewHeight = 720;
-inline const SDL_FRect mediumRect{70, 150, 540, 360};
-
-inline void require(bool success) {
-    if (!success) {
-        throw std::runtime_error(SDL_GetError());
-    }
-}
-
-inline SDL_FPoint screen(Point point) {
-    return {static_cast<float>(340 + 180 * point[0]), static_cast<float>(330 - 180 * point[1])};
-}
-
 inline const char* statusName(Status status) {
     if (status == Status::Absorbed) {
         return "absorbed";
@@ -33,20 +20,38 @@ inline const char* statusName(Status status) {
 }
 
 #if LAB_CHECKPOINT >= 1
-// Vẽ hình trước khi thêm ngẫu nhiên hoặc mô hình hấp thụ.
-inline void drawMedium(SDL_Renderer* renderer) {
-    require(SDL_SetRenderDrawColor(renderer, 25, 42, 66, 255));
-    require(SDL_RenderFillRect(renderer, &mediumRect));
-    require(SDL_SetRenderDrawColor(renderer, 125, 160, 200, 255));
-    require(SDL_RenderRect(renderer, &mediumRect));
-    require(SDL_RenderDebugText(renderer, 70, 120, "XY medium: [-1.5,1.5] x [-1,1]"));
+// The apparatus is visible before the learner adds the first random flight.
+// [snippet set-up-tank]
+inline void drawMedium(SDL_Renderer* r, Settings settings = {}) {
+    panel(r, 0, 0, viewWidth, viewHeight, {10, 20, 29, 255});
+    panel(r, 26, 26, 4, 52, teal);
+    label(r, 43, 27, "SIMULATION PATH  /  OPTICS   57", teal);
+    label(r, 41, 46, "Photon tank", paper, 2.6f);
+    label(r, 703, 39, "MONTE CARLO    /    XY SECTION", muted);
+    line(r, 27, 88, 1052, 88, divider);
+    panel(r, 27, 102, 625, 438, {14, 29, 40, 255});
+    label(r, 47, 110, "01  SOURCE", gold);
+    label(r, 242, 110, "02  HOMOGENEOUS WATER", muted);
+    label(r, 528, 110, "03  SCREEN", teal);
+    paintChamber(r, settings);
+    panel(r, 672, 102, 380, 438, {17, 32, 43, 255});
+    label(r, 693, 120, "RIGHT-WALL SENSOR", teal);
+#if LAB_CHECKPOINT < 6
+    label(r, 693, 151, "Collecting a distribution starts in lesson 6.", muted);
+    label(r, 693, 178, "For now: inspect the selected path.", paper);
+#endif
+    panel(r, 27, 548, 625, 67, {17, 32, 43, 255});
+    panel(r, 27, 619, 625, 72, {17, 32, 43, 255});
+    panel(r, 672, 548, 380, 143, {17, 32, 43, 255});
+    label(r, 693, 563, "HOW TO READ THE TANK", muted);
+    stroke(r, {696, 595}, {720, 595}, 2.5f, gold);
+    label(r, 735, 590, "Selected photon / its recorded steps", paper);
+    stroke(r, {696, 621}, {720, 621}, 1, {85, 133, 145, 255});
+    label(r, 735, 616, "Faint paths: recent histories only", paper);
+    label(r, 694, 646, "Glass depth is illustrative.", muted);
+    label(r, 694, 665, "Transport takes place on the XY plane.", muted);
 }
-
-inline void drawPhoton(SDL_Renderer* renderer, Point position) {
-    const auto centre = screen(position);
-    const SDL_FRect marker{centre.x - 4, centre.y - 4, 8, 8};
-    require(SDL_RenderFillRect(renderer, &marker));
-}
+// [/snippet set-up-tank]
 
 inline Trace preview(Settings settings, int id) {
 #if LAB_CHECKPOINT >= 4
@@ -75,43 +80,54 @@ inline Trace preview(Settings settings, int id) {
 }
 
 inline void drawTrace(SDL_Renderer* renderer, const Trace& trace, int visible, bool ghost = false) {
-    int last = std::min(visible, static_cast<int>(trace.vertices.size()) - 1);
-    require(SDL_SetRenderDrawColor(renderer, 70, 90, 112, 255));
-    if (!ghost) {
-        require(SDL_SetRenderDrawColor(renderer, 250, 200, 90, 255));
-    }
+    if (trace.vertices.empty())
+        return;
+    const int last = std::clamp(visible, 0, static_cast<int>(trace.vertices.size()) - 1);
     for (int i = 1; i <= last; ++i) {
         const auto a = screen(trace.vertices[i - 1].position);
         const auto b = screen(trace.vertices[i].position);
-        require(SDL_RenderLine(renderer, a.x, a.y, b.x, b.y));
+        if (ghost)
+            line(renderer, a.x, a.y, b.x, b.y, {74, 125, 133, 255});
+        else {
+            stroke(renderer, a, b, 4.5f, {144, 115, 65, 255});
+            stroke(renderer, a, b, 1.8f, gold);
+            if (trace.vertices[i].event == Event::Scatter)
+                panel(renderer, b.x - 2, b.y - 2, 4, 4, {238, 246, 193, 255});
+        }
     }
     if (ghost) {
         return;
     }
+    // [snippet selected-photon]
+    const auto point = screen(trace.vertices[last].position);
+    const float x = point.x, y = point.y;
     const Event shown = trace.vertices[last].event;
+    // [/snippet selected-photon]
+    SDL_Color color = gold;
     if (shown == Event::Absorption) {
-        require(SDL_SetRenderDrawColor(renderer, 255, 100, 120, 255));
+        color = coral;
+        line(renderer, x - 5, y - 5, x + 5, y + 5, color);
+        line(renderer, x - 5, y + 5, x + 5, y - 5, color);
     }
     if (shown == Event::Escape) {
-        require(SDL_SetRenderDrawColor(renderer, 90, 220, 190, 255));
+        color = teal;
     }
     if (last == static_cast<int>(trace.vertices.size()) - 1 && trace.status == Status::Censored) {
-        require(SDL_SetRenderDrawColor(renderer, 195, 145, 250, 255));
+        color = lilac;
     }
-    drawPhoton(renderer, trace.vertices[last].position);
-    if (trace.vertices.size() == 1) {
-        const auto origin = screen(trace.vertices.front().position);
-        require(SDL_RenderLine(renderer, origin.x, origin.y, origin.x + 28, origin.y));
-    }
+    line(renderer, x, y - 5, x + 5, y, color);
+    line(renderer, x + 5, y, x, y + 5, color);
+    line(renderer, x, y + 5, x - 5, y, color);
+    line(renderer, x - 5, y, x, y - 5, color);
+    panel(renderer, x - 1, y - 1, 3, 3, paper);
 }
 #endif
 
 #if LAB_CHECKPOINT >= 2
 inline void drawSample(SDL_Renderer* renderer, Settings settings, int id) {
     const auto sample = sampleFirst(settings, id);
-    require(SDL_SetRenderDrawColor(renderer, 115, 145, 180, 255));
-    require(SDL_RenderDebugText(renderer, 70, 555, "Sampled free path: display axis 0..6 (not a trajectory)"));
-    require(SDL_RenderLine(renderer, 70, 590, 610, 590));
+    label(renderer, 70, 558, "DRAWN FREE PATH   /   0 ... 6 units (>=6 clips here)", muted);
+    line(renderer, 70, 590, 610, 590, divider);
     const float x = static_cast<float>(70 + std::min(6.0, sample.distance) * 90);
     const SDL_FRect marker{x - 2, 580, 4, 20};
     require(SDL_SetRenderDrawColor(renderer, 245, 195, 80, 255));
@@ -121,12 +137,12 @@ inline void drawSample(SDL_Renderer* renderer, Settings settings, int id) {
 
 #if LAB_CHECKPOINT >= 5
 inline void drawTimeline(SDL_Renderer* renderer, int vertexCount, int visible) {
-    require(SDL_SetRenderDrawColor(renderer, 120, 150, 180, 255));
-    require(SDL_RenderDebugText(renderer, 70, 630, "Drag timeline / arrows: inspect recorded path"));
-    require(SDL_RenderLine(renderer, 70, 665, 610, 665));
+    label(renderer, 70, 631, "RECORDED EVENTS   /   drag or use arrow keys", muted);
+    line(renderer, 70, 665, 610, 665, divider);
     const int last = std::max(1, vertexCount - 1);
     const float x = 70 + 540 * static_cast<float>(std::min(visible, vertexCount - 1)) / last;
     const SDL_FRect marker{x - 4, 655, 8, 20};
+    ink(renderer, gold);
     require(SDL_RenderFillRect(renderer, &marker));
 }
 
@@ -140,22 +156,21 @@ inline std::optional<int> pickVertex(float x, float y, int vertexCount) {
 
 #if LAB_CHECKPOINT >= 6
 inline void drawCounts(SDL_Renderer* renderer, const Counts& counts) {
+    instrumentReadout(renderer, counts);
     const std::array<int, 4> values{counts.absorbed, counts.escaped, counts.censored, counts.ballistic};
-    const std::array<const char*, 4> labels{"Absorbed", "Escaped (any side)", "Censored (event limit)", "Ballistic (subset of escaped)"};
-    const std::array<SDL_Color, 4> colors{{{255, 100, 120, 255}, {90, 220, 190, 255}, {195, 145, 250, 255}, {245, 195, 80, 255}}};
+    const std::array<const char*, 4> labels{"Absorbed", "Escaped (any side)", "Censored", "Ballistic: part of escaped"};
+    const std::array<SDL_Color, 4> colors{coral, teal, lilac, gold};
     for (int i = 0; i < 4; ++i) {
-        require(SDL_SetRenderDrawColor(renderer, 210, 220, 240, 255));
-        require(SDL_RenderDebugText(renderer, 700, 150 + 85 * static_cast<float>(i), labels[i]));
+        const float y = 405.f + 30 * i;
+        label(renderer, 693, y, labels[i], paper);
         double ratio = 0;
         if (counts.completed > 0) {
             ratio = static_cast<double>(values[i]) / counts.completed;
         }
-        const auto color = colors[i];
-        require(SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a));
-        const SDL_FRect bar{700, 175 + 85 * static_cast<float>(i), static_cast<float>(300 * ratio), 20};
-        require(SDL_RenderFillRect(renderer, &bar));
-        const std::string count = std::to_string(values[i]) + " / " + std::to_string(counts.completed);
-        require(SDL_RenderDebugText(renderer, 700, 202 + 85 * static_cast<float>(i), count.c_str()));
+        label(renderer, 935, y, std::to_string(values[i]) + "/" + std::to_string(counts.completed), colors[i]);
+        panel(renderer, 693, y + 13, 332, 3, divider);
+        if (values[i] > 0)
+            panel(renderer, 693, y + 13, static_cast<float>(332 * ratio), 3, colors[i]);
     }
 }
 #endif

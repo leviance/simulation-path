@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Gom nhiều đường đi thành thống kê
 
@@ -22,7 +23,14 @@ scatteredPhotons đếm photon từng có ít nhất một Scatter; scatterEvent
 
 ## Viết code từng bước
 
+Đến lúc thôi nhìn một đường đẹp và hỏi cả bể nhận được gì. Mỗi điểm hấp thụ thêm một dấu vào ô bản đồ; mỗi lần tán xạ cũng vậy. Chỉ khi thoát ở mặt phải mới cộng vào một trong 24 ô trên màn thu.
+
+<CourseWorkFile project="57" step={6} path="include/statistics.hpp" />
+<CourseWorkFile project="57" step={6} path="include/chamber-readout.hpp" />
+
 ### Bước 1 — Khai báo các bộ đếm có tên rõ ràng
+
+{/* snippet include/statistics.hpp#tank-counts */}
 
 ```cpp title="include/statistics.hpp"
 struct Counts {
@@ -33,6 +41,9 @@ struct Counts {
     int ballistic = 0;
     int scatteredPhotons = 0;
     int scatterEvents = 0;
+    std::array<int, 24> detectorBins{};
+    std::array<int, 48 * 32> absorptionMap{};
+    std::array<int, 48 * 32> scatterMap{};
     bool operator==(const Counts&) const = default;
 };
 ```
@@ -69,6 +80,34 @@ Chỉ giữ 24 trace gần nhất để vẽ nền mờ. Đây không phải to�
 ### Bước 4 — Thêm mẫu thủ công trước khi chạy tự động
 
 Native N thêm 1 photon, M thêm 32; Canvas có hai nút tương ứng. Mở lượt mới completed=0 dù preview ID 0 đã có đường đi. Chọn ID/đỉnh không tăng completed. Nút chạy tự động chỉ xuất hiện có tác dụng từ Bài 08, để ta kiểm bộ đếm trước scheduler.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="57" step={6} path="include/controls.hpp" />
+<CourseWorkFile project="57" step={6} path="include/view.hpp" />
+<CourseWorkFile project="57" step={6} path="src/main.cpp" />
+
+Cộng các ô hấp thụ phải bằng số photon bị hấp thụ. Cộng các ô tán xạ phải bằng số **sự kiện** tán xạ, có thể lớn hơn số photon đã phát.
+
+Một photon có thể để nhiều dấu tán xạ, nhưng chỉ có thể bị hấp thụ một lần. Màn bên phải chỉ nhận điểm cuối chạm đúng thành phải.
+
+{/* snippet include/statistics.hpp#tank-events */}
+
+```cpp title="include/statistics.hpp — Đếm sự kiện theo vị trí"
+for (const Vertex& vertex : trace.vertices) {
+    const int x = binAt(vertex.position[0], left, right, 48);
+    const int y = binAt(vertex.position[1], bottom, top, 32);
+    const int cell = x + 48 * y;
+    if (vertex.event == Event::Absorption) {
+        ++counts.absorptionMap[cell];
+    } else if (vertex.event == Event::Scatter) {
+        ++counts.scatterMap[cell];
+    } else if (vertex.event == Event::Escape && std::abs(vertex.position[0] - right) < 1e-9) {
+        const int strip = binAt(vertex.position[1], bottom, top, 24);
+        ++counts.detectorBins[strip];
+    }
+}
+```
 
 ## Ghép các phần lại
 

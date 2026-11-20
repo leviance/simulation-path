@@ -1,5 +1,19 @@
 # Project 57 — Mưa photon ngẫu nhiên
 
+## Từ starter tới chương trình của bạn
+
+So bể trong suốt với bể tán xạ. Dãy 24 ô chỉ đếm những photon thật sự tới mặt phải; hai bản đồ 48×32 đếm các điểm hấp thụ và từng lần tán xạ. Lượt hoàn chỉnh mặc định có 16.384 photon, seed 42. Các đường mảnh chỉ biểu diễn tối đa 24 lịch sử gần nhất, không phải toàn bộ quần thể dùng để tính thống kê.
+
+Giải nén ZIP vào một thư mục riêng, mở terminal cạnh CMakeLists.txt. CMake sẽ tạo thư mục work từ starter đúng một lần. Bạn viết tiếp trong đó qua tất cả các bài; không chép final lên bài làm.
+
+```bash
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_57_work --parallel 1
+```
+
+Với Visual Studio, mở build-work/Release/project_57_work.exe; với generator một cấu hình, mở build-work/project_57_work. Cuối học phần, build thêm target project_57_tests và chạy ctest --test-dir build-work -C Release --output-on-failure --timeout 20. Lần này CTest đọc header trong work/include, không đọc đáp án final/include.
+
+
 Tự xây Monte Carlo trong môi trường 2D: photon đi một quãng ngẫu nhiên, bị hấp thụ hoặc đổi hướng khi tán xạ, rồi có thể thoát qua bất kỳ cạnh nào. Xem lại một lịch sử theo seed/ID, gom nhiều lịch sử thành thống kê và đọc mức bất định.
 
 Đây là mô hình học thuật toán, không mô phỏng thiết bị X-ray, Compton/Rayleigh, liều bức xạ hoặc công cụ y khoa.
@@ -53,7 +67,7 @@ Không tự retry khi timeout. Automation cần outer timeout/process-tree clean
 - Mở paused. Escape thoát; các phím chỉ hiện từ checkpoint tương ứng.
 - Bài 02: Up/Down chọn preview ID, A/D đổi muA, B đổi seed 42/2026/1, P đổi preset, R reset. Trước Bài 05 chỉ có chân không/hấp thụ thuần và muS=0.
 - Bài 05: J/K đổi muS, L chọn eventLimit 1/8/64, Left/Right hoặc kéo timeline xem vertex. Preset thêm mixed/scatter-only.
-- Bài 06: N thêm 1 photon, M thêm 32, Q chọn count 512/2048/8192; xem lại ID không tally.
+- Bài 06: N thêm 1 photon, M thêm 32, Q chọn count 512/2048/8192/16384; xem lại ID không tally.
 - Bài 08: Space chạy/dừng, V chạy audit nhỏ. Blur/minimize/reset dừng và hủy capture; không tự resume. Input dùng logical coordinates, bỏ letterbox.
 
 Timeline chỉ xem lịch sử đã ghi, không lấy thêm RNG. Màu điểm theo event ở vertex đang xem. Hồng=absorption, xanh=escape, tím=Censored. Thước S là trục số 0..6, không trajectory và không cắt dữ liệu S thành 6. Title đọc preview, Counts và ballistic CI khi N>0.
@@ -70,7 +84,7 @@ U=(nextUint32+.5)/2^32 thuộc (0,1). S=-log1p(-U)/muT; chân không cho∞, sam
 
 Analog unit photon: tại collision, hấp thụ với muA/muT, còn lại tán xạ. Dùng U mới cho loại sự kiện và U khác cho angle=2πU. Đều góc trên đường tròn 2D, không đều trên sphere 3D. Không nhân thêm transmission để giảm trọng số.
 
-Tối đa 64 tương tác/photon, 8192 photon/lượt. Chạm limit chưa kết thúc là Censored; không gán absorbed, không bỏ mẫu khỏi N. Trace≤limit+1 vertices. Giữ tối đa 24 trace đã tính và một preview hữu hạn. Mỗi frame thêm tối đa 32 photon mới, không catch-up; manual batch ưu tiên trước auto.
+Tối đa 64 tương tác/photon, 16.384 photon/lượt. Chạm limit chưa kết thúc là Censored; không gán absorbed, không bỏ mẫu khỏi N. Trace≤limit+1 vertices. Giữ tối đa 24 trace đã tính và một preview hữu hạn. Mỗi frame thêm tối đa 32 photon mới, không catch-up; manual batch ưu tiên trước auto.
 
 N=absorbed+escaped+censored. Ballistic là subset escaped chưa từng tán xạ; scatteredPhotons và scatterEvents không phải nhóm terminal. Tổng escaped tính mọi cạnh. [escaped/N,(escaped+censored)/N] là khoảng kết cục chưa biết, không CI của xác suất.
 
@@ -88,4 +102,4 @@ Không năng lượng photon, Compton/Rayleigh, detector response, phản xạ/k
 
 Tham khảo [PBRT sampling](https://pbr-book.org/3ed-2018/Light_Transport_II_Volume_Rendering/Sampling_Volume_Scattering), [phase functions](https://www.pbr-book.org/4ed/Volume_Scattering/Phase_Functions), [NIST Wilson](https://www.itl.nist.gov/div898/handbook/prc/section2/prc241.htm), [MurmurHash3 public-domain source](https://github.com/aappleby/smhasher/blob/master/src/MurmurHash3.cpp).
 
-Tiếp theo: Project 58 — Khối đất 16×16×16, phần Voxel World, hiện Sắp ra mắt.
+Tiếp theo: Project 58 — Khối đất 16×16×16, phần Voxel World.

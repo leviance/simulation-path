@@ -1,5 +1,19 @@
 # Project 52 — Bắn tia vào hình học
 
+## Từ starter tới chương trình của bạn
+
+Tìm hai điểm cắt qua quả cầu và rút ngắn tia để thấy phần còn nằm trong tầm đo. Chấm trắng chỉ điểm chạm gần nhất, pháp tuyến xanh lá; dấu hình thoi hổ phách đánh dấu điểm ra của vật đặc.
+
+Giải nén ZIP vào một thư mục riêng, mở terminal cạnh CMakeLists.txt. CMake sẽ tạo thư mục work từ starter đúng một lần. Bạn viết tiếp trong đó qua tất cả các bài; không chép final lên bài làm.
+
+```bash
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_52_work --parallel 1
+```
+
+Với Visual Studio, mở build-work/Release/project_52_work.exe; với generator một cấu hình, mở build-work/project_52_work. Cuối học phần, build thêm target project_52_tests và chạy ctest --test-dir build-work -C Release --output-on-failure --timeout 20. Lần này CTest đọc header trong work/include, không đọc đáp án final/include.
+
+
 Xây một công cụ khảo sát tia trong cảnh 3D: ngắm vào plane, sphere, AABB hoặc triangle, di chuyển nguồn/vật thể, rồi đổi góc nhìn để quan sát điểm chạm và pháp tuyến. Đây là bài cầu nối cho picking và các project volume/voxel; không cần học SPH, CT hoặc GPU compute trước.
 
 ## Sản phẩm và cách học
@@ -93,7 +107,7 @@ SDL dùng logical 1200×760 kiểu letterbox. Mọi mouse event đổi bằng `S
 - Box luôn axis-aligned, không xoay. Normal ở cạnh/góc không duy nhất; tie trục giữ thứ tự x→y→z. Triangle hai phía, cạnh đóng, **không watertight** cho mesh cạnh chung.
 - Mọi candidate dùng cùng ray/range; nearest chọn t nhỏ nhất, tie chính xác chọn ID nhỏ hơn. Click ở viewport lớn tạo pickRay riêng từ observer để chọn hình, không ghi đè ray của emitter.
 - Plane toán học vô hạn, miếng lưới hữu hạn chỉ để nhìn. Dịch theo x/z không đổi plane ngang; sửa sang plane nghiêng phải sửa phần vẽ cho khớp.
-- Bề mặt có depth test. Marker/normal là debug world-space; phần tia khuất là nét đứt tối, điểm ra màu vàng và nearest xanh lá. Mesh sphere chỉ dùng để vẽ, query vẫn dùng cầu giải tích.
+- Bề mặt có depth test. Marker/normal là debug world-space; phần tia khuất là nét đứt tối, điểm ra hình thoi hổ phách, chấm trắng là điểm chạm gần nhất và pháp tuyến màu xanh lá. Mesh sphere chỉ dùng để vẽ, query vẫn dùng cầu giải tích.
 
 ## Cấu trúc source
 

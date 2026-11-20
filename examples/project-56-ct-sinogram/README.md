@@ -1,10 +1,24 @@
 # Project 56 — Máy CT đồ chơi
 
-Quay nguồn và detector phẳng quanh một phantom 2D, đo từng projection rồi dựng sinogram. Sản phẩm là dữ liệu forward projection, **chưa tái dựng ảnh CT**. Không thiết bị phát tia, dữ liệu y khoa hoặc công cụ chẩn đoán.
+## Từ starter tới chương trình của bạn
 
-## Lộ trình chín bài
+Nhấn H che khoanh gỗ. Từ một hàng, quan sát dải hình quạt; từ 180 hàng, dự đoán vị trí mắt gỗ rồi đối chiếu với ảnh gốc. Bài 10 chỉ đưa góc và hàng p vào bộ dựng 112². Bài 11 đo RMSE hình dạng sau khi chuẩn hóa hai ảnh bằng cực đại riêng. Với mẫu gỗ mặc định và 180 góc, khoảng 0,405; ảnh không lọc vẫn mờ.
 
-Thử tự làm trong 120–180 phút trước khi đọc lời giải. Dự kiến cả module 12–16 giờ; cần SDL3/input (01–05), normalized ray (52), Beer–Lambert và ảnh log (55).
+Giải nén ZIP vào một thư mục riêng, mở terminal cạnh CMakeLists.txt. CMake sẽ tạo thư mục work từ starter đúng một lần. Bạn viết tiếp trong đó qua tất cả các bài; không chép final lên bài làm.
+
+```bash
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_56_work --parallel 1
+```
+
+Với Visual Studio, mở build-work/Release/project_56_work.exe; với generator một cấu hình, mở build-work/project_56_work. Cuối học phần, build thêm target project_56_tests và chạy ctest --test-dir build-work -C Release --output-on-failure --timeout 20. Lần này CTest đọc header trong work/include, không đọc đáp án final/include.
+
+
+Quay nguồn và detector phẳng quanh một phantom 2D, đo từng projection rồi dựng sinogram. Sản phẩm là dữ liệu forward projection, **tái dựng lát cắt bằng phép trải ngược không lọc**. Không thiết bị phát tia, dữ liệu y khoa hoặc công cụ chẩn đoán.
+
+## Lộ trình mười một bài
+
+Thử tự làm trong 120–180 phút trước khi đọc lời giải. Dự kiến cả module 15–20 giờ; cần SDL3/input (01–05), normalized ray (52), Beer–Lambert và ảnh log (55).
 
 1. Chạy starter rồi vẽ đĩa phantom bằng SDL_RenderFillRect.
 2. Dựng basis radial/tangent, quay nguồn và detector cùng nhau.
@@ -13,8 +27,10 @@ Thử tự làm trong 120–180 phút trước khi đọc lời giải. Dự ki�
 5. Lưu nhiều góc theo row-major, phân biệt NaN chưa đo và p=0.
 6. Quét tối đa hai hàng/frame, pause/reset và xóa dữ liệu khi vật lý đổi.
 7. Suy ra vệt điểm fan-beam, không dùng nhầm đường sin parallel-beam.
-8. So 30/60/120 góc tại các góc vật lý chung.
-9. Kiểm với oracle hình tròn và chạy bản hoàn chỉnh.
+8. So 30/60/120/180 góc tại các góc vật lý chung.
+9. Kiểm từng hàng với nghiệm của đĩa tròn.
+10. Dựng ảnh 112² chỉ từ các góc và hàng đã đo.
+11. Đo độ mờ trên cùng khung ảnh, báo riêng sai số chiếu và sai số hình dạng.
 
 Mỗi checkpoint chạy độc lập. Giữ toàn bộ include/src của snapshot, không chỉ chép main.cpp. Bài học trên website có code theo từng thay đổi và toàn bộ source cuối bài/module.
 
@@ -24,9 +40,9 @@ C++20, CMake 3.24+, SDL3 khóa 3.4.8 bằng FetchContent và SHA256; link SDL3::
 
 ```bash
 cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
+cmake --build build --config Debug --parallel 1
 ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
+cmake --build build --config Release --parallel 1
 ctest --test-dir build -C Release --output-on-failure --timeout 20
 ```
 
@@ -54,7 +70,7 @@ Không tự lặp khi timeout; automation cần total timeout và cleanup proces
 - N đo đúng một hàng; I đảo palette, L đổi display range 1..4 từ Bài 05.
 - Space quét/tiếp tục/dừng từ Bài 06, tối đa 2 hàng×128 tia/frame; hoàn tất tự dừng.
 - T bật trace của điểm (.65,.3) từ Bài 07; chọn phantom đĩa lệch tâm để đối chiếu.
-- Q chọn 30/60/120 góc từ Bài 08, xóa lượt cũ.
+- Q chọn 30/60/120/180 góc từ Bài 08, xóa lượt cũ.
 - V chạy oracle nhỏ từ Bài 09. R reset thông số và dữ liệu; Escape thoát.
 - Click/kéo sinogram từ Bài 05 chọn ô; input được đổi sang logical coordinates, bỏ letterbox. Blur/minimize hủy capture và dừng, không tự resume.
 
@@ -66,9 +82,9 @@ Canvas cùng công thức/biến: DPR, pointer capture, keyboard và reduced-mot
 
 Lát cắt XY, y lên. θ=0 có nguồn (4,0), detector centre (-4,0), chiều tăng pixel (0,1). radial=(cosθ,sinθ), tangent=(-sinθ,cosθ); S=4r, D=-4r, Q=D+s*t, s=8*(u-.5). Direction normalized, maximum=|Q-S|, beam length≤12. 128 pixel dùng u=(column+.5)/128, không có pixel đúng tia tâm liên tục u=.5.
 
-Phantom 1–3 đĩa, centre/radius/mu hữu hạn, radius>0, mu 0..2, |centre|+radius≤1.5. Detector width 8 bao phủ phantom trong hình học này. Các insert cộng mu, không thay nền. measure kiểm beam/scene/strength; chordLength là helper nhận đầu vào đã validate. tau=sum(strength*mu*L), T=exp(-tau), p=-ln(T). Bound bảo thủ tau≤36 nên T vẫn dương, không cần log floor trong miền hỗ trợ. Không suy từ byte màu về p.
+Vật mẫu dùng 1–16 đĩa hoặc vành khăn, centre/radius/mu hữu hạn, radius>0, mu 0..2, |centre|+radius≤1.5. Detector width 8 bao phủ phantom trong hình học này. Các insert cộng mu, không thay nền. measure kiểm beam/scene/strength; chordLength là helper nhận đầu vào đã validate. tau=sum(strength*mu*L), T=exp(-tau), p=-ln(T). Trong miền hỗ trợ, tau≤16×3×2×2=192 nên T vẫn dương, không cần log floor trong miền hỗ trợ. Không suy từ byte màu về p.
 
-Scan 30/60/120 góc, θ=2π*row/views trên [0,2π), không hàng 360°. Sinogram values[column+128*row] lưu p. NaN=chưa đo, acquired=số hàng hoàn chỉnh. Scan chụp settings/scene. Đổi preset/strength/views tạo scan mới; chọn cell/góc, invert, range/trace không thay measurement.
+Scan 30/60/120/180 góc, θ=2π*row/views trên [0,2π), không hàng 360°. Sinogram values[column+128*row] lưu p. NaN=chưa đo, acquired=số hàng hoàn chỉnh. Scan chụp settings/scene. Đổi preset/strength/views tạo scan mới; chọn cell/góc, invert, range/trace không thay measurement.
 
 Fan-beam detector phẳng: điểm P có p_r=dot(P,r),p_t=dot(P,t), offset s=8*p_t/(4-p_r). Vệt không phải đường sin thuần và không áp quy tắc θ+π đảo cột. Trace là vị trí điểm, không intensity hoặc cực đại bắt buộc của đĩa hữu hạn. Phantom ở tâm có các hàng giống nhau; đĩa lệch tâm giúp nhìn angular sampling. Row j của 30 góc khớp row 4j của 120, không cùng index.
 
@@ -76,7 +92,7 @@ Oracle hình tròn r=1, mu=.5: h=4*abs(s)/hypot(8,s); p=sqrt(1-h²) nếu h<1, n
 
 ## Phạm vi và source
 
-Mô hình mono lý tưởng, một ray tại tâm mỗi pixel; không tích phân diện tích detector, noise, scattering, inverse-square response, phổ đa năng lượng, HU/DICOM hay reconstruction. Không phải mô phỏng thiết bị CT đã hiệu chuẩn. Không lấy inverse Radon parallel-beam áp trực tiếp vào fan-beam rồi gọi kết quả chuẩn.
+Mô hình mono lý tưởng, một ray tại tâm mỗi pixel. Phép trải ngược không lọc dùng hình học fan-beam của chính bộ quét; mắt gỗ hiện ra nhưng mép vẫn mờ. Không tích phân diện tích ô detector, không noise, scattering, lọc Fourier hoặc HU/DICOM. Đây không phải thiết bị CT đã hiệu chuẩn.
 
 source-template/tests/README là authored inputs. Starter/checkpoints/final/CMake/ZIP do generator sinh, không đưa vào Git của website. Kiểm desktop riêng mouse/keyboard/resize/DPI/letterbox/blur/reset; CTest/smoke không chứng nhận các tương tác này.
 

@@ -1,11 +1,5 @@
 import {
-  add,
-  subtract,
-  multiply,
-  at,
-  inRange,
-  sphereInterval,
-  boxInterval,
+  measuredChord,
   type Camera,
   type Scene,
   type Ray,
@@ -13,7 +7,10 @@ import {
 } from "@/lib/labs/ray-intersections";
 import { setupCanvas, type CanvasSize } from "../lab-shared";
 import { drawScene } from "./mesh";
-import { Raster, type Color } from "./raster";
+import { Raster } from "./raster";
+import { drawBeam, drawCollimator, type Chord } from "./beam";
+import { observerOverlay, sourceOverlay, sourceRect } from "./hud";
+export { sourceRect as aimRect } from "./hud";
 
 interface DrawingCache {
   raster: Raster;
@@ -26,15 +23,19 @@ interface DrawingCache {
   aimImage: ImageData;
 }
 const cache = new WeakMap<CanvasRenderingContext2D, DrawingCache>();
-
-export function aimRect(size: CanvasSize) {
-  const width = Math.min(240, size.width * 0.36);
-  const height = (width * 190) / 280;
-  return { x: 12, y: size.height - height - 12, width, height };
+interface SceneLayer {
+  geometry: Scene;
+  pose: number[];
+  selected: number;
+  debug: boolean;
+  pixels: Uint8ClampedArray;
+  depth: Float64Array;
 }
+const layers = new WeakMap<Raster, SceneLayer>();
 
 function populate(
   raster: Raster,
+  camera: Camera,
   geometry: Scene,
   ray: Ray,
   hits: (Hit | null)[],
@@ -42,28 +43,51 @@ function populate(
   stage: number,
   selected: number,
   debug: boolean,
+  chord: Chord,
+  observerView: boolean,
 ) {
-  drawScene(raster, geometry, selected, debug);
-  if (stage < 2) return;
-  raster.line(at(ray, ray.tMin), at(ray, ray.tMax), [77, 113, 139], debug);
-  raster.line(at(ray, ray.tMin), at(ray, best?.t ?? ray.tMax), [98, 245, 206], debug, 1);
-  raster.marker(ray.origin, [245, 242, 214], 5);
-  for (const hit of hits) {
-    if (!hit) continue;
-    const color: Color =
-      hit.objectId === (best?.objectId ?? selected) ? [139, 255, 162] : [164, 182, 202];
-    const end = add(hit.point, multiply(hit.normal, 0.65));
-    raster.marker(hit.point, color, 4);
-    raster.line(hit.point, end, color, true, 1);
-    const base = subtract(end, multiply(hit.normal, 0.14));
-    raster.line(end, add(base, multiply(raster.basis.right, 0.08)), color, true);
-    raster.line(end, subtract(base, multiply(raster.basis.right, 0.08)), color, true);
+  // Scanning changes the ray, not the whole optical bench. Restore the
+  // independent mesh's depth too: the collimator moves with the live query.
+  const previous = layers.get(raster);
+  const pose = [
+    camera.origin.x,
+    camera.origin.y,
+    camera.origin.z,
+    camera.target.x,
+    camera.target.y,
+    camera.target.z,
+    camera.tanHalfFov,
+  ];
+  if (
+    previous &&
+    previous.geometry === geometry &&
+    previous.selected === selected &&
+    previous.debug === debug &&
+    pose.every((n, i) => n === previous.pose[i])
+  ) {
+    raster.pixels.set(previous.pixels);
+    raster.inverseDepth.set(previous.depth);
+  } else {
+    raster.begin(camera);
+    drawScene(raster, geometry, selected, debug);
+    if (previous) {
+      previous.pixels.set(raster.pixels);
+      previous.depth.set(raster.inverseDepth);
+      Object.assign(previous, { geometry, pose, selected, debug });
+    } else {
+      layers.set(raster, {
+        geometry,
+        pose,
+        selected,
+        debug,
+        pixels: raster.pixels.slice(),
+        depth: raster.inverseDepth.slice(),
+      });
+    }
   }
-  let interval = null;
-  if (selected === 1 && stage >= 4) interval = sphereInterval(ray, geometry.sphere);
-  if (selected === 2 && stage >= 5) interval = boxInterval(ray, geometry.box);
-  if (interval && inRange(ray, interval.exit))
-    raster.marker(at(ray, interval.exit), [241, 179, 82], 3);
+  if (stage < 2) return;
+  if (observerView) drawCollimator(raster, ray);
+  drawBeam(raster, ray, hits, best, chord, selected, debug);
 }
 
 export function drawPicking(
@@ -83,8 +107,10 @@ export function drawPicking(
 ) {
   setupCanvas(ctx, size);
   // Bound CPU work separately from DPR. Vector labels/crosshair still use DPR.
-  const width = Math.min(1000, Math.round(size.width * size.dpr));
-  const height = Math.round((width * size.height) / size.width);
+  if (size.width < 1 || size.height < 1) return;
+  const scale = Math.min(size.dpr, 1000 / size.width, 900 / size.height);
+  const width = Math.max(1, Math.round(size.width * scale));
+  const height = Math.max(1, Math.round(size.height * scale));
   let drawing = cache.get(ctx);
   if (!drawing || drawing.raster.width !== width || drawing.raster.height !== height) {
     const buffer = document.createElement("canvas");
@@ -109,32 +135,17 @@ export function drawPicking(
     cache.set(ctx, drawing);
   }
   const { raster, buffer, bufferContext, image, aim, aimBuffer, aimContext, aimImage } = drawing;
-  raster.begin(observer);
-  populate(raster, geometry, ray, hits, best, stage, selected, debug);
+  const chord = measuredChord(ray, geometry, selected, stage);
+  populate(raster, observer, geometry, ray, hits, best, stage, selected, debug, chord, true);
   image.data.set(raster.pixels);
   bufferContext.putImageData(image, 0, 0);
   ctx.drawImage(buffer, 0, 0, size.width, size.height);
-  ctx.font = "12px system-ui, sans-serif";
-  ctx.fillStyle = "#d4dfef";
-  ctx.fillText("Góc nhìn quan sát — kéo chuột phải để xoay", 12, 22);
-  if (debug) ctx.fillText("X/Y/Z: đỏ/lục/lam · tia khuất: nét đứt tối", 12, 42);
+  observerOverlay(ctx, size, observer, geometry, ray, stage, best ?? hits[selected], chord, debug);
   if (stage < 2) return;
-  const rect = aimRect(size);
-  aim.begin(emitter);
-  populate(aim, geometry, ray, hits, best, stage, selected, debug);
+  const rect = sourceRect(size);
+  populate(aim, emitter, geometry, ray, hits, best, stage, selected, debug, chord, false);
   aimImage.data.set(aim.pixels);
   aimContext.putImageData(aimImage, 0, 0);
   ctx.drawImage(aimBuffer, rect.x, rect.y, rect.width, rect.height);
-  ctx.strokeStyle = "#69c9db";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
-  const x = rect.x + u * rect.width,
-    y = rect.y + v * rect.height;
-  ctx.beginPath();
-  ctx.moveTo(x - 7, y);
-  ctx.lineTo(x + 7, y);
-  ctx.moveTo(x, y - 7);
-  ctx.lineTo(x, y + 7);
-  ctx.stroke();
-  ctx.fillText("Cửa sổ ngắm — kéo để đổi tia", rect.x, rect.y - 8);
+  sourceOverlay(ctx, rect, u, v);
 }

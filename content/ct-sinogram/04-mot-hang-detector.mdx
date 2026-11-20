@@ -1,4 +1,5 @@
 import { InteractiveLab } from "@/components/labs/interactive-lab";
+import { CourseWorkFile } from "@/components/voxel-work-file";
 
 # Từ chiều dài đến một hàng detector
 
@@ -16,21 +17,30 @@ $$\tau=\sum_i k\mu_iL_i,\qquad T=I/I_0=e^{-\tau},\qquad p=-\ln T.$$
 
 `strength` là hệ số k chung để thử mức suy giảm, không công suất nguồn. Ta giả sử I0 lý tưởng đã chuẩn hóa, không photon noise hoặc đáp ứng detector. Trong mô hình mono này p bằng tau trong sai số số thực. Không mang công thức phổ hai năng lượng ở Project 55 vào rồi tiếp tục khẳng định p tuyến tính theo độ dày.
 
-Preset nền có hai insert dùng **cộng mu**: ở vùng chồng lên nền, insert thêm mu của nó, không thay thế mu nền. Hình phantom vẽ theo thứ tự không có quyền quyết định kết quả đo.
+Ở mắt gỗ, vùng đặc và phần gỗ nền cùng **cộng mu**. Hốc của vành thì đã bị trừ khỏi chiều dài đi trong vật liệu. Hình phantom vẽ theo thứ tự không có quyền quyết định kết quả đo.
 
 <InteractiveLab demo="ct-sinogram" mode="ct56-4" />
 
 ## Viết code từng bước
 
+Giữ yên một góc, cho 128 ô lần lượt hỏi «trên đường từ nguồn tới đây có bao nhiêu gỗ?». Dải dưới sinogram là tỷ số truyền; hàng sắp lưu là −ln(T). Hai đại lượng không thể tráo cho nhau.
+
+<CourseWorkFile project="56" step={4} path="include/projection.hpp" />
+<CourseWorkFile project="56" step={4} path="include/view.hpp" />
+
 ### Bước 1 — Giữ số đo dưới dạng số thực
 
+{/* snippet include/projection.hpp#one-row */}
+
 ```cpp title="include/projection.hpp"
-struct Measurement {
-    double tau = 0;
-    double ratio = 1;
-    double projection = 0;
-};
-using Projection = std::array<Measurement, detectorCount>;
+inline Projection project(double angle, const Scene& scene, double strength) {
+    Projection row;
+    for (int column = 0; column < detectorCount; ++column) {
+        const double u = (column + 0.5) / detectorCount;
+        row[column] = measure(detectorRay(angle, u), scene, strength);
+    }
+    return row;
+}
 ```
 
 `ratio` dùng để vẽ dải detector ở bài này. `projection` là p sẽ lưu trong sinogram. Không đọc lại byte màu để suy p: nhiều giá trị khác nhau đã có thể bị làm tròn về cùng một mức xám.
@@ -71,6 +81,13 @@ drawProjection đổi ratio thành gray=round(255*T), vẽ các rectangle kề n
 ### Bước 4 — Thử các phantom và strength
 
 Trong SDL, P chuyển đĩa ở tâm → đĩa lệch tâm → nền cùng insert. W/S tăng/giảm strength, có clamp [0,2]. Trong Canvas dùng select/slider tương ứng. Khi người học đổi góc, main cập nhật preview; không tính lại 128 ray mỗi frame nếu đầu vào không đổi.
+
+### Nối phần vừa viết vào chương trình
+
+<CourseWorkFile project="56" step={4} path="include/controls.hpp" />
+<CourseWorkFile project="56" step={4} path="src/main.cpp" />
+
+Chọn góc có tia qua mắt gỗ rồi dịch sang tia chỉ gặp phần rỗng. Dùng cùng thang hiển thị cho cả hai và đọc thêm p thay vì chỉ nhìn độ sáng.
 
 ## Ghép các phần lại
 

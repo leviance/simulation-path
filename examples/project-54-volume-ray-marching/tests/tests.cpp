@@ -227,9 +227,13 @@ int main() {
             "zero segment rejected");
     // Cross-language fixtures: these are raw trilinear scalars from the TypeScript reference.
     const Volume cloud = buildVolume(Preset::Cloud, 128);
-    close(sampleDensity(cloud, {-0.20, 0.25, 0}), 0.6893957182765007, 1e-7, "cloud dense landmark matches independent TypeScript implementation");
-    close(sampleDensity(cloud, {-0.85, -0.03, 0.04}), 0.10590575278967647, 1e-7, "cloud thin landmark matches independent TypeScript implementation");
-    close(sampleDensity(cloud, {0.32, -0.20, 0.07}), 0, 0, "cloud channel really contains empty scalar data");
+    close(sampleDensity(cloud, {-0.25, 0.26, 0.12}), 0.7407203266739844, 1e-7, "near tower core matches independent TypeScript implementation");
+    close(sampleDensity(cloud, {0.96, 0.55, -0.04}), 0.10357848962932865, 1e-7, "thin downwind anvil tip matches independent TypeScript implementation");
+    close(sampleDensity(cloud, {0, 0, 0}), 0, 0, "cloud passage really contains empty scalar data");
+    const Ray towerRay = cameraRay({}, 0.5, 0.5, 16.0 / 9);
+    check(sampleDensity(cloud, rayAt(towerRay, 2.65)) > 0.45, "central probe crosses the near bank");
+    close(sampleDensity(cloud, rayAt(towerRay, 3.00)), 0, 0, "central probe passes through actual air");
+    check(sampleDensity(cloud, rayAt(towerRay, 3.36)) > 0.45, "central probe enters a second bank");
     std::cout << "Project 54: " << checks << " checks, " << failures << " failures\n";
     if (failures != 0)
         return EXIT_FAILURE;

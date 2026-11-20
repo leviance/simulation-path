@@ -1,5 +1,21 @@
 import type { ProjectLabMeta } from "../../labs/types";
 const data = {
+  native: {
+    directory: "/field-notes/optics",
+    withDemo: true,
+    overview: ["tank"],
+    lessons: { "photon57-8": ["tank"] },
+    takes: {
+      tank: {
+        title: "Bể quang học",
+        source: "Project 57 · C++/SDL3 · Release",
+        poster: "tank.png",
+        alt: "Bể kính, đường photon, màn thu 24 ô và hai bản đồ đếm hấp thụ và tán xạ.",
+        caption:
+          "Ảnh chụp từ một lượt 16.384 photon, seed 42. Những vệt trên bể chỉ là các đường gần nhất; bản đồ bên phải đếm toàn bộ lượt.",
+      },
+    },
+  },
   base: {
     label: "PHOTON RAIN LAB",
     title: "Theo dõi photon rồi kiểm thống kê",

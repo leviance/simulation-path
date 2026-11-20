@@ -69,7 +69,12 @@ struct Platform {
         SDL_Surface* surface = SDL_CreateSurfaceFrom(width, height, SDL_PIXELFORMAT_RGBA32, pixels.data(), static_cast<int>(rowBytes));
         if (!surface)
             throw std::runtime_error(SDL_GetError());
-        const bool saved = SDL_SaveBMP(surface, file.c_str());
+        bool saved = false;
+        if (file.ends_with(".png")) {
+            saved = SDL_SavePNG(surface, file.c_str());
+        } else {
+            saved = SDL_SaveBMP(surface, file.c_str());
+        }
         SDL_DestroySurface(surface);
         if (!saved)
             throw std::runtime_error(SDL_GetError());

@@ -1,5 +1,21 @@
 import type { ProjectLabMeta } from "../../labs/types";
 const data = {
+  native: {
+    directory: "/field-notes/optics",
+    withDemo: true,
+    overview: ["agate"],
+    lessons: { "slice53-9": ["agate"] },
+    takes: {
+      agate: {
+        title: "Mặt cắt đá mã não",
+        source: "Project 53 · C++/SDL3 · Release",
+        poster: "agate.png",
+        alt: "Khối đá được cưa một nửa, bên phải là ba lát qua cùng điểm trong hốc tinh thể.",
+        caption:
+          "Hốc trên ảnh XY là một phần của chính khối đá bên trái. Kéo đầu dò trong Canvas để xem XZ và YZ đổi thế nào.",
+      },
+    },
+  },
   base: {
     label: "SCALAR / SLICE WORKBENCH",
     title: "Lần theo dữ liệu bên trong khối mẫu",

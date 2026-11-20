@@ -5,9 +5,9 @@
 namespace slice53 {
 // Provided viewer scaffold: orbit changes the observer, never the voxel coordinates.
 struct Camera {
-    double yaw = 0.88;
-    double pitch = 0.55;
-    double distance = 320;
+    double yaw = 0.58;
+    double pitch = 0.36;
+    double distance = 300;
 
     void limit() {
         if (!std::isfinite(yaw) || !std::isfinite(pitch) || !std::isfinite(distance))
@@ -34,7 +34,7 @@ inline CameraFrame cameraFrame(Camera camera, int width, int height) {
     const Vec3 eye{camera.distance * std::cos(camera.pitch) * std::sin(camera.yaw), camera.distance * std::sin(camera.pitch), camera.distance * std::cos(camera.pitch) * std::cos(camera.yaw)};
     const Vec3 forward = unit(eye * -1);
     const Vec3 right = unit(cross(forward, {0, 1, 0}));
-    return {eye, right, cross(right, forward), forward, height / (2 * std::tan(0.48)), width, height};
+    return {eye, right, cross(right, forward), forward, height / (2 * std::tan(0.35)), width, height};
 }
 // [/snippet camera-frame]
 

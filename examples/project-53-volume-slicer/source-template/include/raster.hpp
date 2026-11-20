@@ -12,6 +12,8 @@ class Raster {
     int height_;
     std::vector<std::uint32_t> pixels_;
     std::vector<double> depth_;
+    int sectionAxis_ = -1;
+    double sectionPlane_ = 0;
 
     static std::size_t pixelCount(int width, int height) {
         if (width < 1 || height < 1 || width > 1280 || height > 1280)
@@ -22,6 +24,7 @@ class Raster {
     public:
     Raster(int width, int height) : width_(width), height_(height), pixels_(pixelCount(width, height)), depth_(pixels_.size()) {}
     const std::vector<std::uint32_t>& pixels() const { return pixels_; }
+    void setSectionLight(int axis, double plane) { sectionAxis_ = axis; sectionPlane_ = plane; }
 
     void background(const CameraFrame& frame) {
         std::fill(depth_.begin(), depth_.end(), std::numeric_limits<double>::infinity());
@@ -80,8 +83,10 @@ class Raster {
                 c *= depth;
                 Color color{0.66, 0.73, 0.73};
                 Vec3 normal = unit(vertices[0].normal * a + vertices[1].normal * b + vertices[2].normal * c);
+                const double material = vertices[0].material * a + vertices[1].material * b + vertices[2].material * c;
+                const Vec3 point = vertices[0].point * a + vertices[1].point * b + vertices[2].point * c;
+                if (colored && material >= 0) color = scalarColor(material, window, true);
                 if (slice) {
-                    const Vec3 point = vertices[0].point * a + vertices[1].point * b + vertices[2].point * c;
                     const double u = (point[axes.horizontal] - grid.origin[axes.horizontal]) / extent[axes.horizontal];
                     const double v = (point[axes.vertical] - grid.origin[axes.vertical]) / extent[axes.vertical];
                     const int column = std::clamp(static_cast<int>(u * slice->width), 0, slice->width - 1);
@@ -90,24 +95,55 @@ class Raster {
                     if (scalar < contextIso) continue;
                     color = scalarColor(scalar, window, colored);
                 }
-                const Vec3 viewDirection = unit(frame.eye - (vertices[0].point * a + vertices[1].point * b + vertices[2].point * c));
+                const Vec3 viewDirection = unit(frame.eye - point);
                 if (dot(normal, viewDirection) < 0) normal = normal * -1;
-                double light = 0.45 + 0.40 * std::max(0.0, dot(normal, unit({-0.4, 0.8, 0.6}))) + 0.15 * std::max(0.0, dot(normal, unit({0.8, 0.2, -0.6})));
-                if (slice) light = 0.56 + 0.38 * std::max(0.0, dot(normal, unit({-0.4, 0.8, 0.6}))) + 0.06 * std::max(0.0, dot(normal, viewDirection));
-                pixels_[pixel] = pack({color.r * light, color.g * light, color.b * light});
+                const Vec3 key = unit({-0.4, 0.8, 0.6});
+                double light = 0.48 + 0.46 * std::max(0.0, dot(normal, key)) + 0.15 * std::max(0.0, dot(normal, unit({0.8, 0.2, -0.6})));
+                double glint = 0;
+                if (slice) light = 0.72 + 0.22 * std::max(0.0, dot(normal, key)) + 0.06 * std::max(0.0, dot(normal, viewDirection));
+                else if (material > 0.84) {
+                    double exposure = 1;
+                    if (sectionAxis_ >= 0) {
+                        // Crystals deep behind the cut receive less fill light than those at the opening.
+                        const double setback = std::clamp((sectionPlane_ - point[sectionAxis_]) / 37, 0.0, 1.0);
+                        exposure = 1 - 0.66 * setback;
+                    }
+                    light *= exposure;
+                    glint = 0.24 * exposure * std::pow(std::max(0.0, dot(normal, unit(key + viewDirection))), 18);
+                }
+                pixels_[pixel] = pack({color.r * light + glint, color.g * light + glint, color.b * light + glint});
                 depth_[pixel] = depth;
             }
         }
     }
 };
 
-inline void drawContext(Raster& raster, const CameraFrame& frame, const Mesh& mesh, const Grid& grid, Vec3 probe, const std::array<SliceImage, 3>& slices, Window window, bool colored, bool cut) {
+inline void drawContext(Raster& raster, const CameraFrame& frame, const Mesh& mesh, const Grid& grid, Vec3 probe, const std::array<SliceImage, 3>& slices, Window window, bool colored, bool cut, int sectionView = -1) {
     raster.background(frame);
+    int sectionAxis = -1;
+    if (cut && sectionView >= 0) sectionAxis = axesFor(sectionView).fixed;
+    double sectionPlane = 0;
+    if (sectionAxis >= 0) sectionPlane = probe[sectionAxis];
+    raster.setSectionLight(sectionAxis, sectionPlane);
     for (const Triangle& triangle : mesh) {
         if (!cut) {
             raster.triangle(frame, triangle, grid, nullptr, 0, window, colored);
             continue;
         }
+        // [snippet geode-section]
+        if (sectionAxis >= 0) {
+            // Saw the rock on the same plane as the selected XY, XZ or YZ image.
+            const double a = triangle[0].point[sectionAxis], b = triangle[1].point[sectionAxis], c = triangle[2].point[sectionAxis];
+            if (std::max({a, b, c}) <= sectionPlane) raster.triangle(frame, triangle, grid, nullptr, 0, window, colored);
+            else if (std::min({a, b, c}) < sectionPlane) {
+                const std::vector<Vertex> face(triangle.begin(), triangle.end());
+                const auto visible = clipPolygon(face, sectionAxis, sectionPlane, true);
+                for (std::size_t i = 1; i + 1 < visible.size(); ++i)
+                    raster.triangle(frame, {visible[0], visible[i], visible[i + 1]}, grid, nullptr, 0, window, colored);
+            }
+            continue;
+        }
+        // [/snippet geode-section]
         bool whollyOutside = false;
         bool whollyInside = true;
         for (int axis = 0; axis < 3; ++axis) {
@@ -132,13 +168,18 @@ inline void drawContext(Raster& raster, const CameraFrame& frame, const Mesh& me
     // [snippet context-caps]
     const Vec3 upper = grid.origin + grid.extent();
     for (int view = 0; view < 3; ++view) {
+        if (sectionAxis >= 0 && view != sectionView) continue;
         const Axes axes = axesFor(view);
         Vec3 normal;
         normal[axes.fixed] = 1;
         Vec3 a = probe;
-        Vec3 b = probe;
-        Vec3 c = probe;
-        Vec3 d = probe;
+        if (sectionAxis >= 0) {
+            a[axes.horizontal] = grid.origin[axes.horizontal];
+            a[axes.vertical] = grid.origin[axes.vertical];
+        }
+        Vec3 b = a;
+        Vec3 c = a;
+        Vec3 d = a;
         b[axes.horizontal] = upper[axes.horizontal];
         c[axes.horizontal] = upper[axes.horizontal];
         c[axes.vertical] = upper[axes.vertical];
