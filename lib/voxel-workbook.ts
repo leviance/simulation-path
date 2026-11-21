@@ -10,7 +10,7 @@ export function workbookOption(projectId: string) {
 
 /** Only these lessons have authored, replayable work-file edits; the others teach in starter/. */
 export function hasGuidedWorkFiles(projectId: string) {
-  return hasVoxelWorkbook(projectId) || /^(?:11|31|32|5[2-7])$/.test(projectId);
+  return hasVoxelWorkbook(projectId) || /^(?:11|31|32|35|5[2-7])$/.test(projectId);
 }
 
 export function learnerBuild(projectId: string) {

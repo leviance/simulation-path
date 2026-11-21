@@ -1,21 +1,14 @@
 .readout {
-  font-size: 0.9rem;
-  line-height: 1.7;
+  padding: 0.625rem var(--lab-gutter);
+  font-size: var(--lab-label);
 }
-.readout output {
-  font-variant-numeric: tabular-nums;
-}
+.readout > p + p,
 .readout details {
-  margin-top: 0.8rem;
+  margin-top: 0.65rem;
 }
 .readout table {
   width: 100%;
-  font-size: 0.85rem;
-}
-.readout th,
-.readout td {
   text-align: left;
-  padding: 0.25rem 0.5rem;
 }
 .histogram {
   display: flex;
@@ -38,6 +31,7 @@
   flex: 1;
   max-height: 92px;
 }
+/* Teal = expected area; orange = actual count. These are data series. */
 .histogram i {
   background: #1aa6b7;
 }
@@ -45,7 +39,6 @@
   background: #f68a3c;
 }
 .status {
-  border-left: 3px solid #2bb7b0;
-  padding: 0.4rem 0.75rem;
-  margin: 0.7rem 0;
+  border-left: 3px solid var(--lab-accent);
+  padding: 0.5rem var(--lab-gutter);
 }

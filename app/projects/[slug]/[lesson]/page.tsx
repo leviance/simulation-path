@@ -84,7 +84,7 @@ export default async function LessonPage({
           <b>Bài {lesson.order}</b>
         </nav>
 
-        <ProjectRevisionNotice project={project} />
+        <ProjectRevisionNotice projectId={project.id} />
 
         <header className="lesson-hero">
           <div>

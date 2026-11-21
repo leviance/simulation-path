@@ -132,10 +132,7 @@ export default function HomePage() {
         <div className="project-showcase">
           {featuredProjects.map((project, index) => (
             <Link className="project-card" href={`/projects/${project.slug}`} key={project.id}>
-              <span className="project-number">
-                P{project.id}
-                {project.acceptanceNote ? " · CHỜ NGHIỆM THU" : ""}
-              </span>
+              <span className="project-number">P{project.id}</span>
               <div className={`project-glyph glyph-${index + 1}`} aria-hidden="true">
                 <span />
               </div>

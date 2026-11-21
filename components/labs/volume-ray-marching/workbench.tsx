@@ -170,7 +170,7 @@ export default function Workbench({ stage }: { stage: number }) {
   if (stage === 4) description = "Chỉ đọc một midpoint trong texture 3D; chưa tích lũy dọc tia.";
   return (
     <section
-      className={styles.root}
+      className="lab-workbench"
       data-v54-ready={phase.ready ? "true" : "false"}
       data-dataset={phase.data?.preset ?? "none"}
       data-side={phase.data?.volume.side ?? 0}
@@ -179,7 +179,7 @@ export default function Workbench({ stage }: { stage: number }) {
       data-mode={settings.mode}
       data-generation-ms={phase.data?.generationMs ?? 0}
     >
-      <header className={styles.heading}>
+      <header className="lab-subheading">
         <div>
           <span>VOLUME / LIGHTBOX</span>
           <h3>Một khối dữ liệu, ba cách nhìn</h3>
@@ -198,7 +198,7 @@ export default function Workbench({ stage }: { stage: number }) {
         C++ dùng fragment shader và viewport theo cửa sổ; Canvas dùng ảnh CPU nhỏ, không dùng
         WebGL/WASM.
       </p>
-      <div className={styles.controls}>
+      <div className="lab-controls">
         <label>
           Dataset
           <select
@@ -252,7 +252,7 @@ export default function Workbench({ stage }: { stage: number }) {
           </button>
         </p>
       )}
-      <div className={styles.modes} role="group" aria-label="Chế độ tích lũy">
+      <div className="lab-controls" role="group" aria-label="Chế độ tích lũy">
         <button
           type="button"
           aria-pressed={settings.mode === "mip"}
@@ -307,7 +307,7 @@ export default function Workbench({ stage }: { stage: number }) {
           onMode={changeMode}
         />
       )}
-      <div className={styles.controls}>
+      <div className="lab-controls">
         <button
           type="button"
           disabled={stage < 2}
@@ -358,7 +358,7 @@ export default function Workbench({ stage }: { stage: number }) {
           Camera trong khối
         </label>
       </div>
-      <div className={styles.controls}>
+      <div className="lab-controls">
         <label>
           Step
           <select
@@ -483,7 +483,7 @@ export default function Workbench({ stage }: { stage: number }) {
       </div>
       {stage >= 8 && (
         <>
-          <div className={styles.controls}>
+          <div className="lab-controls">
             <label>
               u{" "}
               <input
@@ -603,7 +603,7 @@ export default function Workbench({ stage }: { stage: number }) {
         </section>
       )}
       {stage >= 10 && (
-        <div className={styles.controls}>
+        <div className="lab-controls">
           <button type="button" disabled={!phase.ready} onClick={() => void verify()}>
             Kiểm fixture hằng và slab
           </button>

@@ -326,7 +326,7 @@ export default function AtomicWorkshop({ mode }: { mode: AtomicMode }) {
   }
 
   return (
-    <section className="interactive-lab" data-atomic-mode={mode} data-ready={ready}>
+    <section className="lab-body" data-atomic-mode={mode} data-ready={ready}>
       <p>{modeQuestions[mode]}</p>
       <fieldset disabled={!ready} style={{ border: 0, padding: 0, margin: 0 }}>
         <Suspense fallback={fallback}>

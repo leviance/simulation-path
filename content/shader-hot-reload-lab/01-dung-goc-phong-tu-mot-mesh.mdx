@@ -1,0 +1,98 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Dựng góc phòng từ một mesh hộp
+
+## Vấn đề cần giải quyết
+
+Chưa cần vẽ vệt nắng. Việc đầu tiên là dựng một ô cửa mà tia sáng thật sự đi qua được. Nếu ta đặt một khung gỗ lên nguyên một bức tường kín, người nhìn có thể tin đó là cửa sổ, nhưng nguồn sáng vẫn chỉ thấy tường.
+
+## Hiểu ý tưởng trước khi viết code
+
+Mở [ZIP Project 35](/downloads/project-35-shader-hot-reload-lab.zip). Starter đã có cửa sổ SDL, context OpenGL, camera và một tấm sàn. Đây là phần bạn đã gặp ở Project 34. Chạy nó trước: kéo chuột phải để đổi góc nhìn. Từ giờ hãy sửa trong `work/`, không chép `final/` đè lên bài làm.
+
+Mỗi vật trong phòng chỉ cần một phép biến đổi cho cùng khối hộp dài một đơn vị, kèm màu và mã vật liệu. Sàn mỏng và rộng; chân tường dài và hẹp; hộp giữa phòng giữ kích thước một mét. GPU không cần biết cái nào là bệ cửa: nó chỉ vẽ các tam giác ở vị trí ta giao. Trong cảnh này Y hướng lên, phòng ở phía Z dương và tường có cửa nằm ngang qua Z bằng 0.
+
+<InteractiveLab demo="shader-hot-reload" mode="shutter-room" />
+
+## Viết code từng bước
+
+### Bước 1. Chừa một lỗ trên tường
+
+Ghép hai mảng bên, một mảng phía dưới và một mảng phía trên. Tính mép của từng khối từ tâm và nửa kích thước: hai mép bên của lỗ ở x bằng −2,45 và 2,45; bậu và đỉnh cửa ở y bằng 1,10 và 3,85. Đó là khoảng không thật chứ không phải hình chữ nhật màu trời.
+
+{/* snippet include/shutter_scene.hpp#room-frame */}
+
+```cpp title="include/shutter_scene.hpp — Chừa một lỗ trên tường"
+// Bốn mảng tường để trống x = [-2.45, 2.45], y = [1.10, 3.85].
+// Chúng dày 0.18: ô cửa là khoảng trống xuyên qua tường, không phải màu sơn.
+block({-5.225F, 5.0F, 0}, {5.55F, 10.0F, 0.18F}, plaster, 0);
+block({ 5.225F, 5.0F, 0}, {5.55F, 10.0F, 0.18F}, plaster, 0);
+block({0, 0.55F, 0}, {4.90F, 1.10F, 0.18F}, plaster, 0);
+block({0, 6.925F, 0}, {4.90F, 6.15F, 0.18F}, plaster, 0);
+```
+
+<CourseWorkFile project="35" step={1} path="include/shutter_scene.hpp" />
+
+### Bước 2. Dùng lại lệnh vẽ của starter
+
+Đọc vòng lặp có sẵn trước khi thêm bệ cửa và hộp. Mỗi lượt chỉ thay ma trận model, màu và mã vật liệu. 36 chỉ số vẫn trỏ tới 12 tam giác của cùng một mesh. Hộp cao một mét, đặt tâm ở y bằng 0,5 thì đáy vừa chạm sàn.
+
+{/* snippet include/room_drawing.hpp#draw-pieces */}
+
+```cpp title="include/room_drawing.hpp — Dùng lại lệnh vẽ của starter"
+for (const Piece& part : room) {
+    gl.UniformMatrix4fv(u.model, 1, GL_FALSE, part.model.m.data());
+    gl.Uniform3f(u.color, part.color.x, part.color.y, part.color.z);
+    gl.Uniform1i(u.material, part.material);
+    gl.DrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_SHORT, nullptr);
+}
+```
+
+### Bước 3. Để chất liệu giúp đọc hình
+
+Sàn và bệ cửa đều là gỗ nhưng vân chạy theo hướng khác nhau. Màu cơ sở được chọn từ dữ liệu bề mặt; ánh sáng được tính ở bước sau. Dùng lại chất liệu gợi ý trong starter rồi thêm chiếu sáng theo pháp tuyến. Chưa đưa một đường sọc nắng nào vào màu sàn.
+
+{/* snippet shaders/room.frag#surface-color */}
+
+```glsl title="shaders/room.frag — Để chất liệu giúp đọc hình"
+vec3 surfaceColor() {
+    if (uMaterial == 0) return limePlaster(uColor, vWorld);
+    if (uMaterial == 1) return oakFloor(uColor, vWorld.xz);
+    if (uMaterial == 2) {
+        float grain = fineGrain(53.0 * vLocal.y + 29.0 * vLocal.z + 1.4 * sin(8.0 * vLocal.x));
+        return mix(uColor, vec3(0.52, 0.39, 0.28), 0.18) * (1.0 + 0.033 * grain);
+    }
+    if (uMaterial == 3) return paintedBox(uColor, vLocal);
+    if (uMaterial == 4) return mix(uColor, vec3(0.86, 0.72, 0.46), 0.58);
+    return uColor;
+}
+```
+
+<CourseWorkFile project="35" step={1} path="shaders/room.frag" />
+
+## Ghép các phần lại
+
+Cấu hình lần đầu tạo thư mục work từ starter. Chạy lần lượt các lệnh dưới đây. Các bài sau chỉ cần build lại target work khi sửa C++; đến bài 6, sửa riêng file GLSL thậm chí không cần build lại.
+
+```sh title="Terminal — chạy mã của bạn trong work/"
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
+cmake --build build-work --config Release --target project_35_work --parallel 1
+.\build-work\Release\project_35_work.exe
+```
+
+Các lệnh chạy ở thư mục chứa CMakeLists.txt của ZIP, với Visual Studio trên Windows. Trên Linux/macOS dùng `-DCMAKE_BUILD_TYPE=Release` lúc cấu hình và chạy `./build-work/project_35_work`. Thư mục work chỉ được tạo nếu chưa có; cấu hình lại không ghi đè bài đang viết.
+
+## Thử làm sai để hiểu đúng
+
+Tạm lấp ô trống bằng một khối tường ở giữa. Khung gỗ vẫn còn, nhưng qua khe không thấy nền trời nữa. Nếu giữ nguyên lỗi này đến bài 4, sàn sẽ không thể nhận nắng. Bỏ khối tường thêm vào trước khi đi tiếp.
+
+## Tự kiểm tra kết quả
+
+Từ góc chéo nhìn thấy nền trời qua khung, bệ có chiều dày và hộp đứng sát sàn. Xoay camera không làm mất phần tường tiếp giáp. Chưa có lá chớp hoặc bóng đổ là đúng ở bài này.
+
+## Bài tập mở rộng
+
+Nếu muốn nâng bậu cửa lên 20 cm mà vẫn giữ nguyên đỉnh cửa, hãy viết lại tâm và chiều cao của *mảng tường dưới*. Chỉ kéo tâm mà không đổi chiều cao thì mép còn lại sẽ hở ở đâu?
+
+Tiếp theo: [Nghiêng lá chớp và đẩy chiếc hộp](/projects/shader-hot-reload-lab/02-nghieng-la-chop-va-day-hop).

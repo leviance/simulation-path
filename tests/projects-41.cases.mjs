@@ -103,15 +103,13 @@ test("Project 41 is discoverable from the homepage, roadmap and current download
   assert.ok(card, "Project 41 needs a clickable entry");
   assert.ok(card.includes('href="' + overview + '"'));
   assert.match(card.replaceAll("<!-- -->", ""), /9 bài/);
-  assert.match(card, /CHỜ NGHIỆM THU/);
-  assert.doesNotMatch(card, /CHỜ XÂY DỰNG LẠI/);
+  assert.doesNotMatch(card, /chờ nghiệm thu|chờ xây dựng lại/i);
   const home = await (await render("/")).text();
   assert.ok(home.includes('href="' + overview + '"'));
   const downloads = await (await render("/downloads")).text();
-  const split = downloads.indexOf('id="previous-editions"');
-  assert.ok(split > 0);
-  assert.ok(downloads.slice(0, split).includes('href="' + zip + '"'));
-  assert.ok(!downloads.slice(split).includes('href="' + zip + '"'));
+  const [current, previous = ""] = downloads.split('id="previous-editions"');
+  assert.ok(current.includes('href="' + zip + '"'));
+  assert.ok(!previous.includes('href="' + zip + '"'));
   const scope = await render("/roadmap/41");
   assert.equal(scope.status, 307);
   assert.equal(scope.headers.get("location"), overview);
@@ -123,7 +121,7 @@ test("Project 41 renders the challenge, source, glossary and all nine Canvas mod
   assert.equal(page.status, 200);
   const html = await page.text();
   assert.match(html, /id="challenge-41"/);
-  assert.match(html, /aria-label="Chờ nghiệm thu"/);
+  assert.doesNotMatch(html, /chờ nghiệm thu/i);
   assert.ok(html.includes('href="' + zip + '"'));
   for (const [index, lesson] of project.lessons.entries()) {
     const route = overview + "/" + lesson.slug;

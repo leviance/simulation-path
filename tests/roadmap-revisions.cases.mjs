@@ -1,8 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { roadmapSeed } from "../course/roadmap.ts";
-import { rebuildRevisions } from "../course/roadmap-revisions.ts";
+import { rebuildRevisions, roadmapRevisions } from "../course/roadmap-revisions.ts";
 import { render, projectCatalog } from "./site-support.mjs";
+
+test("learner pages never display the editorial acceptance label", async () => {
+  const routes = ["/", "/roadmap", "/downloads"];
+  for (const { id, slug } of projectCatalog) {
+    const overview = "/projects/" + slug;
+    routes.push(overview);
+    if (roadmapRevisions[id]?.replacement?.acceptanceNote) {
+      const { default: project } = await import(`../course/projects/p${id}/manifest.ts`);
+      routes.push(overview + "/" + project.lessons[0].slug);
+    }
+  }
+  for (const route of routes) {
+    const response = await render(route);
+    assert.equal(response.status, 200, route);
+    assert.doesNotMatch(await response.text(), /chờ nghiệm thu/i, route);
+  }
+});
 
 test("updated roadmap and homepage distinguish planned products from available material", async () => {
   const roadmap = await (await render("/roadmap")).text();

@@ -237,17 +237,12 @@
   .lesson-hero {
     flex-direction: column;
   }
-  .interactive-lab {
+  [data-lab-ui] {
+    --lab-gutter: 0.75rem;
     box-shadow: 4px 4px 0 var(--green);
   }
-  .interactive-lab > header {
-    flex-direction: column;
-  }
-  .interactive-lab header > b {
-    display: none;
-  }
-  .lab-controls {
-    flex-wrap: wrap;
+  .lab-heading > div {
+    flex-basis: 100%;
   }
   .lab-canvas,
   .lab-body canvas {

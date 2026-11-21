@@ -65,3 +65,28 @@ test("Project 32 fountain revision clears old point-demo progress once without t
   const newlyCompleted = { ...migrated, completedLessonIds: ["p31-l10", "p32-l01"] };
   assert.deepEqual(migrateProgressContent(newlyCompleted, { p32: revision }), newlyCompleted);
 });
+
+test("P35 retires only the gallery/draft lesson completions, and never clears new shutter progress", async () => {
+  const catalog = JSON.parse(
+    await readFile(new URL("../course/projects.json", import.meta.url), "utf8"),
+  );
+  const revision = catalog.find((p) => p.id === "35").contentRevision;
+  assert.equal(revision, 4);
+  for (const old of [2, 3]) {
+    const migrated = migrateProgressContent(
+      {
+        completedLessonIds: ["p34-l01", "p35-l01", "p35-l07"],
+        lastLessonId: "p35-l07",
+        projectContentVersions: { p35: old },
+      },
+      { p35: revision },
+    );
+    assert.deepEqual(migrated.completedLessonIds, ["p34-l01"]);
+    assert.equal(migrated.lastLessonId, undefined);
+    const current = {
+      ...migrated,
+      completedLessonIds: [...migrated.completedLessonIds, "p35-l01"],
+    };
+    assert.deepEqual(migrateProgressContent(current, { p35: revision }), current);
+  }
+});

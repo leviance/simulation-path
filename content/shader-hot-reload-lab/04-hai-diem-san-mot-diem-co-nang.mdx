@@ -1,0 +1,95 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Hai điểm trên sàn, chỉ một điểm có nắng
+
+## Vấn đề cần giải quyết
+
+Tìm hai vị trí rất gần nhau trên sàn. Pháp tuyến của cả hai đều hướng lên và hướng Mặt Trời không đổi. Nếu chỉ dùng Lambert như ở Project 19, chúng có cùng độ sáng. Làm thế nào để một vị trí vẫn nhận nắng còn vị trí kia nằm dưới bóng lá?
+
+## Hiểu ý tưởng trước khi viết code
+
+Hãy đặt điểm sàn vào đúng bức ảnh nhìn từ nguồn sáng. Tại pixel đó, texture đã lưu độ sâu bề mặt đầu tiên mà ánh nắng gặp. Nếu điểm sàn nằm xa hơn giá trị đang lưu thì phía trước nó có vật che. Ta đang so hai độ sâu trong cùng một hệ tọa độ; không so mét trong thế giới với số đã chuẩn hóa trong texture.
+
+Thử nhấn **3** để khép cửa. Từ chỗ đứng, bạn vẫn thấy vài vệt trời xanh giữa các lá, nhưng những sọc nắng trên sàn đã biến mất. Không có gì mâu thuẫn: đường từ mắt ra ngoài lọt qua khe, còn đường từ điểm sàn tới Mặt Trời lại gặp lá chớp. Để biết sàn có nắng hay không, shader cần trả lời câu hỏi thứ hai.
+
+<InteractiveLab demo="shader-hot-reload" mode="shutter-compare" />
+
+## Viết code từng bước
+
+### Bước 1. Chuyển điểm nhìn thấy sang ảnh của nguồn sáng
+
+Trong room.vert, dùng cùng model matrix cho cả gl_Position của mắt và tọa độ clip của đèn. Truyền tọa độ thứ hai tới fragment shader. Chia cho w rồi biến miền từ −1…1 sang 0…1. Điểm nằm ngoài khung của đèn không có dữ liệu bóng; với bài này ta quy ước nó được chiếu sáng.
+
+{/* snippet shaders/room.frag#light-uv */}
+
+```glsl title="shaders/room.frag — Chuyển điểm nhìn thấy sang ảnh của nguồn sáng"
+vec3 point = 0.5 * (vLightClip.xyz / vLightClip.w) + 0.5;
+if (any(lessThan(point, vec3(0.0))) || any(greaterThanEqual(point, vec3(1.0)))) return 1.0;
+ivec2 mapSize = textureSize(uShadow, 0);
+ivec2 pixel = ivec2(floor(point.xy * vec2(mapSize)));
+```
+
+<CourseWorkFile project="35" step={4} path="shaders/room.vert" />
+
+<CourseWorkFile project="35" step={4} path="shaders/room.frag" />
+
+### Bước 2. So với vật đầu tiên trên đường nắng
+
+Đọc đúng một texel. Giả sử texture ghi 0,42 còn sàn có độ sâu 0,58: một mặt ở phía trước đã chặn tia. Nếu hai giá trị bằng nhau trong sai số nhỏ, điểm đang xét chính là mặt đầu tiên. Ánh sáng nền vẫn còn trong vùng bị che; chỉ thành phần nắng trực tiếp mới nhân với mức nhìn thấy nguồn sáng.
+
+{/* snippet shaders/room.frag#compare-depth */}
+
+```glsl title="shaders/room.frag — So với vật đầu tiên trên đường nắng"
+float compareDepth(ivec2 pixel, ivec2 mapSize, float receiverDepth, float bias) {
+    if (any(lessThan(pixel, ivec2(0))) || any(greaterThanEqual(pixel, mapSize))) return 1.0;
+    float blockerDepth = texelFetch(uShadow, pixel, 0).r;
+    if (receiverDepth - bias <= blockerDepth) return 1.0;
+    return 0.0;
+}
+```
+
+### Bước 3. Nối hai lượt vẽ với nhau
+
+Lượt camera cần texture vừa ghi xong, không phải depth buffer của cửa sổ. Gắn sampler vào unit 0 và gửi đúng lightVP đã dùng ở lượt trước. H cho phép bỏ riêng phép so bóng: hình học và vật liệu không thay đổi, nhưng các dải trên sàn phải biến mất.
+
+{/* snippet include/room_drawing.hpp#receive-map */}
+
+```cpp title="include/room_drawing.hpp — Nối hai lượt vẽ với nhau"
+gl.UniformMatrix4fv(u.light, 1, GL_FALSE, light.m.data());
+gl.ActiveTexture(GL_TEXTURE0);
+gl.BindTexture(GL_TEXTURE_2D, shadow.texture);
+gl.Uniform1i(u.shadow, 0);
+gl.Uniform1i(u.shadows, int(s.shadows));
+```
+
+<CourseWorkFile project="35" step={4} path="include/shader_renderer.hpp" />
+
+<CourseWorkFile project="35" step={4} path="include/room_drawing.hpp" />
+
+<CourseWorkFile project="35" step={4} path="include/shader_application.hpp" />
+
+<CourseWorkFile project="35" step={4} path="include/shader_input.hpp" />
+
+## Ghép các phần lại
+
+Nhấn 2 để hé cửa, tìm một dải nắng chạm vào hộp. Nhấn H hai lần. Nếu lần đầu sàn hết sọc nhưng thớ gỗ vẫn còn, bạn đã tách được ánh sáng khỏi màu bề mặt. Dịch hộp bằng A/D và quan sát cả chỗ hộp vừa rời đi.
+
+```sh title="Terminal — chạy mã của bạn trong work/"
+cmake --build build-work --config Release --target project_35_work --parallel 1
+.\build-work\Release\project_35_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Thử đảo phép so gần–xa trong compareDepth. Nhiều nơi lẽ ra có nắng sẽ chuyển tối, trong khi vùng sau vật cản lại sáng. Chọn một điểm, ghi hai giá trị độ sâu rồi khôi phục dấu so đúng; chỉ nhìn hình đen trắng dễ đoán nhầm nguyên nhân.
+
+## Tự kiểm tra kết quả
+
+Cùng sàn có cả dải sáng và dải tối. Khép lá làm vùng nhận nắng thu hẹp; xoay camera không làm bóng trượt trên sàn; khi hộp đi ngang, vùng phía sau hộp thay đổi chứ không bám vào màn hình.
+
+## Bài tập mở rộng
+
+Tìm một điểm mà sàn nhận nắng nhưng mặt bên hộp hướng ra xa cửa vẫn tối. Giải thích điều kiện “không bị che” khác với “mặt hướng về nguồn sáng” như thế nào.
+
+Tiếp theo: [Giữ bóng bám chân hộp](/projects/shader-hot-reload-lab/05-giu-bong-bam-chan-hop).

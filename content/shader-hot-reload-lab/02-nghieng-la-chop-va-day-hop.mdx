@@ -1,0 +1,93 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nghiêng lá chớp và đẩy chiếc hộp
+
+## Vấn đề cần giải quyết
+
+Một ô cửa mở hoàn toàn chỉ tạo được một mảng sáng lớn. Để có nhiều dải, ta cần các lá gỗ hẹp, nghiêng được quanh một trục. Hãy làm cho đúng chuyển động trước khi mong đợi nó đổ bóng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Nhìn lá chớp từ đầu mút: nó giống một hình chữ nhật mỏng quay quanh tâm. Nếu xoay cả vị trí của tâm quanh gốc thế giới, các lá sẽ rời khỏi khung như nan quạt. Ta cần làm theo thứ tự: co khối hộp thành lá, xoay quanh trục X của chính nó, cuối cùng mới đặt nó ở độ cao tương ứng. Chiếc hộp dưới sàn thì chỉ cần đổi X, không quay theo các lá.
+
+<InteractiveLab demo="shader-hot-reload" mode="shutter-blades" />
+
+## Viết code từng bước
+
+### Bước 1. Giữ trục của từng lá ngay trong khung
+
+Chiều cao tâm lá đầu là 1,27 m; cứ thêm 0,345 m lại có một lá. Cả tám lá dùng cùng một góc, không cần tám bộ điều khiển. Hãy thử các góc 42°, 23° và −38°; chúng lần lượt để nhiều, vừa hoặc rất ít nắng xiên lọt qua ở hướng nắng mặc định.
+
+{/* snippet include/shutter_scene.hpp#slat-pivot */}
+
+```cpp title="include/shutter_scene.hpp — Giữ trục của từng lá ngay trong khung"
+const float tilt = std::clamp(state.angle, -45.0F, 70.0F);
+for (int i = 0; i < kSlatCount; ++i) {
+    const float y = kFirstSlatY + kSlatPitch * static_cast<float>(i);
+    block({0, y, 0}, kSlatSize, timber, 2, tilt);
+}
+```
+
+<CourseWorkFile project="35" step={2} path="include/shutter_scene.hpp" />
+
+### Bước 2. Đưa hộp tới vị trí có thể lặp lại
+
+Nhấn A hoặc D vài lần để tâm khối trượt ngang từng bước; giới hạn vị trí để hộp không rời khỏi vùng quan sát. Mũi tên hoặc kéo trái chỉnh lá; chuột phải vẫn chỉ xoay camera. Thả chuột ở ngoài khung hoặc mất focus không được để ứng dụng kéo mãi.
+
+{/* snippet include/shader_input.hpp#move-crate */}
+
+```cpp title="include/shader_input.hpp — Đưa hộp tới vị trí có thể lặp lại"
+inline void slideCrate(ShutterState& s, float delta) {
+    s.boxX = std::clamp(s.boxX + delta, -2.1F, 2.1F);
+}
+```
+
+<CourseWorkFile project="35" step={2} path="include/shader_input.hpp" />
+
+<CourseWorkFile project="35" step={2} path="include/shader_application.hpp" />
+
+### Bước 3. Phân biệt hướng tới Mặt Trời và chiều tia truyền
+
+Vector trong hàm này đi từ sàn về nguồn sáng. Nó hướng lên và ra ngoài cửa; các tia nắng truyền theo hướng ngược lại. Q/E xoay hướng đó quanh trục Y. Gửi uSun sang shader và kiểm đúng kiểu vec3; ở bài này chỉ tô theo hướng của mỗi mặt, chưa biết nó bị vật khác che.
+
+{/* snippet include/shutter_scene.hpp#sun-direction */}
+
+```cpp title="include/shutter_scene.hpp — Phân biệt hướng tới Mặt Trời và chiều tia truyền"
+inline Vec3 sunDirection(const ShutterState& state) {
+    // Vector từ điểm trên sàn về phía Mặt Trời, ngược hướng tia sáng truyền.
+    const float azimuth = shutterRadians(std::clamp(state.sun, -30.0F, 30.0F));
+    const float c = std::cos(azimuth);
+    const float s = std::sin(azimuth);
+    return unit({-0.32F * c - 0.86F * s, 0.78F, 0.32F * s - 0.86F * c});
+}
+```
+
+<CourseWorkFile project="35" step={2} path="include/shader_renderer.hpp" />
+
+<CourseWorkFile project="35" step={2} path="include/room_drawing.hpp" />
+
+<CourseWorkFile project="35" step={2} path="shaders/room.frag" />
+
+## Ghép các phần lại
+
+Nhấn 1, 2, 3 để nhìn mép lá khi mở, hé và khép; bấm N để tiến một bước, Space để chạy hoặc dừng. Trên Canvas mặt cắt, tia có thể chạm một lá hay lọt qua khe. Trên bản C++ ở checkpoint này, sàn chưa phản ứng như vậy: ta mới mô tả *vật che*, chưa hỏi nó che điểm nào.
+
+```sh title="Terminal — chạy mã của bạn trong work/"
+cmake --build build-work --config Release --target project_35_work --parallel 1
+.\build-work\Release\project_35_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Trong phép biến đổi thử xoay cả tâm lá. Mép lá văng khỏi thanh ngang khi đổi góc. Kiểm lại trật tự biến đổi, rồi thử một lỗi độc lập: đảo dấu vector Mặt Trời sẽ làm những mặt quay về phía cửa tối đi.
+
+## Tự kiểm tra kết quả
+
+Tám trục vẫn ở trong khung khi đổi preset. A/D chỉ di chuyển hộp; Q/E không xoay camera; chân hộp không xuyên sàn. Đổi lá chưa tạo sọc nắng giả trong vật liệu.
+
+## Bài tập mở rộng
+
+Vẽ tiết diện của một lá và một tia xiên lên giấy. Vì sao “khép với tia nắng” không nhất thiết có nghĩa là người đứng thẳng trước cửa không còn thấy trời?
+
+Tiếp theo: [Nhìn căn phòng từ phía nguồn sáng](/projects/shader-hot-reload-lab/03-nhin-can-phong-tu-phia-nguon-sang).

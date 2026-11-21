@@ -32,11 +32,10 @@ export function FountainObservation({
   const particle = scene.selected < scene.active ? particleAt(scene, scene.selected) : null;
   return (
     <section className={styles.panel} aria-label="Bàn quan sát đài phun">
-      <div className={styles.toolbar}>
+      <div className="lab-controls">
         <div className={styles.group} role="group" aria-label="Thời gian mô phỏng">
           <button
             type="button"
-            className={styles.play}
             disabled={scene.stage < 2 || !canResume}
             onClick={() => action("run")}
           >
@@ -86,7 +85,7 @@ export function FountainObservation({
           Theo một giọt
         </button>
       </div>
-      <p className={styles.caption}>
+      <p className="lab-hint">
         {scene.stage === 1
           ? "Bài đầu chỉ dựng trạng thái ban đầu, chưa cho thời gian chạy. "
           : scene.steps === 0 && scene.paused
@@ -98,7 +97,7 @@ export function FountainObservation({
       </p>
       {inspect && (
         <div className={styles.inspector} role="group" aria-label="Giọt đang theo dõi">
-          <div className={styles.toolbar}>
+          <div className="lab-controls">
             <label>
               Slot cần xem
               <input
@@ -116,7 +115,7 @@ export function FountainObservation({
             )}
           </div>
           {particle ? (
-            <dl className={styles.readings}>
+            <dl className="lab-readout">
               <div>
                 <dt>Giọt đang chọn</dt>
                 <dd>
@@ -147,9 +146,9 @@ export function FountainObservation({
               </div>
             </dl>
           ) : (
-            <p className={styles.caption}>Slot này đã được cấp phát nhưng chưa phát giọt nào.</p>
+            <p className="lab-hint">Slot này đã được cấp phát nhưng chưa phát giọt nào.</p>
           )}
-          <p className={styles.caption}>
+          <p className="lab-hint">
             Vòng màu hổ phách đánh dấu giọt nếu nó ở trong khung hình và không bị mặt lưới che.
             {scene.stage >= 2 && (
               <>

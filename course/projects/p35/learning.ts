@@ -4,249 +4,192 @@ const learning = {
   guides: {
     "p35-l01": {
       focus:
-        "Bỏ mesh/camera không cần thiết, dùng fullscreen triangle và nạp shader từ đúng thư mục của executable/checkpoint.",
+        "Từ một tấm sàn, ghép bốn mảng tường thành ô cửa thật và đặt chiếc hộp xuống đất. Chưa vẽ bóng để kiểm riêng hình học.",
       expected:
-        "File rỗng/quá lớn/NUL/lỗi đọc có diagnostics; chưa build được candidate thì không thay program đang vẽ.",
-      files: [
-        "include/shader_defaults.hpp",
-        "include/shader_files.hpp",
-        "shaders/lab.vert",
-        "src/main.cpp",
-      ],
+        "Từ góc chéo nhìn thấy nền trời qua khung, bệ có chiều dày và hộp đứng sát sàn. Xoay camera không làm mất phần tường tiếp giáp. Chưa có lá chớp hoặc bóng đổ là đúng ở bài này.",
+      files: ["include/shutter_scene.hpp", "shaders/room.frag"],
       steps: [
         {
-          title: "Bắt đầu bằng mặt phẳng toàn màn hình",
-          explanation:
-            "Context/loader đã biết; gl_VertexID tạo triangle lớn phủ viewport mà không mang cube/MVP sang bài không cần geometry.",
+          title: "Chừa một lỗ trên tường",
+          explanation: "Ghép hai mảng bên, một mảng phía dưới và một mảng phía trên.",
         },
         {
-          title: "Chỉ rõ file đang sửa",
-          explanation:
-            "Source directory của target là đường đầu tiên, fallback là thư mục shader riêng theo executable; terminal ghi đường thực.",
+          title: "Dùng lại lệnh vẽ của starter",
+          explanation: "Đọc vòng lặp có sẵn trước khi thêm bệ cửa và hộp.",
         },
         {
-          title: "Đọc cặp source trước khi biên dịch",
-          explanation:
-            "File rỗng/quá lớn/NUL/lỗi đọc có diagnostics; chưa build được candidate thì không thay program đang vẽ.",
+          title: "Để chất liệu giúp đọc hình",
+          explanation: "Sàn và bệ cửa đều là gỗ nhưng vân chạy theo hướng khác nhau.",
         },
       ],
     },
     "p35-l02": {
       focus:
-        "Đọc compile status và log thật, ghi rõ file và vertex/fragment stage; không đoán cú pháp bằng tìm token.",
+        "Chọn trục quay đi qua giữa mỗi lá, rồi dịch chiếc hộp theo sàn. Vì sao lá đã xoay mà vệt nắng vẫn chưa xuất hiện?",
       expected:
-        "Shader thất bại và các shader tạm còn lại phải được xóa; active program nằm ngoài giao dịch.",
-      files: ["include/shader_renderer.hpp", "include/gl_api.hpp"],
+        "Tám trục vẫn ở trong khung khi đổi preset. A/D chỉ di chuyển hộp; Q/E không xoay camera; chân hộp không xuyên sàn. Đổi lá chưa tạo sọc nắng giả trong vật liệu.",
+      files: [
+        "include/room_drawing.hpp",
+        "include/shader_application.hpp",
+        "include/shader_input.hpp",
+        "include/shader_renderer.hpp",
+        "include/shutter_scene.hpp",
+        "shaders/room.frag",
+      ],
       steps: [
         {
-          title: "Compile từng stage riêng",
-          explanation:
-            "GL_COMPILE_STATUS quyết định thành công; không suy từ việc log có chữ error hay từ hình cũ vẫn còn.",
+          title: "Giữ trục của từng lá ngay trong khung",
+          explanation: "Chiều cao tâm lá đầu là 1,27 m; cứ thêm 0,345 m lại có một lá.",
         },
         {
-          title: "Giữ tên file và log",
+          title: "Đưa hộp tới vị trí có thể lặp lại",
           explanation:
-            "Vertex/fragment có label riêng, giữ driver log và giới hạn kích thước log để tránh cấp phát vô hạn.",
+            "Mỗi lần nhấn A hoặc D, tâm hộp nhích sang một bên. Đặt giới hạn để không đẩy hộp ra khỏi vùng quan sát.",
         },
         {
-          title: "Dọn object khi lỗi",
-          explanation:
-            "Shader thất bại và các shader tạm còn lại phải được xóa; active program nằm ngoài giao dịch.",
+          title: "Phân biệt hướng tới Mặt Trời và chiều tia truyền",
+          explanation: "Vector trong hàm này đi từ sàn về nguồn sáng.",
         },
       ],
     },
     "p35-l03": {
       focus:
-        "Phân biệt compile với link; kiểm active uniform, kiểu và array size sau link thay vì chỉ thấy tên trong source.",
-      expected: "Candidate sai type/array size bị xóa ngay, không được đưa sang bước commit.",
-      files: ["include/shader_renderer.hpp", "include/gl_api.hpp"],
+        "Đặt một camera trực giao phía ngoài cửa. Thứ cần giữ lại từ góc nhìn ấy không phải màu gỗ mà là khoảng sâu tới bề mặt đầu tiên.",
+      expected:
+        "V chuyển được giữa phòng và texture vuông. Nhìn từ đèn thấy cả nền trống lẫn các mặt che; nghiêng lá làm dấu vết trong texture thay đổi. Chỉ xoay camera thì ảnh độ sâu đứng yên.",
+      files: [
+        "include/room_drawing.hpp",
+        "include/shader_application.hpp",
+        "include/shader_input.hpp",
+        "include/shadow_target.hpp",
+        "include/shutter_scene.hpp",
+        "shaders/depth.frag",
+        "shaders/depth.vert",
+      ],
       steps: [
         {
-          title: "Link sau compile",
-          explanation:
-            "Hai stage đúng cú pháp vẫn có thể không ghép được varying; GL_LINK_STATUS và program log là bước riêng.",
+          title: "Đặt mắt nhìn từ ngoài cửa",
+          explanation: "Từ tâm vùng cần chiếu, đi ngược chiều tia nắng 15 đơn vị rồi nhìn về tâm.",
         },
         {
-          title: "Đọc interface từ driver",
-          explanation:
-            "GetActiveUniform cho type/size; GetUniformLocation cho vị trí. Uniform trong comment hoặc bị tối ưu mất không đáp ứng contract.",
+          title: "Tạo nơi ghi độ sâu",
+          explanation: "Gắn texture 1024×1024 vào GL_DEPTH_ATTACHMENT của framebuffer.",
         },
         {
-          title: "Chỉ trả candidate hợp lệ",
-          explanation:
-            "Candidate sai type/array size bị xóa ngay, không được đưa sang bước commit.",
+          title: "Hỏi nguồn sáng trước khi vẽ từ mắt",
+          explanation: "Dùng đúng danh sách room đã dựng.",
         },
       ],
     },
     "p35-l04": {
       focus:
-        "Build candidate bên cạnh active program, cập nhật locations khi thành công và giữ hình/metadata cũ khi thất bại.",
+        "Đưa điểm trên sàn vào cùng hệ tọa độ với bản đồ độ sâu. So hai giá trị để nắng xuyên khe, dừng trên hộp và không xuyên tường.",
       expected:
-        "attempts đếm thử, generation đếm commit. Lỗi giữ active effect/fingerprint và ảnh ở cùng uniform snapshot.",
-      files: ["include/shader_renderer.hpp", "include/pipeline.hpp"],
+        "Cùng sàn có cả dải sáng và dải tối. Khép lá làm vùng nhận nắng thu hẹp; xoay camera không làm bóng trượt trên sàn; khi hộp đi ngang, vùng phía sau hộp thay đổi chứ không bám vào màn hình.",
+      files: [
+        "include/room_drawing.hpp",
+        "include/shader_application.hpp",
+        "include/shader_input.hpp",
+        "include/shader_renderer.hpp",
+        "shaders/room.frag",
+        "shaders/room.vert",
+      ],
       steps: [
         {
-          title: "Build bên cạnh bản đang chạy",
-          explanation: "Tạo program khác, không ghi chồng active handle trước khi biết kết quả.",
+          title: "Chuyển điểm nhìn thấy sang ảnh của nguồn sáng",
+          explanation:
+            "Trong room.vert, dùng cùng model matrix cho cả gl_Position của mắt và tọa độ clip của đèn.",
         },
         {
-          title: "Commit cả handle và locations",
-          explanation:
-            "Bind bản mới trước khi xóa bản cũ đang bound; lấy locations từ chính candidate mới.",
+          title: "So với vật đầu tiên trên đường nắng",
+          explanation: "Đọc đúng một texel.",
         },
         {
-          title: "Ghi metadata có ý nghĩa",
-          explanation:
-            "attempts đếm thử, generation đếm commit. Lỗi giữ active effect/fingerprint và ảnh ở cùng uniform snapshot.",
+          title: "Nối hai lượt vẽ với nhau",
+          explanation: "Lượt camera cần texture vừa ghi xong, không phải depth buffer của cửa sổ.",
         },
       ],
     },
     "p35-l05": {
       focus:
-        "Theo dõi timestamp, size và trạng thái file; debounce không block, coalesce thay đổi và không retry storm.",
+        "Tăng dần bias để phân biệt vết tự đổ bóng với bóng bị nhấc khỏi sàn. So đường biên cứng với phép lọc chín mẫu.",
       expected:
-        "Baseline lấy trước đọc/compile; file đổi trong lúc đó còn được phát hiện ở lượt scan tiếp. F5 coalesce cùng thay đổi.",
-      files: ["include/shader_files.hpp", "include/shader_application.hpp"],
+        "Phím F đổi phần chuyển tiếp ở biên mà không biến cả vùng râm thành sáng. R trả bias và góc lá về mặc định. Bạn giải thích được tại sao trung bình chín giá trị độ sâu rồi so một lần không cho kết quả như chín phép so.",
+      files: [
+        "include/room_drawing.hpp",
+        "include/shader_input.hpp",
+        "include/shader_renderer.hpp",
+        "shaders/room.frag",
+      ],
       steps: [
         {
-          title: "Theo dõi cả hai file",
-          explanation:
-            "Timestamp, size và trạng thái tồn tại/không đọc được tạo stamp; quan sát fragment đang được yêu cầu, không nhầm với last-good.",
+          title: "Nhìn chân hộp trước khi đổi ngưỡng",
+          explanation: "Dừng ở góc cửa hé.",
         },
         {
-          title: "Đợi trạng thái ổn định",
-          explanation:
-            "Mỗi thay đổi đặt lại mốc debounce 140 ms; vòng frame vẫn xử lý input/draw, không sleep chờ file.",
+          title: "Lấy chín quyết định thay vì chín độ sâu trung bình",
+          explanation: "Cho chín texel trong một ô 3×3 bỏ phiếu.",
         },
         {
-          title: "Không bỏ lỡ save khi compile",
-          explanation:
-            "Baseline lấy trước đọc/compile; file đổi trong lúc đó còn được phát hiện ở lượt scan tiếp. F5 coalesce cùng thay đổi.",
+          title: "Cho hai cách nhìn dùng cùng shader",
+          explanation: "Phím F quyết định so một hay chín mẫu; ngoặc vuông thay bias.",
         },
       ],
     },
     "p35-l06": {
       focus:
-        "Dùng một uniform snapshot; đổi logical input sang pixel OpenGL, pause/step và resize không compile lại.",
+        "Đổi chất liệu của căn phòng, thử gõ sai GLSL rồi sửa lại. Cửa chớp và hộp không được quay về vị trí ban đầu.",
       expected:
-        "GetUniformfv trên program hiện tại kiểm time/resolution/mouse/zoom ở các kích thước pixel khác nhau.",
-      files: ["include/pipeline.hpp", "include/shader_input.hpp", "include/shader_application.hpp"],
+        "Bản sửa hợp lệ làm màu thay đổi; bản lỗi không làm mất hình hoặc reset camera. Sau khi sửa lại, generation tăng. Chỉ xoay lá hoặc nhấn H không tạo program mới.",
+      files: [
+        "include/shader_application.hpp",
+        "include/shader_files.hpp",
+        "include/shader_input.hpp",
+        "include/shader_overlay.hpp",
+      ],
       steps: [
         {
-          title: "Giữ tọa độ chuẩn trong state",
-          explanation:
-            "Mouse normalized top-left giúp resize không làm nhảy parameter. Uniform snapshot đổi sang physical bottom-left.",
+          title: "Tìm đúng cặp file để sửa",
+          explanation: "Mở thư mục in sau chữ Shaders trong terminal của bản work.",
         },
         {
-          title: "Tách thời gian khỏi reload",
+          title: "Thử, rồi mới đổi program",
           explanation:
-            "Pause/step/reset là thao tác dữ liệu; shader code và program generation không cần đổi.",
+            "Lần theo RoomProgram::replace: compile từng stage, link, hỏi driver về các active uniform.",
         },
         {
-          title: "Kiểm dữ liệu thực đã upload",
-          explanation:
-            "GetUniformfv trên program hiện tại kiểm time/resolution/mouse/zoom ở các kích thước pixel khác nhau.",
+          title: "Đừng biên dịch một file đang ghi dở",
+          explanation: "Editor có thể lưu bằng cách đổi tên file tạm.",
         },
       ],
     },
     "p35-l07": {
       focus:
-        "Từ UV đến palette chuyển động, signed distance của circle, anti-alias và ánh sáng viền có công thức rõ.",
+        "Giữ cùng điểm trên sàn khi đổi camera hoặc di chuyển hộp. So ảnh thành phẩm với độ sâu phía đèn, vùng bị che và độ sáng Lambert.",
       expected:
-        "Mouse/zoom thay uniform, hằng SPEED đổi source rồi reload; người học phân biệt hai đường cập nhật.",
-      files: ["shaders/gradient.frag", "shaders/circle.frag", "include/shader_effects.hpp"],
-      steps: [
-        {
-          title: "Tạo palette từ UV",
-          explanation:
-            "Mix/cos và time tạo gradient chuyển động; mỗi hằng số đều có tác dụng thấy được.",
-        },
-        {
-          title: "Định nghĩa circle bằng khoảng cách",
-          explanation:
-            "SDF length(p-center)-radius cho inside/edge; smoothstep theo pixel size tránh viền răng cưa rõ.",
-        },
-        {
-          title: "Tách dữ liệu và source",
-          explanation:
-            "Mouse/zoom thay uniform, hằng SPEED đổi source rồi reload; người học phân biệt hai đường cập nhật.",
-        },
-      ],
-    },
-    "p35-l08": {
-      focus:
-        "Biểu diễn số phức bằng vec2, lặp z²+c hữu hạn, kiểm escape và tô màu liên tục theo thời gian.",
-      expected:
-        "Smooth count và time đổi palette; pause giữ ảnh, mouse/zoom đổi vùng complex plane.",
-      files: ["shaders/mandelbrot.frag", "include/shader_effects.hpp"],
-      steps: [
-        {
-          title: "Viết phép nhân số phức tường minh",
-          explanation:
-            "vec2 giữ phần thực/ảo; lưu nextX trước khi cập nhật Y để không dùng trạng thái nửa cũ nửa mới.",
-        },
-        {
-          title: "Giới hạn escape loop",
-          explanation:
-            "128 bước, ngưỡng |z|>2; test các điểm rõ trong/ngoài trước khi nhìn biên fractal.",
-        },
-        {
-          title: "Tô màu không làm đổi tập",
-          explanation:
-            "Smooth count và time đổi palette; pause giữ ảnh, mouse/zoom đổi vùng complex plane.",
-        },
-      ],
-    },
-    "p35-l09": {
-      focus:
-        "Nội suy value noise, cộng năm octave fBm và domain warp; hash số nguyên lặp lại được.",
-      expected:
-        "Time tạo flow, noise tạo độ lệch tọa độ; mỗi tầng được quan sát riêng trước khi ghép.",
-      files: ["shaders/noise.frag", "include/shader_effects.hpp"],
-      steps: [
-        {
-          title: "Hash theo ô, không theo frame",
-          explanation:
-            "Unsigned 32-bit wrap lặp lại được ở CPU/GLSL; không đưa time vào giá trị ngẫu nhiên của mỗi góc.",
-        },
-        {
-          title: "Nội suy rồi cộng octave",
-          explanation:
-            "Value noise liên tục qua biên ô; năm octave hữu hạn tạo nhiều thang chi tiết.",
-        },
-        {
-          title: "Dịch và warp tọa độ",
-          explanation:
-            "Time tạo flow, noise tạo độ lệch tọa độ; mỗi tầng được quan sát riêng trước khi ghép.",
-        },
-      ],
-    },
-    "p35-l10": {
-      focus:
-        "Ghép gallery bốn hiệu ứng, error overlay/showcase, kiểm GPU và cleanup, source/ZIP độc lập.",
-      expected:
-        "Source checkpoint, GLSL, ZIP, CMake khóa SDL và README phải khớp; build/tests có timeout, không có output vào Git.",
+        "V và M cho thấy dữ liệu khác nhau nhưng giải thích được cùng cảnh. Khép cửa làm dải sàn thử tối đi, di chuyển hộp làm điểm cũ sáng lại. Bản work đạt CTest và --verify; bạn nhận ra được ảnh nào chụp từ C++ và hình nào là mặt cắt Canvas.",
       files: [
-        "include/shader_overlay.hpp",
-        "include/shader_validation.hpp",
+        "include/room_drawing.hpp",
         "include/shader_application.hpp",
-        "tests/tests.cpp",
+        "include/shader_input.hpp",
+        "include/shader_overlay.hpp",
+        "include/shader_renderer.hpp",
+        "include/shader_validation.hpp",
+        "shaders/room.frag",
       ],
       steps: [
         {
-          title: "Tách các lớp nghiệm thu",
-          explanation:
-            "CPU CTest, OpenGL thật, browser và desktop có phạm vi khác nhau; không dùng một test hẹp thay tất cả.",
+          title: "Đọc cùng cảnh theo ba câu hỏi",
+          explanation: "V xem độ sâu phía đèn.",
         },
         {
-          title: "Giữ công cụ dùng được khi source hỏng",
+          title: "Trở lại đúng điểm dưới bóng hộp",
           explanation:
-            "Showcase sạch vẫn hiện lỗi mới; overlay/cache có lifecycle riêng và không che việc last-good đang chạy.",
+            "Hàm kiểm đặt camera và trạng thái ban đầu, cho GPU vẽ cả căn phòng rồi đọc dữ liệu thật.",
         },
         {
-          title: "Bàn giao source tái lập",
-          explanation:
-            "Source checkpoint, GLSL, ZIP, CMake khóa SDL và README phải khớp; build/tests có timeout, không có output vào Git.",
+          title: "Hỏi cả lượt đèn lẫn lượt mắt",
+          explanation: "Đổi camera rồi chiếu lại điểm sàn lên ảnh mới.",
         },
       ],
     },
@@ -254,77 +197,51 @@ const learning = {
   references: {
     "p35-l01": [
       {
-        label: "SDL CMake",
-        href: "https://wiki.libsdl.org/SDL3/README-cmake",
-        kind: "CMake",
+        label: "Vertex shader",
+        href: "/glossary#vertex-shader",
+        kind: "Thuật ngữ",
       },
     ],
     "p35-l02": [
       {
-        label: "Shader compile status",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glCompileShader.xhtml",
-        kind: "OpenGL API",
+        label: "Tích vô hướng",
+        href: "/glossary#dot-product",
+        kind: "Thuật ngữ",
       },
     ],
     "p35-l03": [
       {
-        label: "Active uniform reflection",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glGetActiveUniform.xhtml",
-        kind: "OpenGL API",
+        label: "Depth buffer",
+        href: "/glossary#depth-buffer",
+        kind: "Thuật ngữ",
       },
     ],
     "p35-l04": [
       {
-        label: "Program lifetime",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDeleteProgram.xhtml",
-        kind: "OpenGL API",
+        label: "Fragment shader",
+        href: "/glossary#fragment-shader",
+        kind: "Thuật ngữ",
       },
     ],
     "p35-l05": [
       {
-        label: "Shader program",
-        href: "/glossary#shader-program",
+        label: "Depth buffer",
+        href: "/glossary#depth-buffer",
         kind: "Thuật ngữ",
       },
     ],
     "p35-l06": [
       {
-        label: "SDL_GetWindowSizeInPixels",
-        href: "https://wiki.libsdl.org/SDL3/SDL_GetWindowSizeInPixels",
-        kind: "SDL API",
+        label: "Nạp lại shader",
+        href: "/glossary#shader-hot-reload",
+        kind: "Thuật ngữ",
       },
     ],
     "p35-l07": [
       {
-        label: "gl_FragCoord",
-        href: "https://registry.khronos.org/OpenGL-Refpages/gl4/html/gl_FragCoord.xhtml",
-        kind: "OpenGL API",
-      },
-    ],
-    "p35-l08": [
-      {
-        label: "Fragment shader",
-        href: "/glossary#fragment-shader",
+        label: "Shader program",
+        href: "/glossary#shader-program",
         kind: "Thuật ngữ",
-      },
-    ],
-    "p35-l09": [
-      {
-        label: "Fragment shader",
-        href: "/glossary#fragment-shader",
-        kind: "Thuật ngữ",
-      },
-    ],
-    "p35-l10": [
-      {
-        label: "SDL_RenderDebugText",
-        href: "https://wiki.libsdl.org/SDL3/SDL_RenderDebugText",
-        kind: "SDL API",
-      },
-      {
-        label: "SDL_CreateSoftwareRenderer",
-        href: "https://wiki.libsdl.org/SDL3/SDL_CreateSoftwareRenderer",
-        kind: "SDL API",
       },
     ],
   },

@@ -1,6 +1,6 @@
 #pragma once
 #include "gl_api.hpp"
-#include "shader_defaults.hpp"
+#include "pipeline.hpp"
 #include <vector>
 
 namespace lab {
@@ -9,7 +9,6 @@ struct ProgramBuildAudit {
     std::vector<GLuint> programs{};
 };
 
-#if LAB_CHECKPOINT >= 2
 inline std::string shaderInfoLog(GlApi& gl, GLuint shader) {
     GLint length = 0;
     gl.GetShaderiv(shader, GL_INFO_LOG_LENGTH, &length);
@@ -23,9 +22,7 @@ inline std::string shaderInfoLog(GlApi& gl, GLuint shader) {
         result = "Driver supplied no shader info log.";
     return result;
 }
-#endif
 
-#if LAB_CHECKPOINT >= 3
 inline std::string programInfoLog(GlApi& gl, GLuint program) {
     GLint length = 0;
     gl.GetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
@@ -39,7 +36,6 @@ inline std::string programInfoLog(GlApi& gl, GLuint program) {
         result = "Driver supplied no program info log.";
     return result;
 }
-#endif
 
 inline GLuint compileShader(GlApi& gl, GLenum stage, const std::string& source, const std::string& file, std::string& diagnostics, ProgramBuildAudit* audit = nullptr) {
     const auto shader = gl.CreateShader(stage);
@@ -57,21 +53,16 @@ inline GLuint compileShader(GlApi& gl, GLenum stage, const std::string& source, 
     gl.GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
     if (compiled == GL_TRUE)
         return shader;
-#if LAB_CHECKPOINT >= 2
     std::string label = "fragment";
     if (stage == GL_VERTEX_SHADER) {
         label = "vertex";
     }
     diagnostics = "[" + label + " compile] " + file + "\n" + shaderInfoLog(gl, shader);
-#else
-    diagnostics = "Shader compile failed: " + file;
-#endif
     gl.DeleteShader(shader);
     return 0;
 }
 
-// This helper does not assume a gallery interface, so the debug overlay can
-// use it too. All intermediate shader objects are detached/deleted after link.
+// Cảnh, ảnh độ sâu và HUD dùng chung khâu liên kết; shader trung gian được giải phóng sau đó.
 inline GLuint linkShaderProgram(GlApi& gl, const ShaderSources& sources, std::string& diagnostics, ProgramBuildAudit* audit = nullptr) {
     const auto vertex = compileShader(gl, GL_VERTEX_SHADER, sources.vertex, sources.vertexLabel, diagnostics, audit);
     if (!vertex)
@@ -100,11 +91,7 @@ inline GLuint linkShaderProgram(GlApi& gl, const ShaderSources& sources, std::st
     gl.DeleteShader(vertex);
     gl.DeleteShader(fragment);
     if (linked != GL_TRUE) {
-#if LAB_CHECKPOINT >= 3
         diagnostics = "[link] " + sources.vertexLabel + " + " + sources.fragmentLabel + "\n" + programInfoLog(gl, program);
-#else
-        diagnostics = "Program link failed: " + sources.vertexLabel + " + " + sources.fragmentLabel;
-#endif
         gl.DeleteProgram(program);
         return 0;
     }
@@ -112,12 +99,6 @@ inline GLuint linkShaderProgram(GlApi& gl, const ShaderSources& sources, std::st
     return program;
 }
 
-struct UniformLocations {
-    GLint resolution{-1}, time{-1}, mouse{-1}, zoom{-1};
-    bool operator==(const UniformLocations&) const = default;
-};
-
-#if LAB_CHECKPOINT >= 3
 inline bool findUniform(GlApi& gl, GLuint program, const char* name, GLenum requiredType, bool required, GLint& location, std::string& diagnostics) {
     location = gl.GetUniformLocation(program, name);
     if (location < 0) {
@@ -144,124 +125,62 @@ inline bool findUniform(GlApi& gl, GLuint program, const char* name, GLenum requ
     diagnostics = std::string("[interface] Cannot find scalar/non-array uniform ") + name;
     return false;
 }
-#endif
 
-struct ProgramCandidate {
-    GLuint program{};
-    UniformLocations locations{};
+struct UniformLocations {
+    GLint model{-1}, camera{-1}, color{-1}, material{-1}, sun{-1}, light{-1};
+    GLint shadow{-1}, shadows{-1}, bias{-1}, filter{-1}, mode{-1};
 };
-
-inline void destroyProgramCandidate(GlApi& gl, ProgramCandidate& candidate) {
-    if (candidate.program)
-        gl.DeleteProgram(candidate.program);
-    candidate = {};
-}
-
-inline bool buildProgramCandidate(GlApi& gl, const ShaderSources& sources, ProgramCandidate& candidate, std::string& diagnostics, ProgramBuildAudit* audit = nullptr) {
-    candidate = {};
-    candidate.program = linkShaderProgram(gl, sources, diagnostics, audit);
-    if (!candidate.program)
-        return false;
-#if LAB_CHECKPOINT >= 3
-#if LAB_CHECKPOINT >= 6
-    const bool requireLive = true;
-#else
-    const bool requireLive = false;
+inline bool resolveRoomUniforms(GlApi& gl, GLuint program, UniformLocations& at, std::string& log) {
+    auto need = [&](const char* name, GLenum type, GLint& location) {
+        return findUniform(gl, program, name, type, true, location, log);
+    };
+    if (!need("uModel", GL_FLOAT_MAT4, at.model) || !need("uCameraVP", GL_FLOAT_MAT4, at.camera) ||
+        !need("uColor", GL_FLOAT_VEC3, at.color) || !need("uMaterial", GL_INT, at.material)) return false;
+#if LAB_CHECKPOINT >= 2
+    if (!need("uSun", GL_FLOAT_VEC3, at.sun)) return false;
 #endif
-    const auto program = candidate.program;
-    auto& locations = candidate.locations;
-    const bool valid = findUniform(gl, program, "uResolution", GL_FLOAT_VEC2, true, locations.resolution, diagnostics) &&
-        findUniform(gl, program, "uTime", GL_FLOAT, requireLive, locations.time, diagnostics) &&
-        findUniform(gl, program, "uMouse", GL_FLOAT_VEC2, requireLive, locations.mouse, diagnostics) &&
-        findUniform(gl, program, "uZoom", GL_FLOAT, requireLive, locations.zoom, diagnostics);
-    if (!valid) {
-        diagnostics = sources.fragmentLabel + "\n" + diagnostics;
-        destroyProgramCandidate(gl, candidate);
-        return false;
-    }
-#else
-    // First learn location lookup. Type/array reflection is added in lesson 3.
-    auto& locations = candidate.locations;
-    locations.resolution = gl.GetUniformLocation(candidate.program, "uResolution");
-    locations.time = gl.GetUniformLocation(candidate.program, "uTime");
-    locations.mouse = gl.GetUniformLocation(candidate.program, "uMouse");
-    locations.zoom = gl.GetUniformLocation(candidate.program, "uZoom");
-    if (locations.resolution < 0) {
-        diagnostics = sources.fragmentLabel + ": uResolution is not active";
-        destroyProgramCandidate(gl, candidate);
-        return false;
-    }
+#if LAB_CHECKPOINT >= 4
+    if (!need("uLightVP", GL_FLOAT_MAT4, at.light) || !need("uShadow", GL_SAMPLER_2D, at.shadow) ||
+        !need("uShadows", GL_INT, at.shadows)) return false;
+#endif
+#if LAB_CHECKPOINT >= 5
+    if (!need("uBias", GL_FLOAT, at.bias) || !need("uFilter", GL_INT, at.filter)) return false;
+#endif
+#if LAB_CHECKPOINT >= 7
+    if (!need("uMode", GL_INT, at.mode)) return false;
 #endif
     return true;
 }
-
-// Scene data does not live here. This class owns one VAO and the last-good
-// program; uniforms are uploaded again after every successful relink.
-struct ShaderLabRenderer {
-    GLuint activeProgram{}, vertexArray{};
+struct RoomProgram {
+    GLuint active{};
     UniformLocations locations{};
-    ReloadState reloadState{};
-
-    ShaderLabRenderer() = default;
-    ShaderLabRenderer(const ShaderLabRenderer&) = delete;
-    ShaderLabRenderer& operator=(const ShaderLabRenderer&) = delete;
-
-    bool initialize(GlApi& gl, std::string& diagnostics) {
-        ProgramCandidate candidate{};
-        const auto sources = embeddedShaderSources();
-        if (!buildProgramCandidate(gl, sources, candidate, diagnostics))
-            return false;
-        activeProgram = std::exchange(candidate.program, 0);
-        locations = candidate.locations;
-        reloadState.activeFingerprint = fingerprintShaderSources(sources);
-        gl.GenVertexArrays(1, &vertexArray);
-        gl.BindVertexArray(vertexArray);
-        gl.BindVertexArray(0);
-        return vertexArray != 0 && gl.GetError() == GL_NO_ERROR;
-    }
-
-    bool reload(GlApi& gl, const ShaderSources& sources, std::size_t effect, std::string& diagnostics, ProgramBuildAudit* audit = nullptr) {
-        ProgramCandidate candidate{};
-        const auto fingerprint = fingerprintShaderSources(sources);
-        if (!buildProgramCandidate(gl, sources, candidate, diagnostics, audit)) {
-            recordReloadAttempt(reloadState, fingerprint, effect, false, diagnostics);
-            return false;
+    ReloadState reload{};
+    bool replace(GlApi& gl, const ShaderSources& sources) {
+        ++reload.attempts;
+        GLuint candidate = linkShaderProgram(gl, sources, reload.diagnostics);
+        UniformLocations next{};
+        if (candidate && !resolveRoomUniforms(gl, candidate, next, reload.diagnostics)) {
+            reload.diagnostics = sources.fragmentLabel + " / " + sources.vertexLabel + "\n" + reload.diagnostics;
+            gl.DeleteProgram(candidate);
+            candidate = 0;
         }
-        const GLuint previousProgram = activeProgram;
-        activeProgram = std::exchange(candidate.program, 0);
-        locations = candidate.locations;
-        // A currently bound old program is only flagged for deletion. Bind
-        // the replacement first so deleting previousProgram really releases it.
-        gl.UseProgram(activeProgram);
-        if (previousProgram)
-            gl.DeleteProgram(previousProgram);
-        diagnostics = "Reload OK: " + sources.fragmentLabel;
-        recordReloadAttempt(reloadState, fingerprint, effect, true, diagnostics);
+        reload.lastReloadSucceeded = candidate != 0;
+        if (!candidate) return false;
+        // Không xóa chương trình tốt cho tới khi chương trình mới vẽ được cùng giao diện.
+        // [snippet commit-program]
+        const GLuint previous = std::exchange(active, candidate);
+        locations = next;
+        gl.UseProgram(active);
+        if (previous) gl.DeleteProgram(previous);
+        ++reload.generation;
+        reload.diagnostics.clear();
         return true;
+        // [/snippet commit-program]
     }
-
-    void draw(GlApi& gl, const UniformSnapshot& uniform) const {
-        gl.Disable(GL_DEPTH_TEST);
-        gl.Disable(GL_CULL_FACE);
-        gl.Disable(GL_SCISSOR_TEST);
-        gl.Viewport(0, 0, int(uniform.width), int(uniform.height));
-        gl.UseProgram(activeProgram);
-        gl.Uniform2f(locations.resolution, uniform.width, uniform.height);
-        gl.Uniform1f(locations.time, uniform.time);
-        gl.Uniform2f(locations.mouse, uniform.mouseX, uniform.mouseY);
-        gl.Uniform1f(locations.zoom, uniform.zoom);
-        gl.BindVertexArray(vertexArray);
-        gl.DrawArrays(GL_TRIANGLES, 0, 3);
-        gl.BindVertexArray(0);
-    }
-
     void destroy(GlApi& gl) {
         gl.UseProgram(0);
-        if (activeProgram)
-            gl.DeleteProgram(activeProgram);
-        if (vertexArray)
-            gl.DeleteVertexArrays(1, &vertexArray);
-        activeProgram = vertexArray = 0;
+        if (active) gl.DeleteProgram(active);
+        active = 0;
     }
 };
 } // namespace lab

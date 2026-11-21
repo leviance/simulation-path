@@ -1,100 +1,31 @@
-.root {
-  color: #dce8ec;
-  background: #0d1820;
-  border: 1px solid #28404b;
-  border-radius: 14px;
-  padding: 18px;
-  font-size: 14px;
-}
-.root p {
-  color: #a9c0ca;
-  line-height: 1.6;
-  margin: 12px 0;
-}
-.heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 15px;
-  border-bottom: 1px solid #28404b;
-  padding-bottom: 14px;
-}
-.heading span {
-  color: #90b6c4;
-  font: 11px/1.5 monospace;
-  letter-spacing: 0.06em;
-}
-.heading h3 {
-  color: #f2ead8;
-  font-size: 20px;
-  margin: 5px 0 0;
-}
-.controls {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  align-items: center;
-  margin: 14px 0;
-}
-.controls label {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-.controls select,
-.controls button,
-.root button {
-  background: #1b303d;
-  color: #dce8ec;
-  border: 1px solid #34515f;
-  border-radius: 6px;
-  padding: 7px 10px;
-  font-size: 13px;
-}
-.controls :disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.controls input[type="range"] {
-  width: 150px;
-  accent-color: #eda86d;
-}
-.root :focus-visible {
-  outline: 2px solid #f4bd84;
-  outline-offset: 3px;
-}
 .workspace {
   display: grid;
-  grid-template-columns: minmax(280px, 1.3fr) minmax(280px, 1fr);
-  gap: 14px;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 0.875rem;
   align-items: start;
 }
 .scene,
 .slice,
 .histogram {
+  min-width: 0;
   margin: 0;
-  background: #111f29;
-  border: 1px solid #34505c;
-  border-radius: 8px;
+  background: var(--lab-inset);
+  border: 1px solid var(--lab-line);
   overflow: hidden;
 }
 .scene figcaption,
 .slice figcaption {
   display: flex;
-  gap: 6px;
   flex-wrap: wrap;
+  gap: 0.375rem;
   justify-content: space-between;
-  padding: 10px 12px;
-  color: #e6e3d4;
-  font-size: 12px;
+  padding: 0.625rem 0.75rem;
+  background: var(--lab-panel);
 }
-.scene figcaption span {
-  color: #91afbc;
-  font-size: 11px;
-}
-.scene figcaption strong,
-.slice figcaption strong {
-  color: #e6e3d4;
+.scene figcaption span,
+.histogram figcaption span {
+  color: var(--lab-muted);
+  font-size: var(--lab-label);
 }
 .sceneCanvas,
 .sliceCanvas {
@@ -115,92 +46,63 @@
 }
 .slices {
   display: grid;
-  gap: 10px;
+  gap: 0.625rem;
+  min-width: 0;
 }
 .onlySlices .slices {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
 }
 .sliders {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  margin: 18px 0;
+  gap: 0.875rem;
+  margin: 1rem 0;
 }
 .sliders label {
   display: grid;
-  gap: 8px;
-  color: #ecdfcf;
-}
-.sliders output {
-  color: #9fc0cd;
-  font-size: 11px;
+  gap: 0.5rem;
 }
 .sliders input {
   width: 100%;
-  accent-color: #f1a567;
 }
-.sliders label:nth-child(2) input {
-  accent-color: #6daee0;
+.status,
+.probe,
+.hint,
+.inspector,
+.histogram {
+  padding: 0.625rem 0.75rem;
 }
-.sliders label:nth-child(3) input {
-  accent-color: #73ccab;
+.status,
+.probe,
+.hint {
+  font-size: var(--lab-label);
 }
 .status,
 .probe {
-  padding: 8px 10px;
-  background: #172934;
-  border-radius: 6px;
-  font-size: 12px;
+  background: var(--lab-inset);
 }
 .probe {
-  font-family: monospace;
-}
-.root .hint {
-  margin: 0;
-  padding: 8px 10px;
-  font-size: 11px;
-  color: #98b4c0;
+  font-family: var(--lab-mono);
+  overflow-wrap: anywhere;
 }
 .inspector {
-  margin: 12px 0;
-  background: #13232e;
-  border: 1px solid #2d4653;
-  border-radius: 6px;
-  padding: 10px;
-}
-.inspector summary {
-  color: #efc491;
-  cursor: pointer;
+  margin: 0.75rem 0;
+  background: var(--lab-panel);
+  border: 1px solid var(--lab-line);
 }
 .table {
   overflow-x: auto;
 }
 .table table {
   width: 100%;
-  border-collapse: collapse;
-  font: 11px/1.5 monospace;
   white-space: nowrap;
-}
-.table th,
-.table td {
-  padding: 6px;
   text-align: right;
-  border-bottom: 1px solid #28404b;
-  color: #c4d9e2;
 }
 .histogram {
-  padding: 10px;
-  margin-top: 12px;
-}
-.histogram figcaption {
-  font-size: 12px;
-  color: #b6cdd6;
+  margin-top: 0.75rem;
 }
 .histogram figcaption span {
   display: block;
-  color: #8eacba;
-  font-size: 11px;
 }
 .histogram svg {
   width: 100%;
@@ -208,35 +110,17 @@
 }
 @media (max-width: 850px) {
   .workspace {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .sceneCanvas {
     height: 400px;
   }
 }
 @media (max-width: 600px) {
-  .root {
-    padding: 10px;
-  }
-  .heading {
-    display: block;
-  }
   .sliders {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .sceneCanvas {
     height: 340px;
-  }
-  .controls label {
-    flex-wrap: wrap;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .root *,
-  .root *::before,
-  .root *::after {
-    scroll-behavior: auto;
-    transition: none;
-    animation: none;
   }
 }

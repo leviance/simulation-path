@@ -1,104 +1,24 @@
 .panel {
-  padding: 0.8rem 1rem;
-  background: #0b1726;
-  color: #eff8fc;
-  border-block: 1px solid #304657;
+  min-width: 0;
 }
-.toolbar,
 .group,
-.toolbar label {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.55rem;
-}
-.toolbar,
-.toolbar button,
-.toolbar select,
-.toolbar input {
-  font:
-    500 0.88rem/1.4 system-ui,
-    sans-serif;
-}
-.toolbar button,
-.toolbar select,
-.toolbar input {
-  padding: 0.4rem 0.65rem;
-  color: #eff8fc;
-  border: 1px solid #405b71;
-  border-radius: 0.35rem;
-  background: #142739;
-}
-.toolbar button {
-  cursor: pointer;
-}
-.toolbar button[aria-pressed="true"] {
-  border-color: #7cdedb;
-  background: #16424a;
-  color: #cbfffa;
-}
-.toolbar button.play:not(:disabled) {
-  background: #2f766c;
-  border-color: #76cdc1;
-  color: #fff;
-  font-weight: 650;
-}
-.toolbar button:disabled {
-  opacity: 0.58;
-  cursor: not-allowed;
-}
-.toolbar :focus-visible {
-  outline: 2px solid #86ede1;
-  outline-offset: 2px;
-}
-.toolbar input {
-  width: 6.5rem;
-}
-.panel p.caption {
-  font:
-    400 0.92rem/1.5 system-ui,
-    sans-serif;
-  color: #b7cbd7;
-  margin: 0.6rem 0 0;
-}
-.inspector {
-  margin-top: 0.8rem;
-  padding-top: 0.8rem;
-  border-top: 1px solid #304657;
-}
-.readings {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.6rem 1.6rem;
-  margin: 0.6rem 0 0;
-}
-.readings dt {
-  color: #aec2d1;
-  font-size: 0.85rem;
-}
-.readings dd {
-  margin: 0.15rem 0 0;
-  color: #f2fcff;
-  font-variant-numeric: tabular-nums;
-}
-.tuning {
-  flex-basis: 100%;
-  padding: 0.45rem 0;
-  border-block: 1px solid #314452;
-}
-.tuning summary {
-  color: #cbdce3;
-  cursor: pointer;
-  font-size: 0.88rem;
-}
 .tuningFields {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.75rem 1rem;
+  gap: 0.5rem;
+  align-items: center;
+}
+.inspector {
+  border-top: 1px solid var(--lab-line);
+}
+.tuning {
+  margin-inline: var(--lab-gutter);
+  padding-block: 0.5rem;
+  border-block: 1px solid var(--lab-line);
+}
+.tuningFields {
   padding-top: 0.75rem;
 }
 .tuningFields > p {
   flex-basis: 100%;
-  margin: 0;
 }

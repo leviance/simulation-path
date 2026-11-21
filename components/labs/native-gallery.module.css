@@ -1,42 +1,6 @@
-.gallery {
-  margin-block: 1.75rem;
-  min-width: 0;
-}
-.gallery header > p,
-.gallery figure p {
-  margin: 0.35rem 0;
-}
-.choices {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-  margin-block: 1rem;
-}
-.choices button {
-  font: inherit;
-  font-size: 0.9rem;
-  color: inherit;
-  background: transparent;
-  border: 1px solid currentColor;
-  border-radius: 0.35rem;
-  padding: 0.4rem 0.8rem;
-  cursor: pointer;
-}
-.choices button[aria-pressed="true"] {
-  color: #142d29;
-  background: #bce5cd;
-  font-weight: 650;
-}
-.choices button:focus-visible,
-.gallery figure a:focus-visible {
-  outline: 3px solid currentColor;
-  outline-offset: 3px;
-}
 .gallery figure {
-  margin: 1rem 0 0;
-  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
-  border-radius: 0.65rem;
-  overflow: hidden;
+  margin: 0;
+  min-width: 0;
 }
 .gallery figure > :is(img, video) {
   display: block;
@@ -44,23 +8,25 @@
   height: auto;
   aspect-ratio: 16 / 9;
   object-fit: contain;
-  background: #192325;
+  background: var(--lab-inset);
 }
 .gallery figcaption {
-  padding: 0.9rem 1.1rem 1rem;
+  padding: 0.8rem var(--lab-gutter) 1rem;
+  border-top: 1px solid var(--lab-line);
 }
 .gallery figcaption > span {
   display: block;
-  font-size: 0.82rem;
+  color: var(--lab-muted);
+  font-size: var(--lab-small);
 }
 .gallery figcaption > strong {
   display: block;
-  margin-top: 0.3rem;
+  margin: 0.25rem 0;
+  font-weight: 700;
 }
 .gallery figure a {
   display: inline-block;
-  margin-top: 0.45rem;
-  text-decoration: underline;
+  margin-top: 0.4rem;
 }
 .srOnly {
   position: absolute;

@@ -46,7 +46,6 @@ export function buildRoadmap(
         ...publication,
         title: entry.title,
         part: entry.part,
-        acceptanceNote: revision.replacement.acceptanceNote,
       };
     }
     if (publication && revision) {

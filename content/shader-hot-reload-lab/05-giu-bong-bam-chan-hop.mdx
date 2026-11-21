@@ -1,0 +1,91 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Giữ bóng bám chân hộp
+
+## Vấn đề cần giải quyết
+
+Bóng đã nằm đúng phía nhưng mép bóng có thể răng cưa. Trên một mặt nghiêng còn có thể xuất hiện những vệt tối dù không có vật nào chắn. Hai hiện tượng này có nguyên nhân khác nhau: sửa chúng bằng cùng một con số rất dễ làm chân hộp như lơ lửng.
+
+## Hiểu ý tưởng trước khi viết code
+
+Hai lượt vẽ không lấy mẫu ở cùng nơi tuyệt đối: một pixel camera thường rơi vào giữa hai texel của nguồn sáng, còn độ sâu được lưu với độ chính xác hữu hạn. Dịch nhẹ ngưỡng so sánh (bias) giúp một mặt không tự che chính nó. Bias không làm mép bóng mượt. Để ổn định mép, ta so ở nhiều texel lân cận rồi lấy trung bình các kết quả có/không.
+
+<InteractiveLab demo="shader-hot-reload" mode="shutter-bias" />
+
+## Viết code từng bước
+
+### Bước 1. Nhìn chân hộp trước khi đổi ngưỡng
+
+Dừng ở góc cửa hé. Dùng phím ngoặc vuông điều chỉnh bias từng nấc; khi nắng lướt sát bề mặt, shader cho phép bias lớn hơn so với mặt hướng thẳng về nguồn. Ở cả hai trường hợp vẫn cần chặn giá trị để không xóa mất bóng tiếp xúc.
+
+{/* snippet shaders/room.frag#slope-bias */}
+
+```glsl title="shaders/room.frag — Nhìn chân hộp trước khi đổi ngưỡng"
+bias = clamp(uBias * (1.0 + 2.0 * (1.0 - lambert)), 0.0, 0.02);
+if (uFilter != 0) return filteredVisibility(pixel, mapSize, point.z, bias);
+```
+
+<CourseWorkFile project="35" step={5} path="shaders/room.frag" />
+
+### Bước 2. Lấy chín quyết định thay vì chín độ sâu trung bình
+
+Hãy coi chín texel trong ô 3×3 là chín lá phiếu. Nếu sáu mẫu nhìn thấy Mặt Trời, điểm đang vẽ nhận 6/9 phần ánh sáng trực tiếp. Cách lọc này gọi là PCF (percentage-closer filtering): ta lấy trung bình **kết quả của chín phép so độ sâu**, chứ không lấy trung bình chín giá trị độ sâu. Đường biên nhờ thế bớt răng cưa; ta chưa mô phỏng kích thước thật của Mặt Trời.
+
+{/* snippet shaders/room.frag#filter-shadow */}
+
+```glsl title="shaders/room.frag — Lấy chín quyết định thay vì chín độ sâu trung bình"
+float filteredVisibility(ivec2 pixel, ivec2 mapSize, float receiverDepth, float bias) {
+    float litSamples = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            litSamples += compareDepth(pixel + ivec2(x, y), mapSize, receiverDepth, bias);
+        }
+    }
+    return litSamples / 9.0;
+}
+```
+
+### Bước 3. Cho hai cách nhìn dùng cùng shader
+
+Phím F quyết định so một hay chín mẫu; ngoặc vuông thay bias. Kiểm hai uniform đúng kiểu sau khi link và gửi giá trị ở lượt camera. Không sửa ma trận hoặc ghi lại hình học chỉ để đổi cách đọc texture.
+
+{/* snippet shaders/room.frag#compare-depth */}
+
+```glsl title="shaders/room.frag — Cho hai cách nhìn dùng cùng shader"
+float compareDepth(ivec2 pixel, ivec2 mapSize, float receiverDepth, float bias) {
+    if (any(lessThan(pixel, ivec2(0))) || any(greaterThanEqual(pixel, mapSize))) return 1.0;
+    float blockerDepth = texelFetch(uShadow, pixel, 0).r;
+    if (receiverDepth - bias <= blockerDepth) return 1.0;
+    return 0.0;
+}
+```
+
+<CourseWorkFile project="35" step={5} path="include/shader_input.hpp" />
+
+<CourseWorkFile project="35" step={5} path="include/shader_renderer.hpp" />
+
+<CourseWorkFile project="35" step={5} path="include/room_drawing.hpp" />
+
+## Ghép các phần lại
+
+Đứng ở cùng góc, đổi F rồi mới thử bias. Nếu thay cả góc nhìn, mức lọc lẫn bias cùng lúc thì rất khó biết thay đổi nào làm mép bóng bớt răng cưa. Giữ các mốc so sánh ở đúng vị trí gỗ và chân hộp.
+
+```sh title="Terminal — chạy mã của bạn trong work/"
+cmake --build build-work --config Release --target project_35_work --parallel 1
+.\build-work\Release\project_35_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Tăng bias lên gần giới hạn rồi nhìn bóng sát đáy hộp. Nếu bóng tách khỏi chân, đừng phóng to hộp để che khoảng trống: hãy hạ bias. Ngược lại, bias bằng 0 có thể tạo nhiễu tùy driver và góc chiếu; không thấy nhiễu ở mọi góc không phải là lỗi.
+
+## Tự kiểm tra kết quả
+
+Phím F đổi phần chuyển tiếp ở biên mà không biến cả vùng râm thành sáng. R trả bias và góc lá về mặc định. Bạn giải thích được tại sao trung bình chín giá trị độ sâu rồi so một lần không cho kết quả như chín phép so.
+
+## Bài tập mở rộng
+
+Bỏ qua sai số số thực, nếu 4 trong 9 mẫu có vật chắn thì shader cho mức nắng trực tiếp bao nhiêu? Tại một điểm cách xa mép bóng, lọc có làm thay đổi kết quả không?
+
+Tiếp theo: [Sửa shader mà không đóng cửa sổ](/projects/shader-hot-reload-lab/06-sua-shader-khi-cua-so-dang-mo).

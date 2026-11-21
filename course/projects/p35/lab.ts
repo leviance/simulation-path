@@ -1,62 +1,90 @@
 import type { ProjectLabMeta } from "../../labs/types";
 
 const lab = {
+  native: {
+    directory: "/field-notes/shutter-light",
+    withDemo: true,
+    overview: ["ajar", "closed", "moved"],
+    lessons: {
+      "shutter-depth": ["depth"],
+      "shutter-compare": ["ajar", "closed"],
+      "shutter-observer": ["ajar", "moved", "depth"],
+    },
+    takes: {
+      ajar: {
+        title: "Nắng đi qua lá hé",
+        alt: "Tám lá cửa hé; các dải sáng cắt ngang sàn gỗ và mặt trên chiếc hộp.",
+        caption:
+          "Góc lá 23°. Bề mặt sàn không đổi pháp tuyến từ dải này sang dải khác; chính cửa chớp đang chặn nắng.",
+        poster: "ajar.png",
+        source: "Project 35 · C++/SDL3/OpenGL · framebuffer Release",
+      },
+      closed: {
+        title: "Khép theo hướng nắng",
+        alt: "Cùng chiếc hộp và căn phòng, dải nắng trên sàn đã biến mất.",
+        caption:
+          "Lá xoay tới −38°. Người xem vẫn có thể thấy trời qua một vài khe vì mắt và Mặt Trời nhìn theo hai hướng khác nhau.",
+        poster: "closed.png",
+        source: "Project 35 · C++/SDL3/OpenGL · framebuffer Release",
+      },
+      moved: {
+        title: "Đẩy hộp khỏi vệt cũ",
+        alt: "Hộp đã trượt sang trái; vệt nắng ở vị trí cũ lại hiện trên sàn.",
+        caption: "Giữ nguyên nguồn sáng và lá chớp, chỉ đổi X của hộp từ 0,35 sang −1,4 m.",
+        poster: "moved.png",
+        source: "Project 35 · C++/SDL3/OpenGL · framebuffer Release",
+      },
+      depth: {
+        title: "Từ phía nguồn sáng",
+        alt: "Ảnh xám của texture độ sâu thật; thấy lỗ cửa, lá chớp và vùng trắng trống.",
+        caption:
+          "Đây là framebuffer của nguồn sáng, không phải ảnh thành phẩm đổi sang đen trắng. Nhấn V trong ứng dụng để đối chiếu.",
+        poster: "depth.png",
+        source: "Project 35 · C++/SDL3/OpenGL · framebuffer Release",
+      },
+    },
+  },
   base: {
-    label: "LIVE SHADER GALLERY",
-    title: "Sửa GLSL, thấy kết quả và giữ được bản tốt khi có lỗi",
+    label: "GÓC NHÌN CỦA NGUỒN SÁNG",
+    title: "Một tia nắng qua cửa chớp",
     description:
-      "Gradient, circle, Mandelbrot và noise dùng cùng time/resolution/mouse/zoom. Canvas 2D minh họa công thức và last-good transaction, không chạy compiler GLSL.",
+      "Chọn một điểm trên sàn, lần tia ngược ra cửa và xem nó gặp lá gỗ hay lọt qua khe. Đây là mặt cắt Canvas; ảnh căn phòng 3D được chụp từ bản C++.",
   },
   modes: {
-    "shader-files": {
-      title: "Đưa GLSL ra file và phủ kín cửa sổ",
+    "shutter-room": {
+      title: "Dựng góc phòng từ một mesh hộp",
       description:
-        "Bỏ mesh/camera không cần thiết, dùng fullscreen triangle và nạp shader từ đúng thư mục của executable/checkpoint.",
+        "Từ một tấm sàn, ghép bốn mảng tường thành ô cửa thật và đặt chiếc hộp xuống đất. Chưa vẽ bóng để kiểm riêng hình học.",
     },
-    "compile-diagnostics": {
-      title: "Compile từng shader và đọc lỗi đúng stage",
+    "shutter-blades": {
+      title: "Nghiêng lá chớp và đẩy chiếc hộp",
       description:
-        "Đọc compile status và log thật, ghi rõ file và vertex/fragment stage; không đoán cú pháp bằng tìm token.",
+        "Chọn trục quay đi qua giữa mỗi lá, rồi dịch chiếc hộp theo sàn. Vì sao lá đã xoay mà vệt nắng vẫn chưa xuất hiện?",
     },
-    "program-interface": {
-      title: "Link program, kiểm interface bằng driver",
+    "shutter-depth": {
+      title: "Nhìn căn phòng từ phía nguồn sáng",
       description:
-        "Phân biệt compile với link; kiểm active uniform, kiểu và array size sau link thay vì chỉ thấy tên trong source.",
+        "Đặt một camera trực giao phía ngoài cửa. Thứ cần giữ lại từ góc nhìn ấy không phải màu gỗ mà là khoảng sâu tới bề mặt đầu tiên.",
     },
-    "transactional-reload": {
-      title: "Thử bản mới, giữ bản tốt gần nhất",
+    "shutter-compare": {
+      title: "Hai điểm trên sàn, chỉ một điểm có nắng",
       description:
-        "Build candidate bên cạnh active program, cập nhật locations khi thành công và giữ hình/metadata cũ khi thất bại.",
+        "Đưa điểm trên sàn vào cùng hệ tọa độ với bản đồ độ sâu. So hai giá trị để nắng xuyên khe, dừng trên hộp và không xuyên tường.",
     },
-    "file-watcher": {
-      title: "Tự reload sau khi file đã ổn định",
+    "shutter-bias": {
+      title: "Giữ bóng bám chân hộp",
       description:
-        "Theo dõi timestamp, size và trạng thái file; debounce không block, coalesce thay đổi và không retry storm.",
+        "Tăng dần bias để phân biệt vết tự đổ bóng với bóng bị nhấc khỏi sàn. So đường biên cứng với phép lọc chín mẫu.",
     },
-    "live-uniforms": {
-      title: "Time, pixel và mouse: dữ liệu đổi từng frame",
+    "shutter-reload": {
+      title: "Sửa shader mà không đóng cửa sổ",
       description:
-        "Dùng một uniform snapshot; đổi logical input sang pixel OpenGL, pause/step và resize không compile lại.",
+        "Đổi chất liệu của căn phòng, thử gõ sai GLSL rồi sửa lại. Cửa chớp và hộp không được quay về vị trí ban đầu.",
     },
-    "procedural-shader": {
-      title: "Gradient và vòng tròn: tạo hình từ tọa độ",
+    "shutter-observer": {
+      title: "Kiểm chứng nắng qua cửa chớp",
       description:
-        "Từ UV đến palette chuyển động, signed distance của circle, anti-alias và ánh sáng viền có công thức rõ.",
-    },
-    "mandelbrot-shader": {
-      title: "Mandelbrot trong fragment shader",
-      description:
-        "Biểu diễn số phức bằng vec2, lặp z²+c hữu hạn, kiểm escape và tô màu liên tục theo thời gian.",
-    },
-    "noise-shader": {
-      title: "Noise và chuyển động procedural",
-      description:
-        "Nội suy value noise, cộng năm octave fBm và domain warp; hash số nguyên lặp lại được.",
-    },
-    "shader-validation": {
-      title: "Hoàn thiện gallery và kiểm hot reload",
-      description:
-        "Ghép gallery bốn hiệu ứng, error overlay/showcase, kiểm GPU và cleanup, source/ZIP độc lập.",
+        "Giữ cùng điểm trên sàn khi đổi camera hoặc di chuyển hộp. So ảnh thành phẩm với độ sâu phía đèn, vùng bị che và độ sáng Lambert.",
     },
   },
 } satisfies ProjectLabMeta;

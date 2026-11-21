@@ -40,6 +40,22 @@ test("Canvas readout detection matches complete class tokens with optional layou
     assert.equal(hasCanvasReadoutClass(html), false, html);
 });
 
+test("each project overview gives native media and Canvas their own shared lab frame", async () => {
+  for (const { id, slug } of projectCatalog) {
+    const { default: lab } = await import(`../course/projects/p${id}/lab.ts`);
+    const media = Boolean(lab.native?.overview?.length);
+    const canvas = !media || Boolean(lab.native?.withDemo);
+    const response = await render("/projects/" + slug);
+    assert.equal(response.status, 200, slug);
+    const html = await response.text();
+    const frames = html.match(/<section\b[^>]*\bdata-lab-ui=""[^>]*>/g) ?? [];
+    assert.equal(frames.length, Number(media) + Number(canvas), slug);
+    assert.equal(frames.some((frame) => frame.includes("data-native-media")), media, slug);
+    assert.equal(frames.some((frame) => frame.includes('class="interactive-lab"')), canvas, slug);
+    assert.equal((html.match(/<header class="lab-heading">/g) ?? []).length, frames.length, slug);
+  }
+});
+
 test("server-renders the finished home page", async () => {
   const response = await render();
   assert.equal(response.status, 200);

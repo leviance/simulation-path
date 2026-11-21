@@ -7,7 +7,6 @@
 
 namespace lab {
 // Đọc đủ nội dung và kiểm giới hạn trước khi thay ShaderSources đang dùng.
-#if LAB_CHECKPOINT >= 1
 inline std::string shaderPathText(const std::filesystem::path& path) {
     const auto bytes = path.u8string();
     return {bytes.begin(), bytes.end()};
@@ -38,24 +37,18 @@ inline bool readTextFile(const std::filesystem::path& path, std::string& result,
     return true;
 }
 
-inline bool readShaderFiles(const std::filesystem::path& directory, std::size_t effect, ShaderSources& result, std::string& diagnostics) {
-    if (effect >= kEffects.size()) {
-        diagnostics = "Invalid gallery index";
-        return false;
-    }
-    ShaderSources temporary{};
-    const auto vertex = directory / "lab.vert";
-    const auto fragment = directory / kEffects[effect].filename;
-    temporary.vertexLabel = shaderPathText(vertex);
-    temporary.fragmentLabel = shaderPathText(fragment);
-    if (!readTextFile(vertex, temporary.vertex, diagnostics) || !readTextFile(fragment, temporary.fragment, diagnostics))
-        return false;
-    result = std::move(temporary);
+inline bool readShaderFiles(const std::filesystem::path& directory, ShaderSources& result, std::string& diagnostics) {
+    ShaderSources next{};
+    const auto vertex = directory / "room.vert";
+    const auto fragment = directory / "room.frag";
+    next.vertexLabel = shaderPathText(vertex);
+    next.fragmentLabel = shaderPathText(fragment);
+    if (!readTextFile(vertex, next.vertex, diagnostics) || !readTextFile(fragment, next.fragment, diagnostics)) return false;
+    result = std::move(next);
     return true;
 }
-#endif
 
-#if LAB_CHECKPOINT >= 5
+#if LAB_CHECKPOINT >= 6
 struct ShaderFileStamp {
     enum class Status {
         ready,
@@ -97,10 +90,8 @@ inline ShaderFileStamp shaderFileStamp(const std::filesystem::path& path) {
     return stamp;
 }
 
-inline ShaderFileStamps readShaderFileStamps(const std::filesystem::path& directory, std::size_t effect) {
-    if (effect >= kEffects.size())
-        throw std::invalid_argument("Invalid watched effect");
-    return {shaderFileStamp(directory / "lab.vert"), shaderFileStamp(directory / kEffects[effect].filename)};
+inline ShaderFileStamps readShaderFileStamps(const std::filesystem::path& directory) {
+    return {shaderFileStamp(directory / "room.vert"), shaderFileStamp(directory / "room.frag")};
 }
 
 struct ShaderWatchState {
@@ -109,6 +100,7 @@ struct ShaderWatchState {
     std::uint64_t changedAtMilliseconds{};
 };
 
+// [snippet debounce]
 inline bool updateShaderWatch(ShaderWatchState& state, const ShaderFileStamps& stamps, std::uint64_t now, std::uint64_t debounce = 140) {
     if (!state.initialized) {
         state = {true, false, stamps, now};
@@ -125,5 +117,6 @@ inline bool updateShaderWatch(ShaderWatchState& state, const ShaderFileStamps& s
     state.pending = false;
     return true;
 }
+// [/snippet debounce]
 #endif
 } // namespace lab

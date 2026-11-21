@@ -336,16 +336,13 @@ test("interactive labs expose only the controls needed by each lesson", async ()
     ["dual-renderer-cube/07-dong-bo-winding-va-face-culling.mdx", "culling-contract"],
     ["dual-renderer-cube/08-chuyen-renderer-bang-f1-f2.mdx", "renderer-switch"],
     ["dual-renderer-cube/09-hoan-thien-dual-renderer-cube.mdx", "cube-validation"],
-    ["shader-hot-reload-lab/01-dua-glsl-ra-file-rieng.mdx", "shader-files"],
-    ["shader-hot-reload-lab/02-compile-shader-va-doc-info-log.mdx", "compile-diagnostics"],
-    ["shader-hot-reload-lab/03-link-candidate-va-khoa-interface.mdx", "program-interface"],
-    ["shader-hot-reload-lab/04-reload-theo-giao-dich-giu-last-good.mdx", "transactional-reload"],
-    ["shader-hot-reload-lab/05-theo-doi-file-va-debounce.mdx", "file-watcher"],
-    ["shader-hot-reload-lab/06-truyen-time-resolution-va-mouse.mdx", "live-uniforms"],
-    ["shader-hot-reload-lab/07-viet-fragment-shader-procedural.mdx", "procedural-shader"],
-    ["shader-hot-reload-lab/08-mandelbrot-trong-fragment-shader.mdx", "mandelbrot-shader"],
-    ["shader-hot-reload-lab/09-noise-va-chuyen-dong-procedural.mdx", "noise-shader"],
-    ["shader-hot-reload-lab/10-hoan-thien-shader-gallery.mdx", "shader-validation"],
+    ["shader-hot-reload-lab/01-dung-goc-phong-tu-mot-mesh.mdx", "shutter-room"],
+    ["shader-hot-reload-lab/02-nghieng-la-chop-va-day-hop.mdx", "shutter-blades"],
+    ["shader-hot-reload-lab/03-nhin-can-phong-tu-phia-nguon-sang.mdx", "shutter-depth"],
+    ["shader-hot-reload-lab/04-hai-diem-san-mot-diem-co-nang.mdx", "shutter-compare"],
+    ["shader-hot-reload-lab/05-giu-bong-bam-chan-hop.mdx", "shutter-bias"],
+    ["shader-hot-reload-lab/06-sua-shader-khi-cua-so-dang-mo.mdx", "shutter-reload"],
+    ["shader-hot-reload-lab/07-kiem-chung-nang-qua-cua-chop.mdx", "shutter-observer"],
   ]);
 
   for (const [lessonPath, mode] of expectedModes) {
@@ -507,8 +504,8 @@ test("every project teaches its visible starting point before new abstractions",
     ],
     [
       "shader-hot-reload-lab",
-      "01-dua-glsl-ra-file-rieng.mdx",
-      ["ShaderSources", "readTextFile", "SHADER DIRECTORY"],
+      "01-dung-goc-phong-tu-mot-mesh.mdx",
+      ["gl.DrawElements", "u.material", "work/"],
     ],
   ];
 

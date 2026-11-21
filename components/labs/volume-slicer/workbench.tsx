@@ -101,11 +101,11 @@ function Experiment({ stage }: { stage: number }) {
   };
   return (
     <div
-      className={styles.root}
+      className="lab-workbench"
       data-volume53-ready={ready ? "true" : "false"}
       data-dataset={data?.preset ?? "analytic"}
     >
-      <header className={styles.heading}>
+      <header className="lab-subheading">
         <div>
           <span>SCALAR / SLICE WORKBENCH</span>
           <h3>Nhìn vào bên trong một khối dữ liệu</h3>
@@ -128,7 +128,7 @@ function Experiment({ stage }: { stage: number }) {
         khối 3D, kéo/mũi tên xoay camera, wheel/+/- zoom, Home đặt lại góc nhìn. Scalar tổng hợp,
         không phải HU hoặc phép dựng CT.
       </p>
-      <div className={styles.controls}>
+      <div className="lab-controls">
         <label>
           Dataset
           <select
@@ -218,7 +218,7 @@ function Experiment({ stage }: { stage: number }) {
               setCamera={setCamera}
               stop={stop}
             />
-            <div className={styles.controls}>
+            <div className="lab-controls">
               <button
                 type="button"
                 onClick={() => setCamera((old) => limitCamera({ ...old, yaw: old.yaw - 0.18 }))}
@@ -304,7 +304,7 @@ function Experiment({ stage }: { stage: number }) {
         })}
       </div>
       {stage >= 5 && (
-        <div className={styles.controls}>
+        <div className="lab-controls">
           <label>
             Level <output>{window.level.toFixed(2)}</output>
             <input
@@ -336,7 +336,7 @@ function Experiment({ stage }: { stage: number }) {
         </div>
       )}
       {stage >= 8 && (
-        <div className={styles.controls}>
+        <div className="lab-controls">
           <label>
             Hướng quét
             <select
@@ -386,7 +386,7 @@ function Experiment({ stage }: { stage: number }) {
       {stage < 6 && stage >= 4 && data && <Inspector data={data} probe={probe} stage={stage} />}
       {stage < 6 && stage >= 5 && data && <Histogram data={data} />}
       {stage >= 9 && (
-        <div className={styles.controls}>
+        <div className="lab-controls">
           <button
             type="button"
             disabled={!data || loading}

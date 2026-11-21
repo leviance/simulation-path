@@ -171,7 +171,7 @@ export const roadmapSeed = [
   },
   {
     id: 35,
-    title: "Phòng thí nghiệm shader: sửa GLSL và thấy kết quả ngay",
+    title: "Nắng qua cửa chớp: tự dựng bóng đổ trong một căn phòng",
     part: "CHUYỂN TỪ RENDERER CPU SANG OPENGL/GLSL",
   },
   {

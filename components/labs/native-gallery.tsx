@@ -4,6 +4,7 @@ import { useId, useState } from "react";
 import type { NativeTake } from "@/course/labs/types";
 import { useClientReady } from "@/components/use-client-ready";
 import styles from "./native-gallery.module.css";
+import { LabHeading } from "./lab-heading";
 
 // Only the selected recording enters the DOM. Changing views stops playback.
 export function NativeGallery({
@@ -25,17 +26,21 @@ export function NativeGallery({
   const poster = directory + "/" + take.poster;
   const video = take.video && directory + "/" + take.video;
   return (
-    <section className={styles.gallery} aria-label={title} data-native-media="" data-ready={ready}>
-      <header>
-        <span className="section-index">TỪ CHƯƠNG TRÌNH C++/SDL3</span>
-        <h2 id={overview ? "project-demo-title" : undefined}>{title}</h2>
-        <p>
-          Đây là hình từ bản C++ của bài học. Muốn tự đi lại hoặc đổi tham số, hãy chạy mã nguồn đi
-          kèm.
-        </p>
-      </header>
+    <section
+      className={styles.gallery}
+      aria-label={title}
+      data-lab-ui=""
+      data-native-media=""
+      data-ready={ready}
+    >
+      <LabHeading
+        label="TỪ CHƯƠNG TRÌNH C++/SDL3"
+        title={title}
+        titleId={overview ? "project-demo-title" : undefined}
+        description="Đây là hình từ bản C++ của bài học. Muốn tự đi lại hoặc đổi tham số, hãy chạy mã nguồn đi kèm."
+      />
       {takes.length > 1 && (
-        <div className={styles.choices} role="group" aria-label="Chọn cảnh">
+        <div className="lab-controls" role="group" aria-label="Chọn cảnh">
           {takes.map((item, i) => (
             <button
               key={item.poster}

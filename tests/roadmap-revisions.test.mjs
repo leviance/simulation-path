@@ -100,7 +100,6 @@ test("published replacements keep their lessons visible with or without an accep
   assert.equal(replacement.part, roadmapSeed[39].part);
   assert.equal(replacement.lessonCount, 14);
   assert.equal(replacement.download, "/downloads/project-40-cloth-workshop.zip");
-  assert.equal(replacement.acceptanceNote, undefined);
   assert.ok(!("previous" in replacement));
 
   const water = roadmap.find(({ id }) => id === "51");
@@ -110,12 +109,19 @@ test("published replacements keep their lessons visible with or without an accep
   assert.equal(water.title, roadmapSeed[50].title);
   assert.equal(water.lessonCount, 13);
   assert.equal(water.download, "/downloads/project-51-sph-water-gpu.zip");
-  assert.equal(water.acceptanceNote, undefined);
   assert.ok(!("previous" in water));
 
   const pending = roadmap.find(({ id }) => id === "41");
   assert.equal(pending.status, "published");
-  assert.match(pending.acceptanceNote, /chờ kiểm trực tiếp/);
+  const withInternalNote = {
+    ...roadmapRevisions,
+    41: {
+      ...roadmapRevisions["41"],
+      replacement: { slug: pending.slug, acceptanceNote: "Internal QA fixture" },
+    },
+  };
+  assert.deepEqual(buildRoadmap(roadmapSeed, published, withInternalNote), roadmap);
+  assert.ok(roadmap.every((project) => !Object.hasOwn(project, "acceptanceNote")));
 
   assert.throws(
     () =>

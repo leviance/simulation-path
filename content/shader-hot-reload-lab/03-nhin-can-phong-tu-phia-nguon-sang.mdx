@@ -1,0 +1,113 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Nhìn căn phòng từ phía nguồn sáng
+
+## Vấn đề cần giải quyết
+
+Hãy đứng ngoài cửa, ở phía Mặt Trời. Trên một đường thẳng đi vào phòng, bạn thấy lá gỗ trước hay thấy sàn trước? Nếu lưu được câu trả lời cho nhiều tia nằm cạnh nhau, ta đã có đủ thông tin để tìm vùng bị che.
+
+## Hiểu ý tưởng trước khi viết code
+
+Z-buffer ở Project 17 giữ bề mặt gần *mắt* nhất. Shadow map cũng giữ độ sâu gần nhất, nhưng mắt bây giờ đặt phía *nguồn sáng*. Ta không cần màu gỗ hay màu sơn. Nắng được coi như các tia song song, nên góc nhìn này dùng phép chiếu trực giao. Camera người xem vẫn dùng phối cảnh; hai ma trận có lý do riêng để khác nhau.
+
+<InteractiveLab demo="shader-hot-reload" mode="shutter-depth" />
+
+## Viết code từng bước
+
+### Bước 1. Đặt mắt nhìn từ ngoài cửa
+
+Từ tâm vùng cần chiếu, đi ngược chiều tia nắng 15 đơn vị rồi nhìn về tâm. Chọn một khung cố định đủ chứa cửa, hộp và sàn. Không lấy góc yaw hoặc zoom của người xem để dựng khung này, nếu không bản đồ sẽ dịch khi người xem nhúc nhích.
+
+{/* snippet include/shutter_scene.hpp#sun-view */}
+
+```cpp title="include/shutter_scene.hpp — Đặt mắt nhìn từ ngoài cửa"
+inline Mat4 lightVP(const ShutterState& state) {
+    const Vec3 focus{0.0F, 1.65F, 2.5F};
+    const Vec3 eye = add(focus, scale(sunDirection(state), 15.0F));
+    // Nắng chiếu song song nên dùng phép chiếu trực giao, không dùng camera của người xem.
+    return mul(ortho(-7.6F, 7.6F, -7.2F, 7.2F, 1.0F, 32.0F), lookAt(eye, focus));
+}
+```
+
+<CourseWorkFile project="35" step={3} path="include/shutter_scene.hpp" />
+
+<CourseWorkFile project="35" step={3} path="shaders/depth.vert" />
+
+<CourseWorkFile project="35" step={3} path="shaders/depth.frag" />
+
+### Bước 2. Tạo nơi ghi độ sâu
+
+Gắn texture 1024×1024 vào GL_DEPTH_ATTACHMENT của framebuffer. Lượt này không có ảnh màu, vì vậy đặt cả draw buffer và read buffer về GL_NONE rồi kiểm GL_FRAMEBUFFER_COMPLETE. Chỉ cấp phát một lần; khi cửa sổ đổi kích thước, shadow map vẫn có cùng độ phân giải.
+
+{/* snippet include/shadow_target.hpp#depth-target */}
+
+```cpp title="include/shadow_target.hpp — Tạo nơi ghi độ sâu"
+gl.GenTextures(1, &texture);
+gl.BindTexture(GL_TEXTURE_2D, texture);
+gl.TexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, side, side, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+gl.GenFramebuffers(1, &fbo);
+gl.BindFramebuffer(GL_FRAMEBUFFER, fbo);
+gl.FramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, texture, 0);
+gl.DrawBuffer(GL_NONE);
+gl.ReadBuffer(GL_NONE);
+const GLenum status = gl.CheckFramebufferStatus(GL_FRAMEBUFFER);
+gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
+```
+
+<CourseWorkFile project="35" step={3} path="include/shadow_target.hpp" />
+
+### Bước 3. Hỏi nguồn sáng trước khi vẽ từ mắt
+
+Dùng đúng danh sách room đã dựng. Đặt viewport theo kích thước texture, xóa độ sâu cũ rồi vẽ các vật; sau đó gắn lại framebuffer mặc định. Nhấn V để xem chính texture đó. Gần nguồn sáng là giá trị thấp; nền trắng là 1, nơi không ghi được mặt nào.
+
+{/* snippet include/room_drawing.hpp#shadow-pass */}
+
+```cpp title="include/room_drawing.hpp — Hỏi nguồn sáng trước khi vẽ từ mắt"
+gl.BindFramebuffer(GL_FRAMEBUFFER, shadow.fbo);
+gl.Viewport(0, 0, ShadowTarget::side, ShadowTarget::side);
+gl.Enable(GL_DEPTH_TEST);
+gl.Enable(GL_CULL_FACE);
+gl.Clear(GL_DEPTH_BUFFER_BIT);
+gl.UseProgram(shadow.writer);
+gl.UniformMatrix4fv(shadow.light, 1, GL_FALSE, light.m.data());
+gl.BindVertexArray(vao);
+for (const Piece& part : room) {
+    gl.UniformMatrix4fv(shadow.model, 1, GL_FALSE, part.model.m.data());
+    gl.DrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_SHORT, nullptr);
+}
+gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
+```
+
+<CourseWorkFile project="35" step={3} path="include/room_drawing.hpp" />
+
+<CourseWorkFile project="35" step={3} path="include/shader_input.hpp" />
+
+<CourseWorkFile project="35" step={3} path="include/shader_application.hpp" />
+
+## Ghép các phần lại
+
+Bộ ghi depth chỉ cần vertex shader đưa đỉnh sang clip space của đèn. Fragment shader không cần dựng một màu xám: phần cứng tự ghi độ sâu sau depth test. Ảnh xám khi nhấn V là một lượt đọc texture để giải thích, không phải dữ liệu màu của bóng.
+
+```sh title="Terminal — chạy mã của bạn trong work/"
+cmake --build build-work --config Release --target project_35_work --parallel 1
+.\build-work\Release\project_35_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Bỏ lệnh phục hồi viewport của camera sau lượt depth. Ảnh thành phẩm có thể bị lệch hoặc chỉ chiếm một phần cửa sổ dù shadow map vẫn đúng. Khôi phục viewport theo drawable size; đừng sửa camera để bù cho lỗi trạng thái OpenGL.
+
+## Tự kiểm tra kết quả
+
+V chuyển được giữa phòng và texture vuông. Nhìn từ đèn thấy cả nền trống lẫn các mặt che; nghiêng lá làm dấu vết trong texture thay đổi. Chỉ xoay camera thì ảnh độ sâu đứng yên.
+
+## Bài tập mở rộng
+
+Đổi góc Q/E và dự đoán trước xem phía nào của khung cửa sẽ lọt vào shadow map. Tại sao đổi từ texture 1024 sang 2048 không làm các tia Mặt Trời bớt song song?
+
+Tiếp theo: [Hai điểm trên sàn, chỉ một điểm có nắng](/projects/shader-hot-reload-lab/04-hai-diem-san-mot-diem-co-nang).

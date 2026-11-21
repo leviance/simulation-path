@@ -5,6 +5,7 @@ import type { DemoId } from "@/lib/course";
 import { labComponents } from "@/course/generated/lab-loaders";
 import type { ProjectLabMeta } from "@/course/labs/types";
 import type { InteractiveLabMode } from "./types";
+import { LabHeading } from "./lab-heading";
 
 export function InteractiveLabClient({
   demo,
@@ -22,15 +23,13 @@ export function InteractiveLabClient({
   const Lab = labComponents[demo as keyof typeof labComponents];
 
   return (
-    <section className="interactive-lab">
-      <header>
-        <div>
-          <span>{info.label}</span>
-          <h2>{info.title}</h2>
-          <p>{info.description}</p>
-        </div>
-        <b>CANVAS 2D · LIVE</b>
-      </header>
+    <section className="interactive-lab" data-lab-ui="">
+      <LabHeading
+        label={info.label}
+        title={info.title}
+        description={info.description}
+        badge="CANVAS 2D · LIVE"
+      />
       <Suspense
         fallback={
           <div className="lab-loading" role="status">

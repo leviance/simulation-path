@@ -1,6 +1,8 @@
-# Project 35 — Kiểm chứng shader gallery
+# Lưu trữ: kiểm chứng bản Shader Gallery cũ của Project 35
 
-Ngày kiểm: 29/10/2026. Đối chiếu với [Project Specification v4](../specifications/cpp-sdl3-simulation-roadmap-agent-product-spec-v4-complete.md), mục Project 35. Phạm vi là công cụ fullscreen có ít nhất bốn hiệu ứng, không phải cube đổi màu.
+Project 35 hiện là **Nắng qua cửa chớp**. Xem [đặc tả hiện hành, mục Project 35](../specifications/cpp-sdl3-simulation-roadmap-agent-product-spec-v4-complete.md#project-35--nắng-qua-cửa-chớp-tự-dựng-bóng-đổ-trong-một-căn-phòng) và [hướng dẫn chạy bản C++ hiện tại](../../examples/project-35-shader-hot-reload-lab/README.md). Các số liệu và phím tắt bên dưới chỉ thuộc bản cũ.
+
+Ngày kiểm bản cũ: 29/10/2026. Khi đó sản phẩm là công cụ fullscreen có ít nhất bốn hiệu ứng.
 
 ## Sản phẩm và giáo trình
 

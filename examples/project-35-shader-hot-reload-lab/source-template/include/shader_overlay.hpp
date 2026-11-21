@@ -4,7 +4,7 @@
 #include <sstream>
 
 namespace lab {
-#if LAB_CHECKPOINT >= 10
+#if LAB_CHECKPOINT >= 6
 inline std::vector<std::string> wrapShaderLog(std::string_view message, std::size_t columns) {
     std::vector<std::string> rows;
     std::string line;
@@ -93,30 +93,24 @@ void main() { fragColor = texture(uTexture, vec2(uv.x, 1.0 - uv.y)); }
         cachedText.clear();
     }
 
-    void draw(GlApi& gl, int framebufferWidth, int framebufferHeight, const ShaderScene& scene, const ReloadState& reload, double frameMs, int logOffset, std::uint64_t now) {
+    void draw(GlApi& gl, int framebufferWidth, int framebufferHeight, const ShutterState& scene, const ReloadState& reload, int logOffset, std::uint64_t now) {
         const bool error = !reload.lastReloadSucceeded;
-        if (!scene.showDebug && !error)
-            return;
-        resize(gl, framebufferWidth, std::min(240, framebufferHeight));
-        std::string_view active = "Embedded recovery";
-        if (reload.activeEffect < kEffects.size()) {
-            active = kEffects[reload.activeEffect].name;
-        }
-        const char* autoReload = "OFF";
-        if (scene.autoReload) {
-            autoReload = "ON";
-        }
-        const char* reloadStatus = " OK";
-        if (error) {
-            reloadStatus = " ERROR / LAST-GOOD KEPT";
-        }
+        if (!scene.inspect && !error) return;
+        resize(gl, framebufferWidth, std::min(160, framebufferHeight));
         std::ostringstream text;
-        text << "ACTIVE " << active << " / REQ " << scene.requestedEffect + 1 << '\n';
-        text << "GEN " << reload.generation << " TRY " << reload.attempts << " AUTO " << autoReload << reloadStatus << '\n';
-        text << "1-4 gallery F5 reload Tab debug\n";
-        text << "Drag/wheel Space N R A PgUp/PgDn\n";
-        // Time/frame wall changes continuously. Refresh regular text at 4 Hz,
-        // but a new error or generation is shown immediately.
+        if (error) {
+            text << "GLSL ERROR | LAST GOOD ACTIVE | PgUp/PgDn: log | F5: retry\n";
+        } else {
+            text << std::fixed << std::setprecision(1) << "SHUTTER ROOM | slats " << scene.angle << " deg | box X " << scene.boxX
+                 << " | sun " << scene.sun << " deg | bias " << std::setprecision(4) << scene.bias << '\n';
+            text << "Left drag/arrows: slats | A/D: box | Q/E: sun | 1/2/3: presets\n";
+            text << "Right drag/J/K/W/S: orbit | Wheel/+/-: zoom | Space/N: play/step\n";
+            text << "V: depth | H: shadows | F: filter | [ ]: bias | Tab: close\n";
+#if LAB_CHECKPOINT >= 7
+            text << "M: beauty / depth / visibility / Lambert | layer " << scene.mode << '\n';
+#endif
+            text << "R: reset | F5: reload | GLSL generation " << reload.generation;
+        }
         const std::string key = text.str() + reload.diagnostics + std::to_string(logOffset);
         if (key != cachedText || now >= nextRefresh) {
             cachedText = key;
@@ -124,15 +118,13 @@ void main() { fragColor = texture(uTexture, vec2(uv.x, 1.0 - uv.y)); }
             SDL_SetRenderDrawColor(textRenderer, 8, 14, 25, 255);
             SDL_RenderClear(textRenderer);
             std::vector<std::string> rows = wrapShaderLog(text.str(), std::size_t(std::max(16, (width - 16) / 16)));
-            std::ostringstream status;
-            status << std::fixed << std::setprecision(2) << "t " << scene.timeSeconds << " z " << scene.zoom << " CPUframe " << frameMs << "ms";
-            rows.push_back(status.str());
             auto logRows = wrapShaderLog(reload.diagnostics, std::size_t(std::max(16, (width - 16) / 16)));
-            const auto offset = std::min(std::size_t(std::max(0, logOffset)), logRows.size());
+            std::size_t offset = 0;
+            if (!logRows.empty()) offset = std::min(std::size_t(std::max(0, logOffset)), logRows.size() - 1);
             rows.insert(rows.end(), logRows.begin() + offset, logRows.end());
             int y = 4;
             for (std::size_t index = 0; index < rows.size() && y + 8 <= height / 2; ++index) {
-                if (error && index >= 5)
+                if (error)
                     SDL_SetRenderDrawColor(textRenderer, 255, 147, 142, 255);
                 else
                     SDL_SetRenderDrawColor(textRenderer, 191, 220, 234, 255);

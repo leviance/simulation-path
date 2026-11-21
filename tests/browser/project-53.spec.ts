@@ -13,6 +13,15 @@ test.beforeEach(async ({ page }) => {
 test.afterEach(async ({ page }) => {
   expect(errors.get(page)).toEqual([]);
 });
+async function expectCaptionUsesLabText(page: Page) {
+  const shell = page.locator("[data-lab-ui].interactive-lab").first();
+  const expected = await shell.evaluate((el) => getComputedStyle(el).color);
+  await expect(shell.locator("[data-volume53-ready] figcaption strong").first()).toHaveCSS(
+    "color",
+    expected,
+  );
+}
+
 async function ready(page: Page, lesson = final) {
   await page.goto(base + lesson);
   await expect(page.locator('[data-volume53-ready="true"]')).toBeVisible({ timeout: 25000 });
@@ -55,10 +64,7 @@ test("P53 final uses 128^3 actual samples, finite audit and a currently painted 
     page.locator("[data-volume53-ready]").getByText(/128³ = 2\.097\.152 mẫu/),
   ).toBeVisible();
   await expect(page.locator('[data-scene-ready="true"]')).toBeVisible();
-  await expect(page.locator("[data-volume53-ready] figcaption strong").first()).toHaveCSS(
-    "color",
-    "rgb(230, 227, 212)",
-  );
+  await expectCaptionUsesLabText(page);
   await page.locator("[data-volume53-ready]").screenshot({
     path: ".validation/p53-workbench-web.png",
     // The full lab is taller than a viewport; omit the site's sticky navigation
@@ -161,10 +167,7 @@ test("P53 DPR/resize, theme/progress and old URLs remain usable", async ({ brows
   await page.reload();
   await expect(page.getByRole("button", { name: "Đã hoàn thành", exact: true })).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await expect(page.locator("[data-volume53-ready] figcaption strong").first()).toHaveCSS(
-    "color",
-    "rgb(230, 227, 212)",
-  );
+  await expectCaptionUsesLabText(page);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 2),

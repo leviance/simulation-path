@@ -204,7 +204,7 @@ AI Agent tự thiết kế curriculum để đưa người học từ kiến th�
 32. **Đài phun hạt CPU: một triệu particle với AoS và SoA** — Hạt có emission, chuyển động, lifetime và tái sử dụng; so hai layout trên cùng workload.
 33. **Vẽ lại tam giác cũ bằng GPU và đối chiếu từng bước với renderer CPU** — CPU triangle và GPU triangle chạy cạnh nhau hoặc toggle.
 34. **Một model viewer, hai renderer CPU và GPU** — Chuyển model viewer tự viết sang OpenGL, dùng chung mesh/camera và so chi phí hai backend.
-35. **Phòng thí nghiệm shader: sửa GLSL và thấy kết quả ngay** — Compile/reload nhanh; lỗi shader hiện rõ; có gradient/circle/Mandelbrot/noise toy.
+35. **Nắng qua cửa chớp: tự dựng bóng đổ trong một căn phòng** — Nghiêng lá chớp, đưa hộp vào vệt nắng và nhìn căn phòng từ phía nguồn sáng để hiểu bóng đổ.
 36. **Căn phòng hình khối không mesh: ray-march sphere, box và torus** — Scene 3D procedural với camera, normal, lighting và step-count heatmap.
 37. **Máy tính vector 1 triệu phần tử trên GPU** — Dashboard kiểm chứng vòng đời compute; tách kernel time và chi phí upload/readback.
 38. **Buồng hạt tích điện 3D: quỹ đạo trong điện trường và từ trường** — GPU giữ/cập nhật state và render trực tiếp ít nhất một triệu hạt; quan sát quỹ đạo, đối chiếu nghiệm tham chiếu và thử mốc năm triệu theo phần cứng.
@@ -264,7 +264,7 @@ Project 01–72 vẫn thuộc lộ trình chính; Project 73–78 vẫn tùy ch�
 | Renderer CPU — 11–21 | Dùng nền 2D, vector, lượng giác và transform. Đích chung là OBJ viewer 21; không yêu cầu dựng lại application shell trong mỗi project. |
 | Vật lý — 22–26 | Cần input, vector và timing; không buộc học toàn bộ renderer. Nếu chọn cảnh 3D, chuẩn bị camera/presentation cần thiết. Mỗi hệ có mô hình và phép kiểm chứng riêng. |
 | Không gian và hiệu năng — 27–32 | 27–28 dùng vector, timestep và tọa độ 2D; 29 dùng camera 2D/AABB; 30 cần camera 3D, AABB và frustum; 31 thêm integration và tổng hợp lực bằng cây. 32 không bắt buộc học N-body ở 31. |
-| Graphics GPU — 33–36 | 33 đối chiếu triangle CPU/GPU; 34 chuyển viewer 21 sang hai backend; 35 xây công cụ shader; 36 thêm SDF và ray marching. Không bắt buộc học xong 22–32. |
+| Graphics GPU — 33–36 | 33 đối chiếu triangle CPU/GPU; 34 chuyển viewer 21 sang hai backend; 35 dựng bóng đổ từ hai góc nhìn và nạp lại shader; 36 thêm SDF và ray marching. Không bắt buộc học xong 22–32. |
 | GPU compute — 37–40 | Cần OpenGL/GLSL và kiểm tra phần cứng. 37 dạy vòng đời compute; 38 dựng buồng hạt tích điện; 39 dùng reduction/scan, compaction và indirect draw để khám phá thành phố 3D; 40 dùng solver/grid/contact để dựng xưởng vải 3D. 38 cần vector/cross, camera và timestep; lực/Boris được giải thích tại chỗ. 39 có thể đi thẳng từ 37 và nền graphics 34 bằng scaffold nhiều pass. 40 cần kiến thức constraint và grid được chuẩn bị tại chỗ hoặc từ 25/28; không bắt học luật Boids hay điện từ trước. |
 | Toán cho đồ họa 3D và giả lập — 41–45 | Cần vector/camera/graphics, dùng lại compute/scan từ 37–39 khi cần; không bắt học vật lý nguyên tử, MD hoặc vải 40. 41 tạo mesh từ công thức; 42 morph particle qua sampling/ánh xạ/nội suy; 43 khám phá fractal; 44 nặn scalar field và trích mesh; 45 dùng field orbital được cung cấp để dựng Atomic Playground. Toán mới được giải thích tại thay đổi nhìn thấy trong app, mỗi gói chạy độc lập. |
 | Trường và chất lưu — 46–51 | 46 là cellular automata độc lập. 47–49 đi theo dữ liệu trên lưới; 50–51 đi theo hạt. SPH cần integration và tìm hàng xóm; không bắt hoàn thành các công cụ 41–45. Trước 51 phải mở rộng grid, kernel và đơn vị sang 3D. |
@@ -282,7 +282,7 @@ Các yêu cầu dưới đây xác định bối cảnh sử dụng và phần �
 - **11–21:** 11–12 là thí nghiệm projection/rotation; 13–14 xây object viewer và camera; 15 là công cụ chẩn đoán dùng tiếp ở 16–20; 16–18 hoàn thiện bề mặt, depth và clipping; 19–20 thêm ánh sáng/texture; 21 tích hợp thành model viewer. Mesh ở 19 được cung cấp dưới dạng dữ liệu đã đọc nếu parser chưa được dạy ở 21.
 - **22–26:** 22 gắn quỹ đạo với việc nhắm mục tiêu; 23 so integrator trên cùng hệ và giải thích lực lò xo đơn trước chain ở 25; 24 dùng ca va chạm có kiểm chứng trước bể nhiều bóng; 25 phân biệt damping vật lý với sai số số học; 26 phân biệt chaos với integration error.
 - **27–32:** 27–28 là cùng ứng dụng Boids trước/sau tối ưu; 29 là bản đồ có đối tượng mang diện tích; 30 là công cụ khảo sát dữ liệu 3D; 31 giải bài toán tương tác xa bằng xấp xỉ; 32 khảo sát chi phí bộ nhớ bằng đài phun hạt CPU. Không thay sản phẩm bằng việc rê chuột tô màu các điểm hoặc chỉ vẽ các hộp của cây.
-- **33–36:** 33 là bài chuyển tiếp nền tảng, không bị ép thành showcase nâng cao. 34 kế thừa viewer 21; 35 là công cụ làm việc với shader có reload/báo lỗi; 36 tạo cảnh SDF. SDF tìm bề mặt ở 36 khác tích lũy mật độ thể tích ở 54.
+- **33–36:** 33 nối renderer CPU với GPU. 34 kế thừa viewer 21; 35 dùng lại mesh và camera để dựng nắng qua cửa chớp bằng shadow mapping. 36 giữ quy trình reload để dựng cảnh SDF, khác với tích lũy mật độ ở 54.
 - **37–40:** 37 là bài thí nghiệm phép tính độc lập và chi phí truyền dữ liệu. 38 giữ state qua nhiều bước để dựng buồng hạt tích điện 3D, không lặp đài phun CPU 32. 39 dùng reduction/scan/compaction để chọn object và dựng lệnh vẽ cho một thành phố 3D có thể khám phá. 40 nối constraint solver, grid 3D và tiếp xúc vào bề mặt vải có thể kéo/ghim/thả; chuỗi lò xo 25 chỉ là kiến thức cầu nối, không thay sản phẩm mesh. 38–40 có viewport 3D làm đầu ra chính, dashboard/debug hỗ trợ hiện tượng và kiểm chứng; không giới thiệu primitive hoặc số phần tử lớn như sản phẩm duy nhất.
 - **41–45:** mỗi project là một công cụ đồ họa tương tác có câu hỏi gợi tò mò. 41 biến công thức thành mesh có thể chỉnh/xuất; 42 lấy mẫu mesh và biến hình triệu hạt; 43 dùng phép lặp/DE để khám phá fractal 3D; 44 chỉnh trường số bằng cọ rồi trích bề mặt; 45 dùng density orbital được cung cấp để dựng cloud triệu điểm và công cụ đo/quan sát. Chia sẻ scaffold/primitive có giải thích, không chia một bài vật lý thành năm project. Bắt đầu từ kết quả nhìn/thao tác được, dùng lỗi hình và chi phí để dẫn vào toán/code, không kết thúc ở bảng công thức hoặc benchmark trống.
 - **46–51:** cát/nước cellular ở 46 không phải solver chất lưu. 47 đặt câu hỏi nguồn nhiệt/điều kiện biên; 48 dùng tracer để thấy tác dụng của trường; 49 là công cụ khói Eulerian; 50 mở cách biểu diễn Lagrangian bằng SPH; 51 mở rộng SPH sang 3D/GPU. Không gọi mô hình sau là bản chính xác hơn của mô hình trước chỉ vì trông đẹp hơn.
@@ -2584,72 +2584,39 @@ Agent tự chọn số bài, checkpoint và cách giải thích theo Mục 3; b�
 
 ---
 
-## Project 35 — Phòng thí nghiệm shader: sửa GLSL và thấy kết quả ngay
+## Project 35 — Nắng qua cửa chớp: tự dựng bóng đổ trong một căn phòng
 
-**Mức tham vọng trực quan:** Advanced GPU / real-time showcase
+**Vai trò:** Tiếp nối mesh/camera của Project 34 và Z-buffer của Project 17. Project 19 phân biệt mặt hướng về nguồn sáng; lần này phải tìm được cả mặt **hướng về nguồn sáng nhưng bị vật khác che**. Cách sửa GLSL an toàn vẫn dùng được khi chuyển sang Project 36–37.
 
 ### Đề bài / mục tiêu sản phẩm
 
-Làm app hot-reload shader, truyền time/resolution/mouse và tạo gallery effect.
+Xây ứng dụng C++20/SDL3/OpenGL 3.3 Core. Khi nghiêng các lá chớp, những dải nắng phải đổi hình trên sàn; khi chiếc hộp đi vào vùng nắng, dải sáng phải đi qua cạnh hộp rồi tiếp tục trên mặt sàn. Bóng đổ phía sau hộp được tính từ hình học, không vẽ sẵn trong vật liệu.
 
 ### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
 
-Compile/reload nhanh; lỗi shader hiện rõ; có gradient/circle/Mandelbrot/noise toy.
-
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+Một góc phòng nhìn chéo: khung cửa thật sự có lỗ, một bộ lá chớp, chiếc hộp và mặt sàn. Nhìn ảnh đầu đã phân biệt được nắng ấm với vùng râm; trong bóng vẫn đọc được hình khối. Nghiêng lá hoặc đổi hướng nắng làm vệt sáng di chuyển. Đổi riêng camera chỉ làm thay đổi góc nhìn.
 
 ### Phạm vi chức năng tối thiểu bắt buộc
 
-- Fullscreen shader playground.
-- Hot reload GLSL.
-- Uniform time/resolution/mouse.
-- Compile errors hiển thị.
+- Dùng lại cách vẽ mesh từ 34, chỉ cần một mesh hộp đơn vị và nhiều phép biến đổi. Cùng một danh sách vật thể và cùng model matrix được vẽ từ hai phía; không làm thêm trình nạp model.
+- Một nguồn sáng định hướng. Lượt đầu ghi độ sâu vào depth texture qua framebuffer của nguồn sáng; lượt sau từ camera, chiếu điểm thế giới sang tọa độ nguồn sáng và so sánh độ sâu. Bên ngoài vùng bản đồ phải có quy ước rõ ràng. Không dùng sọc texture hoặc hình bóng dựng sẵn.
+- Có chế độ ảnh thành phẩm, xem độ sâu nguồn sáng và phân biệt kết quả so độ sâu với độ sáng Lambert. Chỉnh bias và so bóng cứng với bộ lọc nhỏ để thấy sai lệch khi bias quá thấp hoặc quá cao.
+- Shader ở file ngoài; khi nạp lại, kiểm compile, link, tên và kiểu uniform thực sự của program. Báo file/stage/log khi lỗi; cảnh và thao tác vẫn hoạt động bằng program hợp lệ trước đó.
 
-### Quy mô / độ phức tạp tối thiểu
+### Quy mô, tương tác và chất lượng hình ảnh
 
-- Gallery ít nhất 4 effects.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
+Một cửa sổ, một hộp, một nguồn sáng, một shadow map. Điều khiển riêng góc lá, vị trí hộp, hướng nắng và góc quan sát. Có preset mở/khép, reset, chạy/dừng hoặc tiến một bước và phím thay cho kéo. Cảnh mặc định phải thấy vệt nắng chạy qua hai bề mặt khác hướng và bóng tiếp xúc sát chân hộp. Toàn bộ hình học, shader và dữ liệu nằm trong ZIP; không yêu cầu thêm mô hình trang trí, nhiều đèn, bóng đổ toàn thế giới, ray tracing, compute, bụi hoặc tán xạ thể tích.
 
-### Tương tác bắt buộc
+### Ràng buộc khi giảng dạy
 
-- Reload key; mouse input; chọn shader.
-
-### Mức đồ họa / trình bày tối thiểu
-
-- Demo GPU phải chạy real-time và có chất lượng trình bày xứng đáng với việc chuyển sang GPU: viewport lớn, chuyển động mượt, depth/lighting/color rõ ràng.
-- Shader project phải có ít nhất một chế độ 'showcase' sạch bên cạnh debug mode.
-- Không chấp nhận chỉ render tam giác/cube rất nhỏ ở giữa cửa sổ mà không có camera, nền hoặc context trực quan phù hợp với đề bài.
-- Shader gallery phải có ít nhất 4 effect có chuyển động/tham số rõ ràng; fullscreen rendering, không chỉ một quad nhỏ.
-- Hot reload phải giữ ứng dụng chạy và hiển thị lỗi compile trong overlay/log dễ đọc.
-
-### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
-
-- Shader loader
-- Compile/link logger
-- Reload trigger
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
-
-### Không được coi là hoàn thành nếu
-
-- Chỉ một shader hard-code trong C++.
-- Không báo compile errors.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+Từ một starter chạy được, chỉ rõ phần kế thừa và phần người học tự viết: khung + lá chớp, phép nhìn từ đèn, depth framebuffer, phép so, bias và việc nạp lại shader. Web có ảnh chụp từ C++ và một Canvas mặt cắt tương tác giải thích một tia đi qua khe hoặc gặp vật cản; Canvas không phải renderer OpenGL và không thay ứng dụng native.
 
 ### Acceptance Criteria
 
-- Lỗi compile/link chỉ rõ file/dòng hoặc log tương ứng; shader hỏng không thay program tốt đang dùng và có thể sửa/reload tiếp mà không restart.
-- Giữ gallery ít nhất bốn hiệu ứng theo phạm vi đã nêu, nhưng tất cả chạy trong cùng công cụ; resize/time/mouse uniforms và cleanup có test/checklist riêng.
-- Compile error hữu ích.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
-
-### Quyền tự quyết của AI Agent khi xây giáo trình
-
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+- Cùng một sàn có cùng pháp tuyến vẫn có điểm sáng và điểm tối; tắt phép so bóng làm các dải đó biến mất, không làm hộp/cửa sổ biến mất. Khép cửa làm diện tích nhận nắng trong vùng thử nhỏ hơn khi mở.
+- Cùng một điểm thế giới có UV và độ sâu phía đèn không đổi khi chỉ xoay camera. Di chuyển hộp làm bóng của nó rời vị trí cũ; kiểm cả điểm gần biên và ngoài bản đồ.
+- Chế độ depth hiển thị dữ liệu GPU thật; mẫu phải có cả vật che và nền trống. Ảnh CPU/Canvas minh họa không được ghi là ảnh từ GPU. Lỗi compile/link/kiểu uniform giữ program cũ; sửa file thì hồi phục mà không reset camera, hộp hoặc lá.
+- CTest kiểm mã của người học trong work/ khi chọn workbook; tách kiểm toán học, kiểm framebuffer trên driver, và kiểm trình duyệt. Có hướng dẫn các thay đổi theo checkpoint, mã cuối, ZIP và ảnh native của cùng cảnh mở/khép.
 
 ---
 

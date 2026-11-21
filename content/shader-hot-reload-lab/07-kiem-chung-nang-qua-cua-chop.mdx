@@ -1,0 +1,110 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Kiểm chứng nắng qua cửa chớp
+
+## Vấn đề cần giải quyết
+
+Hãy giao cho người khác hai lời hứa có thể kiểm được: “xoay camera không làm bóng chạy” và “đẩy hộp đi thì chỗ sàn dưới bóng cũ lại có nắng”. Ảnh đẹp chưa chứng minh được cả hai điều. Muốn kiểm, ta phải trở lại đúng *điểm trong thế giới*, không phải đúng pixel trên màn hình.
+
+## Hiểu ý tưởng trước khi viết code
+
+Chọn hai điểm có cùng pháp tuyến hướng lên: x bằng −0,8; z lần lượt gần 2,541 và 2,732. Với lá hé 23°, một tia từ điểm đầu hướng tới đèn gặp lá thứ tư, còn tia từ điểm sau xuyên qua khe. Một điểm thứ ba ở x bằng 1,03 và z gần 2,732 nằm dưới bóng chiếc hộp. Cùng các tọa độ đó có thể kiểm độc lập bằng ray–hộp trong CTest, bằng depth texture trên GPU và bằng hình cắt trên web.
+
+<InteractiveLab demo="shader-hot-reload" mode="shutter-observer" />
+
+## Viết code từng bước
+
+### Bước 1. Đọc cùng cảnh theo ba câu hỏi
+
+V xem độ sâu phía đèn. M lần lượt chuyển ảnh thành phẩm, bản đồ độ sâu, phần thấy nguồn sáng và lớp Lambert. Ở lớp cuối cả mảng sàn có thể cùng một màu. Đừng nhầm điều đó với bóng bị hỏng: ở đây ta cố tình bỏ thông tin về vật cản.
+
+{/* snippet shaders/room.frag#shadow-layer */}
+
+```glsl title="shaders/room.frag — Đọc cùng cảnh theo ba câu hỏi"
+vec3 inspectionLayer(vec3 beauty, float visibility, float lambert) {
+    if (uMode == 1) return vec3(visibility);
+    if (uMode == 2) return vec3(lambert);
+    return beauty;
+}
+```
+
+<CourseWorkFile project="35" step={7} path="shaders/room.frag" />
+
+<CourseWorkFile project="35" step={7} path="include/shader_renderer.hpp" />
+
+<CourseWorkFile project="35" step={7} path="include/room_drawing.hpp" />
+
+### Bước 2. Trở lại đúng điểm dưới bóng hộp
+
+Hàm kiểm đặt camera và trạng thái ban đầu, cho GPU vẽ cả căn phòng rồi đọc dữ liệu thật. Sau khi đẩy hộp sang x bằng −1,4, chính điểm sàn thứ ba ban đầu phải lại thấy nguồn sáng. Một tấm decal di chuyển theo camera có thể trông đẹp nhưng không qua phép thử này.
+
+{/* snippet include/shader_validation.hpp#floor-probes */}
+
+```cpp title="include/shader_validation.hpp — Trở lại đúng điểm dưới bóng hộp"
+frame();
+check(!lit(blade) && lit(gap), "one floor normal, two different depth comparisons");
+check(!lit(crate), "crate blocks its world-space probe");
+s.boxX = -1.4F;
+frame();
+check(lit(crate), "moving the crate uncovers its old shadow");
+```
+
+<CourseWorkFile project="35" step={7} path="include/shader_validation.hpp" />
+
+### Bước 3. Hỏi cả lượt đèn lẫn lượt mắt
+
+Đổi camera rồi chiếu lại điểm sàn lên ảnh mới. Giá trị tại pixel mới phải mang cùng ý nghĩa sáng/tối như trước. Còn khi mở/khép lá, lượng điểm nhận nắng trên dải sàn thử phải thay đổi. Đưa các lựa chọn lớp ảnh vào bàn phím và bảng đọc, nối --verify vào vòng chạy hữu hạn, rồi thử lỗi shader trên cùng cảnh.
+
+{/* snippet include/room_drawing.hpp#shadow-pass */}
+
+```cpp title="include/room_drawing.hpp — Hỏi cả lượt đèn lẫn lượt mắt"
+gl.BindFramebuffer(GL_FRAMEBUFFER, shadow.fbo);
+gl.Viewport(0, 0, ShadowTarget::side, ShadowTarget::side);
+gl.Enable(GL_DEPTH_TEST);
+gl.Enable(GL_CULL_FACE);
+gl.Clear(GL_DEPTH_BUFFER_BIT);
+gl.UseProgram(shadow.writer);
+gl.UniformMatrix4fv(shadow.light, 1, GL_FALSE, light.m.data());
+gl.BindVertexArray(vao);
+for (const Piece& part : room) {
+    gl.UniformMatrix4fv(shadow.model, 1, GL_FALSE, part.model.m.data());
+    gl.DrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_SHORT, nullptr);
+}
+gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
+```
+
+<CourseWorkFile project="35" step={7} path="include/shader_input.hpp" />
+
+<CourseWorkFile project="35" step={7} path="include/shader_overlay.hpp" />
+
+<CourseWorkFile project="35" step={7} path="include/shader_application.hpp" />
+
+## Ghép các phần lại
+
+Lúc này công việc trong work/ đã đủ để dựng bản hoàn chỉnh. CTest kiểm toán học bằng mã của bạn, không đọc header ở final/. Lượt --verify cần máy có OpenGL: nó kiểm pixel thực, sai cú pháp, sai interface và việc phục hồi. Mã/lệnh dưới đây cho phép người khác lặp lại mà không cần đặt camera bằng tay.
+
+```sh title="Terminal — chạy mã của bạn trong work/"
+cmake --build build-work --config Release --target project_35_work --parallel 1
+.\build-work\Release\project_35_work.exe
+```
+
+```sh title="Terminal — nghiệm thu mã vừa viết, không chuyển sang final/"
+cmake --build build-work --config Release --target project_35_check_work --parallel 1
+.\build-work\Release\project_35_work.exe --verify
+.\build-work\Release\project_35_work.exe --preset ajar --capture phong-cua-toi.png
+```
+
+## Thử làm sai để hiểu đúng
+
+Tạm gửi cameraVP thay cho lightVP ở lượt nhận bóng. Đứng yên ở một góc có thể chưa lộ rõ lỗi; xoay camera sẽ thấy vệt nắng trượt. Khôi phục ma trận rồi thử tắt bóng bằng H; nếu cả hộp biến mất, bạn đã bỏ nhầm phần hình học thay vì bỏ phép so.
+
+## Tự kiểm tra kết quả
+
+V và M cho thấy dữ liệu khác nhau nhưng giải thích được cùng cảnh. Khép cửa làm dải sàn thử tối đi, di chuyển hộp làm điểm cũ sáng lại. Bản work đạt CTest và --verify; bạn nhận ra được ảnh nào chụp từ C++ và hình nào là mặt cắt Canvas.
+
+## Bài tập mở rộng
+
+Tìm một điểm khác nằm sát rìa bóng. Dự đoán vì sao nó có thể đổi nhẹ khi bật PCF dù vị trí thế giới không đổi. Nếu viết thêm test, nên chọn nó hay chọn một điểm sâu trong vùng tối để kiểm việc xoay camera?
+
+[Tải mã hoàn chỉnh, checkpoint và tests](/downloads/project-35-shader-hot-reload-lab.zip). Mở `final/` để đối chiếu toàn bộ tệp sau khi đã tự làm. Sang [Project 36](/projects/ray-marched-shape-room), ta giữ quy trình nạp shader nhưng tìm bề mặt từ mỗi pixel thay vì vẽ lại mesh.

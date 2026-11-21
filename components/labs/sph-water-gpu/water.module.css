@@ -1,118 +1,23 @@
-.root {
-  background: #f3f7f9;
-  color: #254458;
-  border: 1px solid #d2dfe7;
-  border-radius: 12px;
-  padding: 14px;
-}
-:global([data-theme="dark"]) .root,
-:global(.dark) .root {
-  background: #10202d;
-  color: #d2e7f3;
-  border-color: #304a5d;
-}
-.heading {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-  margin-bottom: 12px;
-}
-.heading h3 {
-  margin: 3px 0;
-}
-.root .heading span {
-  color: #176d72;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-:global([data-theme="dark"]) .root .heading span,
-:global(.dark) .root .heading span {
-  color: #64e3bd;
-}
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 10px 0;
-  align-items: center;
-}
-.toolbar label {
-  display: flex;
-  gap: 5px;
-  align-items: center;
-  font-size: 12px;
-}
-.toolbar button,
-.toolbar select {
-  font-size: 12px;
-  color: inherit;
-  background: transparent;
-  border: 1px solid #7394a7;
-  border-radius: 5px;
-  padding: 7px 9px;
-}
-.toolbar select option {
-  color: #17374d;
-  background: #f3f7f9;
-}
-.toolbar button[aria-pressed="true"] {
-  background: #267e90;
-  color: #fff;
-  border-color: #267e90;
-}
-.toolbar button:disabled,
-.toolbar select:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.hint {
-  font-size: 12px;
-  line-height: 1.55;
-  opacity: 0.85;
-}
 .parameters {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-  margin: 12px 0;
-}
-.parameters label {
-  font-size: 12px;
+  gap: 1rem;
+  margin-block: 0.75rem;
 }
 .parameters input {
   width: 100%;
   display: block;
-  accent-color: #2296ab;
 }
 .status {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
-  font-size: 12px;
+  gap: 0.5rem 1rem;
   font-variant-numeric: tabular-nums;
-  margin: 10px 0;
-}
-.root summary {
-  cursor: pointer;
-  font-size: 13px;
-  padding: 8px 0;
-}
-.root details p {
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: var(--lab-label);
+  margin-block: 0.75rem;
 }
 @media (max-width: 520px) {
-  .root {
-    padding: 8px;
-  }
   .parameters {
     grid-template-columns: 1fr;
-  }
-  .heading {
-    align-items: flex-start;
-  }
-  .toolbar {
-    gap: 6px;
   }
 }

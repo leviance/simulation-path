@@ -55,7 +55,7 @@ test("Project 41 opens its new lessons and migrates only the retired progress", 
   await expect(entry).toContainText("9 bài");
   await entry.click();
   await expect(page).toHaveURL(/\/projects\/geometry-workshop$/);
-  await expect(page.getByLabel("Chờ nghiệm thu", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Chờ nghiệm thu", { exact: true })).toHaveCount(0);
   const lessons = page.getByRole("navigation", { name: "Các bài của Dự án 41" });
   await expect(lessons.getByRole("link")).toHaveCount(9);
   await lessons.getByRole("link").first().click();

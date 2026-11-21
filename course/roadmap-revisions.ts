@@ -1,7 +1,7 @@
 import type { ProjectRevision } from "./types";
 
 // Keep the revision until the replacement has been built and accepted.
-// The replacement keeps existing links working; only its optional note marks acceptance as pending.
+// Replacement slugs preserve links; optional acceptance notes are internal to the editorial team.
 const previousMolecularPart = "MÔ PHỎNG PHÂN TỬ TỪ 2 HẠT TỚI HÀNG TRIỆU HẠT";
 
 function landscapeRevision(

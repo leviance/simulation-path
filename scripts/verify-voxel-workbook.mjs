@@ -21,7 +21,7 @@ const option = workbookOption(id);
 const project = loadProjectCatalog().find((p) => p.id === id && hasGuidedWorkFiles(p.id));
 if (!project || !sdlDirectory || !existsSync(path.join(sdlDirectory, "SDL3Config.cmake")))
   throw Error(
-    "Usage: node --experimental-strip-types scripts/verify-voxel-workbook.mjs <11|31|32|52..64> <installed SDL3 3.4.8 CMake directory>",
+    "Usage: node --experimental-strip-types scripts/verify-voxel-workbook.mjs <11|31|32|35|52..64> <installed SDL3 3.4.8 CMake directory>",
   );
 const sdl = realpathSync(sdlDirectory);
 const archive = path.join(workspace, "public", "downloads", project.sourceDirectory + ".zip");
@@ -124,6 +124,13 @@ try {
     previous = after;
   }
   assert.deepEqual(snapshot(workDir), snapshot(path.join(scratch, "final")));
+  if (id === "35") {
+    // Launch the learner executable, not the bundled final target, to exercise its actual GLSL.
+    const gpu = await run(app, ["--verify"], "work/ shadow map and shader reload", 20_000);
+    assert.match(gpu, /real camera fragment sees a stripe and a gap: 1/);
+    assert.match(gpu, /corrected shader replaces the old program: 1/);
+    console.log("35: GPU shadow probes and hot reload passed in the learner executable.");
+  }
   for (const conf of ["Release", "Debug"]) {
     const dir = conf === "Release" || multi ? "build-work" : "build-work-debug";
     if (dir !== "build-work") await configure(dir, conf);
@@ -156,6 +163,12 @@ try {
       "particle.generation, config",
       "reusing a slot without starting a new generation",
     ],
+    35: [
+      "include/shutter_scene.hpp",
+      "boxX = std::clamp(state.boxX, -2.5F, 2.5F);",
+      "boxX = 0.35F;",
+      "ignoring the movable crate",
+    ],
     58: ["include/trail/surface.hpp", "face < 6", "face < 5", "five-sided cube"],
   }[id];
   if (mistake) {
@@ -178,6 +191,7 @@ try {
     if (id === "11") assert.match(rejected, /FAIL: independent analytic pixel/);
     if (id === "31") assert.match(rejected, /FAIL: skip exactly one target ID/);
     if (id === "32") assert.match(rejected, /FAIL: inspected slot survives its next birth/);
+    if (id === "35") assert.match(rejected, /moving the crate should free that point/);
     assert.equal(textAt(path.join(scratch, "final"), file), good.trimEnd().replaceAll("\r", ""));
     console.log(id + ": " + label + " in work/ rejected; bundled final/ unchanged.");
   }

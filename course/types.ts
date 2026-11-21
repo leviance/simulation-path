@@ -35,7 +35,6 @@ export interface PublishedProjectSummary extends ProjectSummaryBase {
   lessonCount: number;
   download: string;
   demoId: DemoId;
-  acceptanceNote?: string;
 }
 
 export interface ComingSoonProjectSummary extends ProjectSummaryBase {
@@ -48,6 +47,7 @@ export interface ProjectRevision {
   previousPart?: string;
   replacement?: {
     slug: string;
+    /** Internal verification record, not a learner-facing release status. */
     acceptanceNote?: string;
   };
   summary: string;

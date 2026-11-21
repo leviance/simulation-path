@@ -1,0 +1,109 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
+import { InteractiveLab } from "@/components/labs/interactive-lab";
+
+# Sửa shader mà không đóng cửa sổ
+
+## Vấn đề cần giải quyết
+
+Muốn thử sửa màu phần sàn nằm trong nắng, bạn có thể đóng ứng dụng và chạy lại, nhưng lúc ấy góc nhìn dùng để so sánh đã mất. Ta cần sửa trực tiếp file vật liệu trong khi vẫn nhìn được cùng một mép bóng, kể cả khi lần sửa đầu tiên viết sai.
+
+## Hiểu ý tưởng trước khi viết code
+
+C++ giữ riêng hai thứ: trạng thái phòng (lá, hộp, camera) và program OpenGL. Khi lưu GLSL, ứng dụng dựng một program thử bên cạnh bản đang vẽ. Driver phải biên dịch được cả hai stage, liên kết được chúng và xác nhận tên/kiểu uniform còn hoạt động. Chỉ sau đó mới thay program. Đây cũng là phần mang sang Project 36; ta không viết một compiler GLSL trong trình duyệt.
+
+<InteractiveLab demo="shader-hot-reload" mode="shutter-reload" />
+
+## Viết code từng bước
+
+### Bước 1. Tìm đúng cặp file để sửa
+
+Mở thư mục in sau chữ Shaders trong terminal của bản work. Giữ nguyên phòng rồi sửa một hệ số màu của ánh nắng trong room.frag. Nếu một trong hai file đọc lỗi hoặc đang rỗng, hàm dưới đây giữ program cũ; đừng sửa nhầm một bản .frag trong final hoặc checkpoint khác.
+
+{/* snippet include/shader_application.hpp#reload-material */}
+
+```cpp title="include/shader_application.hpp — Tìm đúng cặp file để sửa"
+inline bool reloadMaterial(GlApi& gl, RoomProgram& material, const std::filesystem::path& directory) {
+    ShaderSources candidate{};
+    std::string error;
+    if (readShaderFiles(directory, candidate, error)) {
+        return material.replace(gl, candidate);
+    }
+
+    ++material.reload.attempts;
+    material.reload.lastReloadSucceeded = false;
+    material.reload.diagnostics = error;
+    return false;
+}
+```
+
+<CourseWorkFile project="35" step={6} path="include/shader_application.hpp" />
+
+### Bước 2. Thử, rồi mới đổi program
+
+Lần theo RoomProgram::replace: compile từng stage, link, hỏi driver về các active uniform. Uniform location thuộc về *program đã link*, nên phải đổi các location cùng lúc với handle. F5 thử ngay; Tab mở bảng để đọc số lần nạp. Khi báo lỗi, Page Up/Page Down cho đọc log.
+
+{/* snippet include/shader_renderer.hpp#commit-program */}
+
+```cpp title="include/shader_renderer.hpp — Thử, rồi mới đổi program"
+const GLuint previous = std::exchange(active, candidate);
+locations = next;
+gl.UseProgram(active);
+if (previous) gl.DeleteProgram(previous);
+++reload.generation;
+reload.diagnostics.clear();
+return true;
+```
+
+<CourseWorkFile project="35" step={6} path="include/shader_input.hpp" />
+
+<CourseWorkFile project="35" step={6} path="include/shader_overlay.hpp" />
+
+### Bước 3. Đừng biên dịch một file đang ghi dở
+
+Editor có thể lưu bằng cách đổi tên file tạm. Watcher quan sát kích thước và thời điểm sửa; chỉ khi file đã ổn định mới thử một lần. Một lần lưu sai không được gây ra hàng trăm lần compile liên tục lúc chương trình vẫn đang vẽ.
+
+{/* snippet include/shader_files.hpp#debounce */}
+
+```cpp title="include/shader_files.hpp — Đừng biên dịch một file đang ghi dở"
+inline bool updateShaderWatch(ShaderWatchState& state, const ShaderFileStamps& stamps, std::uint64_t now, std::uint64_t debounce = 140) {
+    if (!state.initialized) {
+        state = {true, false, stamps, now};
+        return false;
+    }
+    if (stamps != state.observed || now < state.changedAtMilliseconds) {
+        state.observed = stamps;
+        state.pending = true;
+        state.changedAtMilliseconds = now;
+        return false;
+    }
+    if (!state.pending || now - state.changedAtMilliseconds < debounce)
+        return false;
+    state.pending = false;
+    return true;
+}
+```
+
+<CourseWorkFile project="35" step={6} path="include/shader_files.hpp" />
+
+## Ghép các phần lại
+
+Trong bản work, mở cửa bằng phím 1, đẩy hộp sang bên rồi nhấn Tab. Thử thay một màu và lưu: góc camera, lá và hộp phải giữ nguyên. Trong Canvas chỉ có thí nghiệm hình học; phím F5 trong trình duyệt là tải lại trang, không phải thao tác nạp shader của ứng dụng C++.
+
+```sh title="Terminal — chạy mã của bạn trong work/"
+cmake --build build-work --config Release --target project_35_work --parallel 1
+.\build-work\Release\project_35_work.exe
+```
+
+## Thử làm sai để hiểu đúng
+
+Bỏ một dấu chấm phẩy trong room.frag. Giữ bản sai tại chỗ đủ lâu để đọc file và stage trong log; cảnh vẫn vẽ được bằng program cũ. Khôi phục dấu rồi lưu. Lần sau thử cho một stage nhận vec2 trong khi stage kia gửi vec3: lỗi bây giờ đến khi link, không phải lỗi cú pháp.
+
+## Tự kiểm tra kết quả
+
+Bản sửa hợp lệ làm màu thay đổi; bản lỗi không làm mất hình hoặc reset camera. Sau khi sửa lại, generation tăng. Chỉ xoay lá hoặc nhấn H không tạo program mới.
+
+## Bài tập mở rộng
+
+Vì sao chỉ tìm chuỗi uShadow trong file chưa đủ để biết có thể gán sampler? Hãy nghĩ tới uniform sai kiểu, hoặc một biến có khai báo nhưng bị driver tối ưu vì không bao giờ dùng.
+
+Tiếp theo: [Kiểm chứng nắng qua cửa chớp](/projects/shader-hot-reload-lab/07-kiem-chung-nang-qua-cua-chop).

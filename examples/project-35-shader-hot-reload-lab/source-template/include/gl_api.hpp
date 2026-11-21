@@ -7,6 +7,23 @@
 namespace lab {
 // Load after the context is current. No GL calls survive its lifetime.
 struct GlApi {
+    PFNGLUNIFORMMATRIX4FVPROC UniformMatrix4fv{};
+    PFNGLGENFRAMEBUFFERSPROC GenFramebuffers{};
+    PFNGLBINDFRAMEBUFFERPROC BindFramebuffer{};
+    PFNGLFRAMEBUFFERTEXTURE2DPROC FramebufferTexture2D{};
+    PFNGLCHECKFRAMEBUFFERSTATUSPROC CheckFramebufferStatus{};
+    PFNGLDELETEFRAMEBUFFERSPROC DeleteFramebuffers{};
+    PFNGLDRAWBUFFERPROC DrawBuffer{};
+    PFNGLREADBUFFERPROC ReadBuffer{};
+    PFNGLENABLEPROC Enable{};
+    PFNGLGENBUFFERSPROC GenBuffers{};
+    PFNGLBINDBUFFERPROC BindBuffer{};
+    PFNGLBUFFERDATAPROC BufferData{};
+    PFNGLDELETEBUFFERSPROC DeleteBuffers{};
+    PFNGLENABLEVERTEXATTRIBARRAYPROC EnableVertexAttribArray{};
+    PFNGLVERTEXATTRIBPOINTERPROC VertexAttribPointer{};
+    PFNGLDRAWELEMENTSPROC DrawElements{};
+    PFNGLUNIFORM3FPROC Uniform3f{};
     PFNGLCLEARCOLORPROC ClearColor{};
     PFNGLCLEARPROC Clear{};
     PFNGLVIEWPORTPROC Viewport{};
@@ -64,7 +81,24 @@ struct GlApi {
 
     bool load() {
         missingFunction.clear();
-        return loadOne(ClearColor, "glClearColor") &&
+        return loadOne(UniformMatrix4fv, "glUniformMatrix4fv") &&
+            loadOne(GenFramebuffers, "glGenFramebuffers") &&
+            loadOne(BindFramebuffer, "glBindFramebuffer") &&
+            loadOne(FramebufferTexture2D, "glFramebufferTexture2D") &&
+            loadOne(CheckFramebufferStatus, "glCheckFramebufferStatus") &&
+            loadOne(DeleteFramebuffers, "glDeleteFramebuffers") &&
+            loadOne(DrawBuffer, "glDrawBuffer") &&
+            loadOne(ReadBuffer, "glReadBuffer") &&
+            loadOne(Enable, "glEnable") &&
+            loadOne(GenBuffers, "glGenBuffers") &&
+            loadOne(BindBuffer, "glBindBuffer") &&
+            loadOne(BufferData, "glBufferData") &&
+            loadOne(DeleteBuffers, "glDeleteBuffers") &&
+            loadOne(EnableVertexAttribArray, "glEnableVertexAttribArray") &&
+            loadOne(VertexAttribPointer, "glVertexAttribPointer") &&
+            loadOne(DrawElements, "glDrawElements") &&
+            loadOne(Uniform3f, "glUniform3f") &&
+            loadOne(ClearColor, "glClearColor") &&
             loadOne(Clear, "glClear") &&
             loadOne(Viewport, "glViewport") &&
             loadOne(Disable, "glDisable") &&

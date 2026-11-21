@@ -215,16 +215,16 @@ export default function WaterWorkshop({
   };
   const state = session?.state;
   return (
-    <section className={styles.root} data-water51-ready={session && renderer ? "true" : "false"}>
+    <section className="lab-workbench" data-water51-ready={session && renderer ? "true" : "false"}>
       {stage === 2 && <SplinePlot />}
-      <header className={styles.heading}>
+      <header className="lab-subheading">
         <div>
           <span>SPH · THỂ TÍCH THẬT</span>
           <h3>Bể nước 3D</h3>
         </div>
         <span>{state?.count.toLocaleString("en-US") ?? "…"} hạt CPU</span>
       </header>
-      <div className={styles.toolbar}>
+      <div className="lab-controls">
         <button
           type="button"
           disabled={!session || reduced || stage < 5}
@@ -291,7 +291,7 @@ export default function WaterWorkshop({
           </select>
         </label>
       </div>
-      <div className={styles.toolbar}>
+      <div className="lab-controls">
         <button
           type="button"
           aria-pressed={tool === "orbit"}
@@ -348,7 +348,7 @@ export default function WaterWorkshop({
           Góc nhìn ban đầu
         </button>
       </div>
-      <p id={ready ? help : undefined} className={styles.hint}>
+      <p id={ready ? help : undefined} className="lab-hint">
         Kéo theo công cụ đang chọn. Mũi tên điều khiển camera hoặc vị trí vật cản; Ctrl+mũi tên luôn
         xoay camera. Cuộn khi Canvas đang focus để zoom. Space chạy/dừng, N tiến một bước, R đặt lại
         nước; Home chỉ đặt lại góc nhìn. Công cụ khuấy chỉ dùng trong cảnh Nước qua vật cản, không
