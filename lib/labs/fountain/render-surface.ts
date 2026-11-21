@@ -23,18 +23,18 @@ export function prepareFountainSurface(frame: FountainFrame, scene: FountainScen
       const rayX = basis.forward.x + horizontal * basis.right.x + vertical * basis.up.x;
       const rayY = basis.forward.y + horizontal * basis.right.y + vertical * basis.up.y;
       const rayZ = basis.forward.z + horizontal * basis.right.z + vertical * basis.up.z;
-      let red = 7 + 7 * background;
-      let green = 13 + 10 * background;
-      let blue = 24 + 16 * background;
+      let red = 7 + 8 * background;
+      let green = 16 + 13 * background;
+      let blue = 31 + 16 * background;
       if (basis.eye.y > fountainFloorY && rayY < -1e-8) {
         const depth = (fountainFloorY - basis.eye.y) / rayY;
         if (depth > 0.1) {
           const worldX = basis.eye.x + rayX * depth;
           const worldZ = basis.eye.z + rayZ * depth;
           const fog = 1 / (1 + depth * 0.035);
-          red += (17 - red) * fog;
-          green += (28 - green) * fog;
-          blue += (42 - blue) * fog;
+          red += (18 - red) * fog;
+          green += (33 - green) * fog;
+          blue += (45 - blue) * fog;
 
           // One-metre grid; five-metre lines are stronger. Fade fine lines before they alias.
           const footprint = depth / focal;
@@ -52,7 +52,7 @@ export function prepareFountainSurface(frame: FountainFrame, scene: FountainScen
           const minor = Math.max(0, 1 - distance / width) * fade;
           const major =
             Math.max(0, 1 - majorDistance / width) * Math.max(0, Math.min(1, (3 - density) / 2));
-          const line = Math.max(minor * 0.55, major) * fog * (debug ? 1.2 : 0.8);
+          const line = Math.max(minor * 0.55, major) * fog * (debug ? 1.2 : 0.68);
           red += 32 * line;
           green += 57 * line;
           blue += 72 * line;

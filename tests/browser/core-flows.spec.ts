@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import projectCatalog from "../../course/projects.json";
+import projectCatalog from "../../course/projects.json" with { type: "json" };
 import { rebuildRevisions } from "../../course/roadmap-revisions";
 
 function captureBrowserErrors(page: Page) {
@@ -184,13 +184,16 @@ test("Project 11 Projection Lab exposes guarded depth, FOV, keyboard and clean s
 }) => {
   const errors = captureBrowserErrors(page);
   await page.goto("/projects/perspective-point/08-hoan-thien-va-kiem-chung");
-  const canvas = page.locator('canvas[aria-label^="Điểm sáng 3D"]');
+  const canvas = page.locator('canvas[aria-label^="Bay xuyên trường sao"]');
   await expect(canvas).toHaveAttribute("height", /\d+/);
   const read = (label: string) =>
     page
       .locator(".lab-readout > div")
       .filter({ has: page.getByText(label, { exact: true }) })
       .locator("dd");
+  await expect(page.getByTestId("flight-status")).toBeVisible();
+  const hid = page.getByRole("button", { name: "Hiện debug", exact: true });
+  if (await hid.count()) await hid.click();
   const preset = page.getByLabel("Điểm mẫu", { exact: true });
   for (const [value, status] of [
     ["3", "behind"],
@@ -200,6 +203,7 @@ test("Project 11 Projection Lab exposes guarded depth, FOV, keyboard and clean s
     ["0", "visible"],
   ]) {
     await preset.selectOption(value);
+    if (await hid.count()) await hid.click();
     await expect(read("trạng thái")).toHaveText(status);
   }
   const old = await read("pixel").textContent();
@@ -215,6 +219,7 @@ test("Project 11 Projection Lab exposes guarded depth, FOV, keyboard and clean s
   await expect(page.locator(".lab-readout")).toHaveCount(0);
   await page.getByRole("button", { name: "Hiện debug", exact: true }).click();
   await page.getByRole("button", { name: "Đặt lại", exact: true }).click();
+  if (await hid.count()) await hid.click();
   await expect(read("world point")).toHaveText("(1.0000, 0.6000, 4.0000)");
   expect(errors).toEqual([]);
 });

@@ -22,18 +22,18 @@ inline void prepareFountainSurface(Framebuffer& image, const Camera& camera, boo
             const std::size_t index = std::size_t(y) * image.width + x;
             const double horizontal = (x + 0.5 - image.width * 0.5) / focal;
             const Vec3 ray{basis.forward.x + horizontal * basis.right.x + vertical * basis.up.x, basis.forward.y + horizontal * basis.right.y + vertical * basis.up.y, basis.forward.z + horizontal * basis.right.z + vertical * basis.up.z};
-            double red = 7 + 7 * background;
-            double green = 13 + 10 * background;
-            double blue = 24 + 16 * background;
+            double red = 7 + 8 * background;
+            double green = 16 + 13 * background;
+            double blue = 31 + 16 * background;
             if (basis.eye.y > fountainFloorY && ray.y < -1e-8) {
                 const double depth = (fountainFloorY - basis.eye.y) / ray.y;
                 if (depth > 0.1) {
                     const double worldX = basis.eye.x + ray.x * depth;
                     const double worldZ = basis.eye.z + ray.z * depth;
                     const double fog = 1 / (1 + depth * 0.035);
-                    red += (17 - red) * fog;
-                    green += (28 - green) * fog;
-                    blue += (42 - blue) * fog;
+                    red += (18 - red) * fog;
+                    green += (33 - green) * fog;
+                    blue += (45 - blue) * fog;
 
                     // One-metre grid; five-metre lines are stronger. Fade before aliasing.
                     const double footprint = depth / focal;
@@ -44,7 +44,7 @@ inline void prepareFountainSurface(Framebuffer& image, const Camera& camera, boo
                     const double fade = std::clamp((0.6 - density) / 0.4, 0.0, 1.0);
                     const double minor = std::max(0.0, 1 - distance / width) * fade;
                     const double major = std::max(0.0, 1 - majorDistance / width) * std::clamp((3 - density) / 2, 0.0, 1.0);
-                    double gridBrightness = 0.8;
+                    double gridBrightness = 0.68;
                     if (debug) {
                         gridBrightness = 1.2;
                     }

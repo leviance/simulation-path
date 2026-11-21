@@ -3,7 +3,7 @@
 
 namespace lab {
 #if LAB_CHECKPOINT >= 4
-// [snippet:ParticlesSoA]
+// [snippet particles-soa]
 struct ParticlesSoA {
     std::vector<std::uint32_t> id{};
     std::vector<std::uint32_t> generation{};
@@ -43,12 +43,12 @@ struct ParticlesSoA {
     }
 };
 
-// [/snippet:ParticlesSoA]
+// [/snippet particles-soa]
 inline ParticleAoS readParticle(const ParticlesSoA& source, std::size_t index) {
     return {source.id[index], source.generation[index], source.positionX[index], source.positionY[index], source.positionZ[index], source.velocityX[index], source.velocityY[index], source.velocityZ[index], source.age[index], source.lifetime[index], source.hue[index]};
 }
 
-// [snippet:writeParticle]
+// [snippet write-particle]
 inline void writeParticle(ParticlesSoA& destination, std::size_t index, const ParticleAoS& particle) {
     destination.id[index] = particle.id;
     destination.generation[index] = particle.generation;
@@ -63,7 +63,7 @@ inline void writeParticle(ParticlesSoA& destination, std::size_t index, const Pa
     destination.hue[index] = particle.hue;
 }
 
-// [/snippet:writeParticle]
+// [/snippet write-particle]
 inline ParticlesSoA makeParticlesSoA(std::span<const ParticleAoS> source) {
     ParticlesSoA destination{};
     destination.resize(source.size());
@@ -73,7 +73,7 @@ inline ParticlesSoA makeParticlesSoA(std::span<const ParticleAoS> source) {
 }
 
 #if LAB_CHECKPOINT >= 5
-// [snippet:updateSoARange]
+// [snippet update-soa-range]
 inline std::size_t updateSoARange(ParticlesSoA& particles, std::size_t begin, std::size_t end, const FountainConfig& config, float dt, MemoryWorkload workload, std::size_t oldActive) {
     std::size_t respawned = 0;
     if (workload == MemoryWorkload::gravityOnly) {
@@ -99,7 +99,7 @@ inline std::size_t updateSoARange(ParticlesSoA& particles, std::size_t begin, st
     return respawned;
 }
 
-// [/snippet:updateSoARange]
+// [/snippet update-soa-range]
 #endif
 
 inline std::size_t allocatedBytes(const ParticlesSoA& source) {
@@ -116,7 +116,7 @@ inline float particleDifference(const ParticleAoS& first, const ParticleAoS& sec
     return maximum;
 }
 
-// [snippet:particleErrorRatio]
+// [snippet particle-error-ratio]
 inline float fieldErrorRatio(float first, float second, float absoluteTolerance, float relativeTolerance) {
     const float allowed = absoluteTolerance + relativeTolerance * std::max(std::abs(first), std::abs(second));
     return std::abs(first - second) / allowed;
@@ -140,7 +140,7 @@ inline float particleErrorRatio(const ParticleAoS& first, const ParticleAoS& sec
     });
 }
 
-// [/snippet:particleErrorRatio]
+// [/snippet particle-error-ratio]
 
 inline double particleChecksum(const ParticleAoS& particle) {
     return double(particle.positionX) + 2.0 * particle.positionY + 3.0 * particle.positionZ + 5.0 * particle.velocityX + 7.0 * particle.velocityY + 11.0 * particle.velocityZ + 13.0 * particle.age + 17.0 * particle.lifetime + 19.0 * particle.hue;
@@ -160,7 +160,7 @@ inline double checksum(const ParticlesSoA& particles, std::size_t active) {
     return sum;
 }
 
-// [snippet:maximumLayoutDifference]
+// [snippet maximum-layout-difference]
 inline float maximumLayoutDifference(std::span<const ParticleAoS> aos, const ParticlesSoA& soa) {
     if (!soa.valid() || aos.size() != soa.size())
         return std::numeric_limits<float>::infinity();
@@ -171,6 +171,6 @@ inline float maximumLayoutDifference(std::span<const ParticleAoS> aos, const Par
     return maximum;
 }
 
-// [/snippet:maximumLayoutDifference]
+// [/snippet maximum-layout-difference]
 #endif
 } // namespace lab

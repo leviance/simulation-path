@@ -1,4 +1,5 @@
 #pragma once
+#include "spray_light.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -17,9 +18,16 @@ struct Vec3 {
 };
 
 struct Camera {
-    double yaw{0.45}, pitch{-0.38}, distance{14};
-    Vec3 target{0, 1.9, 0};
+    double yaw{-0.36}, pitch{-0.22}, distance{10.7};
+    Vec3 target{2.2, 2.1, 0};
 };
+
+// Ba góc máy dùng chung một snapshot; đổi góc không làm thời gian tiến lên.
+inline Camera cameraStation(int station) {
+    if (station == 2) return {0, -1.57079632679, 12, {2.2, 0, 0}};
+    if (station == 3) return {0, -0.06, 10.8, {2.2, 2.1, 0}};
+    return {};
+}
 
 struct ViewBasis {
     Vec3 right{}, up{}, forward{}, eye{};
@@ -80,8 +88,10 @@ inline std::uint32_t rgbColor(double red, double green, double blue) {
 }
 
 struct Framebuffer {
-    int width{1120}, height{570};
-    std::vector<std::uint32_t> pixels = std::vector<std::uint32_t>(1120 * 570);
+    SprayLight spray;
+    static constexpr int viewHeight = 640;
+    int width{1120}, height{viewHeight};
+    std::vector<std::uint32_t> pixels = std::vector<std::uint32_t>(1120 * viewHeight);
     std::vector<std::uint32_t> surfacePixels{};
     std::vector<float> surfaceDepth{};
     std::array<double, 9> surfaceKey{};
@@ -100,6 +110,22 @@ struct Framebuffer {
             return false;
         const std::uint32_t previous = pixels[index];
         pixels[index] = rgbColor(double(previous >> 24U) + double(color >> 24U) * opacity, double((previous >> 16U) & 255U) + double((color >> 16U) & 255U) * opacity, double((previous >> 8U) & 255U) + double((color >> 8U) & 255U) * opacity);
+        return true;
+    }
+
+    bool layWater(int x, int y, double depth, std::uint32_t color, double coverage) {
+        if (x < 0 || y < 0 || x >= width || y >= height) return false;
+        const auto i = std::size_t(y) * width + x;
+        if (depth > surfaceDepth[i] + 0.001) return false;
+        // Chồng thêm giọt làm vùng nước bớt trong, không sáng trắng như nguồn phát sáng.
+        const auto old = pixels[i];
+        const double a = std::clamp(coverage, 0.0, 1.0);
+        const auto channel = [&](unsigned shift) {
+            const double from = (old >> shift) & 255U;
+            const double to = (color >> shift) & 255U;
+            return std::lerp(from, to, a);
+        };
+        pixels[i] = rgbColor(channel(24), channel(16), channel(8));
         return true;
     }
 };

@@ -1,65 +1,53 @@
 import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Chặn điểm không thể nhìn thấy
+# Từ một điểm đến cả trường sao
 
 ## Vấn đề cần giải quyết
 
-Ta sắp dựng bốn cổng giống hệt nhau trên một đoạn đường. Chỉ cần nhìn kích thước của chúng, bạn sẽ đoán được cổng nào ở gần. Nhưng có một cái bẫy: nếu một đầu vạch sàn lọt ra sau camera, có nên xóa luôn cả vạch không? Làm vậy, sàn sẽ biến mất ngay dưới chân người xem.
-
-Các nhánh kiểm tra ở bài 3 đã ngăn trường hợp đó. Bài này ta sẽ kiểm chứng từng nhánh, rồi giải quyết một bài toán mới: **một đoạn thẳng có đầu nằm ngoài vùng nhìn thì có phải bỏ cả đoạn không?** Từ cách cắt đoạn đó, ta mới dựng thêm lưới sàn và bốn khung 3D để điểm sáng có cảnh nền đối chiếu.
+Đã chiếu đúng một sao thì để có một bầu trời, ta phải viết thêm bao nhiêu cách vẽ? **Không cần thêm cách nào cả.** Ta giữ 96 vị trí trong không gian rồi làm cùng một việc cho từng vị trí. Câu hỏi mới là: nếu một sao nằm ngay sau gáy, sát vào mắt hoặc ngoài mép hình, nó có được phép đi tới framebuffer không?
 
 ## Hiểu ý tưởng trước khi viết code
 
-Trình tự xử lý quan trọng hơn tên các nhánh:
-
-- invalid: dữ liệu nonfinite, FOV/viewport không hợp lệ hoặc near/far sai.
-- behind: camera-space Z≤0.
-- before-near: Z dương nhưng nhỏ hơn near.
-- beyond-far: Z>far.
-- outside: depth hợp lệ, nhưng ít nhất một NDC nằm ngoài [-1,1].
-- visible: depth hợp lệ và cả hai NDC nằm trong khung.
-
-Near và far ở đây đều nhận điểm đúng trên plane. Guard kiểm Z **trước** cameraToNdc. Chặn sau phép chia vẫn để Inf/NaN lọt vào những bước trung gian.
-
-Với behind/near/far/invalid, screen và NDC chưa tồn tại. Với outside, phép chiếu vẫn cho số hữu hạn, nhưng renderer không vẽ marker. Không clamp số outside về cạnh viewport rồi gọi nó là visible.
+Hãy giữ nguyên một dải điểm 3D và tưởng tượng camera đi dọc qua nó. Một ngôi sao biến mất ở mép vì **hướng nhìn** ra khỏi khung; ngôi khác biến mất vì **độ sâu** đã nhỏ hơn `near`. Ngược lại, sao ban đầu xa hơn `far` có thể lọt vào vùng nhìn khi camera tiến tới. Không cần xóa, dời, sinh lại hay ngẫu nhiên hóa bất kỳ ngôi sao nào trong những tình huống đó.
 
 <InteractiveLab demo="projection" mode="projection-visibility" />
 
 ## Viết code từng bước
 
-Mở lại thư mục `work/` của bài trước. Các đường dẫn như `include/lab.hpp` dưới đây đều tính từ **work/**. Configure lại sẽ không ghi đè phần bạn đã viết.
-
-Ta có hai việc khác nhau: bỏ một **điểm** không thể thấy và giữ lại phần còn nhìn thấy của một **đoạn thẳng**. Hãy thử với một vạch sàn duy nhất trước khi nhân nó thành lưới. Cả bốn cổng sẽ dùng cùng một hàm vẽ đoạn ấy.
-
-```powershell title="Chạy chương trình đang viết (Windows, Visual Studio)"
+```powershell title="Windows / Visual Studio — chạy bài đang viết"
 cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
 cmake --build build-work --config Debug --target project_11_work --parallel 1
 .\build-work\Debug\project_11_work.exe
 ```
 
-`checkpoints/05` là bản tham khảo sau bài này. Khi muốn thử phần mình vừa sửa, hãy chạy `project_11_work`, không chạy checkpoint.
+`checkpoints/05` là bản tham khảo sau bài này. Tiếp tục sửa trong `work/`; cấu hình lại không ghi đè bài của bạn.
 
-### Bước 1 — Đọc kết quả trước khi quyết định vẽ
+### Bước 1 — Lưu vị trí sao, không lưu hình của từng khung
 
-ProjectionResult đã được thêm ở bài 3. Mở khai báo đó để đối chiếu, không khai báo thêm một struct trùng tên:
-
-```cpp title="include/lab.hpp — status và hai giá trị tùy chọn"
-struct ProjectionResult {
-    ProjectionStatus status = ProjectionStatus::Invalid;
-    Vec3 cameraPoint{};
-    std::optional<Vec2> ndc;
-    std::optional<Vec2> screen;
-};
+{/* snippet include/starfield.hpp#star-catalog */}
+```cpp title="include/starfield.hpp — tạo các vị trí trong thế giới"
+inline std::array<Vec3, 96> makeStarCatalog() {
+    std::array<Vec3, 96> stars{};
+    stars[0] = {1.0, 0.6, 4.0};  // Sao vàng để kiểm bằng tay.
+    stars[1] = {0.0, 0.0, 10.0}; // Sao trên trục nhìn.
+    int seed = 1066;
+    for (int i = 2; i < static_cast<int>(stars.size()); ++i) {
+        const double depth = 2.8 + 13.0 * nextStarSample(seed);
+        const double x = (2.0 * nextStarSample(seed) - 1.0) * 0.92 * depth;
+        const double y = (2.0 * nextStarSample(seed) - 1.0) * 0.52 * depth;
+        const double bandStart = 6.0 * ((i - 2) % 3);
+        stars[i] = {x, y, bandStart + depth};
+    }
+    return stars;
+}
 ```
 
-`std::optional<Vec2>` cho phép phân biệt không có ảnh với ảnh ở (0,0). Muốn dùng screen, caller phải kiểm có giá trị; status còn quyết định có nên vẽ hay không.
+Trong `include/starfield.hpp`, đọc danh sách qua `starCatalog()`. Hai sao đầu làm mốc: `(1,0.6,4)` lệch tâm và `(0,0,10)` nằm trên trục nhìn. `depth` và hai hệ số trong vòng lặp chọn chỗ cho từng sao; `bandStart` chia các điểm ra ba khoảng dọc đường bay, để cuối hành trình vẫn còn sao ở phía trước. `seed` cố định giúp lần tạo sau lặp lại đúng dữ liệu lần đầu. Đây là cách chọn cảnh một lần, không phải thuật toán chuyển động. **Dùng lại cùng danh sách cho mỗi khung hình.** Khi thử lại từ đầu, bạn phải nhận ra đúng các sao cũ, không phải một bầu trời khác.
 
-### Bước 2 — Kiểm tra vì sao điểm bị loại
+### Bước 2 — Quyết định có ảnh hay không trước khi tô pixel
 
-Trong projectPerspective, ba nhánh dưới nằm **trước** lời gọi cameraToNdc. Giữ nguyên thứ tự này; đây là đoạn cần đọc lại, không phải một hàm mới để dán thêm:
-
-```cpp title="include/lab.hpp — kiểm depth rồi mới gọi cameraToNdc"
+```cpp title="include/lab.hpp — loại những độ sâu không thể vẽ"
 if (cameraPoint.z <= 0.0) {
     result.status = ProjectionStatus::BehindCamera;
     return result;
@@ -74,246 +62,77 @@ if (cameraPoint.z > lens.farPlane) {
 }
 ```
 
-Behind khác before-near: Z âm nghĩa là điểm nằm sau camera; Z dương nhưng nhỏ hơn near nghĩa là điểm vẫn ở phía trước, chỉ là quá gần. Tương tự, vượt far khác ra ngoài cạnh trái/phải của ảnh. Hai loại lỗi cần hai phép kiểm khác nhau.
+Ba kiểm tra độ sâu phải đặt **trước** `cameraToNdc`, vì bên trong hàm đó có phép chia cho Z. Khi camera đã vượt qua sao, không dùng `abs(Z)` để vẽ nó trở lại phía trước. Hai mặt `near` và `far` được tính là còn trong vùng nhìn; chỉ loại khi thực sự vượt qua chúng.
 
 {/* snippet include/lab.hpp#ndc-limits */}
-```cpp title="include/lab.hpp — hai biên góc nhìn trong NDC"
+```cpp title="include/lab.hpp — hai biên của vùng nhìn"
 inline bool isInsideNdc(Vec2 ndc) {
     return std::abs(ndc.x) <= 1.0 && std::abs(ndc.y) <= 1.0;
 }
 ```
 
-### Bước 3 — Cắt đoạn lưới thay vì xóa cả đoạn
+`isInsideNdc` trả lời câu hỏi khác: sao đủ gần, nhưng có nằm lệch đến mức ra ngoài khung không? Phân biệt `ProjectionStatus::OutsideFrustum` với một điểm không có ảnh vì ở sau camera. Đừng ép cả hai loại thành một chấm ở góc màn hình.
 
-Một điểm không nhìn thấy thì có thể bỏ. Nhưng đoạn từ A=(−1,0,0) đến B=(1,0,2) vẫn đi xuyên qua near=0.5. Nếu bỏ cả đoạn chỉ vì A không hợp lệ, đường lưới sẽ biến mất quá sớm.
-
-Viết đoạn theo tham số P(t)=A+t(B−A). Riêng trục Z cho 0+t×2=0.5, nên t=0.25. Thế lại X được −1+0.25×2=−0.5. Phần còn lại phải bắt đầu ở (−0.5,0,0.5).
-
-Để dùng cùng cách tính cho cả near và far, ta quy ước a/b là khoảng cách có dấu: không âm ở phía được giữ lại. Khi đó t=a/(a−b). Với near, lấy Z−near; với far, lấy far−Z. Thêm clipDepth vào lab.hpp, sau projectPerspective:
-
-```cpp title="include/lab.hpp — near/far clipping trước perspective divide"
-inline bool clipDepth(Vec3& start, Vec3& end, const PerspectiveLens& lens) {
-    if (!finite(start) || !finite(end) || !std::isfinite(lens.nearPlane) || !std::isfinite(lens.farPlane) || lens.nearPlane <= 0.0 || lens.farPlane <= lens.nearPlane) {
-        return false;
-    }
-
-    struct DepthPlane {
-        double depth;
-        double direction;
-    };
-
-    for (const auto& plane : {DepthPlane{lens.nearPlane, 1.0}, DepthPlane{lens.farPlane, -1.0}}) {
-        const double a = (start.z - plane.depth) * plane.direction;
-        const double b = (end.z - plane.depth) * plane.direction;
-        if (!std::isfinite(a) || !std::isfinite(b)) {
-            return false;
-        }
-        if (a < 0.0 && b < 0.0) {
-            return false;
-        }
-        if (a < 0.0 || b < 0.0) {
-            const double denominator = a - b;
-            if (!std::isfinite(denominator)) {
-                return false;
-            }
-            const double t = a / denominator;
-            Vec3 hit{start.x + t * (end.x - start.x), start.y + t * (end.y - start.y), plane.depth};
-            if (!finite(hit)) {
-                return false;
-            }
-            if (a < 0.0) {
-                start = hit;
-            } else {
-                end = hit;
-            }
-        }
-    }
-    return true;
-}
-```
-
-DepthPlane ghi rõ hai thông tin: vị trí mặt phẳng và chiều được giữ lại. Near dùng direction=+1, far dùng direction=−1. Cả hai đầu mút nằm ngoài cùng một phía thì bỏ. Nếu chỉ một đầu mút nằm ngoài, thay nó bằng giao điểm. Gán Z của giao điểm đúng bằng plane.depth để tránh sai số rất nhỏ khiến guard loại nhầm điểm vừa cắt.
-
-Ngay đầu hàm phải kiểm cả hai giới hạn `near` và `far`. Nếu một giới hạn là NaN, phép so sánh `<` sẽ không phát hiện được nó. Khi hàm trả `false`, bỏ qua đoạn này và vẽ tiếp đoạn kế bên.
-
-### Bước 4 — Chiếu một đoạn thẳng, rồi ghép thành cảnh nền
-
-Bạn đã có `clipScreen` và `drawLine` trong khung ban đầu. Trong `work/include/view.hpp`, viết `drawScreenSegment` để hai hàm đó làm việc với nhau. Hàm nhận tọa độ **đã chiếu**: nó cắt ở mép khung trước, rồi mới làm tròn về chỉ số pixel. Ở khung rộng 800 px, cạnh hình học có thể là x=800, nhưng chỉ số cuối chỉ là 799.
-
-```cpp title="include/view.hpp — từ đoạn trên ảnh tới pixel hợp lệ"
-inline void drawScreenSegment(Framebuffer& image, Vec2 from, Vec2 to, const Viewport& viewport, std::uint32_t color) {
-    if (!clipScreen(from, to, viewport)) {
-        return;
-    }
-    // Biên phải và biên dưới là tọa độ hình học, không phải chỉ số pixel cuối.
-    const double left = std::max(0.0, std::ceil(viewport.x));
-    const double top = std::max(0.0, std::ceil(viewport.y));
-    const double right = std::min(static_cast<double>(Framebuffer::width - 1), std::ceil(viewport.x + viewport.width) - 1.0);
-    const double bottom = std::min(static_cast<double>(Framebuffer::height - 1), std::ceil(viewport.y + viewport.height) - 1.0);
-    if (right < left || bottom < top) {
-        return;
-    }
-    const int x0 = static_cast<int>(std::lround(std::clamp(from.x, left, right)));
-    const int y0 = static_cast<int>(std::lround(std::clamp(from.y, top, bottom)));
-    const int x1 = static_cast<int>(std::lround(std::clamp(to.x, left, right)));
-    const int y1 = static_cast<int>(std::lround(std::clamp(to.y, top, bottom)));
-    drawLine(image, x0, y0, x1, y1, color);
-}
-```
-
-Bây giờ đặt `line3D` trước `renderScene`. Hai đầu **đầu vào** vẫn ở trong không gian 3D. Đổi chúng về hệ camera, cắt phần nằm ngoài khoảng độ sâu, rồi chiếu phần còn lại. Vì đã trừ vị trí camera một lần, bước chiếu ở đây dùng camera tại gốc:
-
-```cpp title="include/view.hpp — giữ phần đoạn nhìn thấy được"
-inline void line3D(Framebuffer& image, Vec3 start, Vec3 end, const Scene& scene, std::uint32_t color) {
-    start = worldToCamera(start, scene.camera);
-    end = worldToCamera(end, scene.camera);
-    if (!clipDepth(start, end, scene.lens)) {
-        return;
-    }
-    const Camera3D origin{};
-    const Viewport viewport = viewportFor(scene);
-    const auto a = projectPerspective(start, origin, scene.lens, viewport);
-    const auto b = projectPerspective(end, origin, scene.lens, viewport);
-    if (!a.screen || !b.screen) {
-        return;
-    }
-    drawScreenSegment(image, *a.screen, *b.screen, viewport, color);
-}
-```
-
-Vì start/end đã ở camera space, hai lời gọi projectPerspective dùng camera tại gốc. Nếu truyền scene.camera lần nữa, ta sẽ trừ vị trí camera hai lần. Sau phép chiếu, clipScreen cắt theo bốn cạnh viewport để Bresenham không phải duyệt một đoạn dài nằm ngoài màn hình. Đầu mút nằm ngoài NDC vẫn có thể thuộc một đoạn cắt qua ảnh, nên ở đây ta kiểm screen có giá trị, không yêu cầu cả hai status đều Visible.
-
-```cpp title="include/view.hpp — lưới sàn và bốn khung cùng kích thước"
-inline void drawDepthScene(Framebuffer& image, const Scene& scene) {
-    constexpr std::uint32_t rail = 0x426474FFu;
-    constexpr std::uint32_t reflector = 0x75C9D1FFu;
-
-    // Mỗi ô sàn rộng một đơn vị. Cả vạch giữa lẫn hai mép đường đều nằm trên sàn.
-    for (int x = -4; x <= 4; ++x) {
-        const double position = static_cast<double>(x);
-        line3D(image, {position, kRunwayFloor, 1.0}, {position, kRunwayFloor, 16.0}, scene, kGrid);
-    }
-    for (int z = 1; z <= 16; ++z) {
-        const double depth = static_cast<double>(z);
-        line3D(image, {-4.0, kRunwayFloor, depth}, {4.0, kRunwayFloor, depth}, scene, kGrid);
-        if (z < 16) {
-            line3D(image, {0.0, kRunwayFloor, depth}, {0.0, kRunwayFloor, depth + 0.45}, scene, kGhost);
-        }
-    }
-    for (double side : {-1.0, 1.0}) {
-        const double edge = side * 1.90;
-        line3D(image, {edge, kRunwayFloor, 1.0}, {edge, kRunwayFloor, 16.0}, scene, rail);
-    }
-
-    // Dựng cùng một cổng bốn lần: chỉ thay Z, không tự thu nhỏ cổng ở xa.
-    for (double z : {2.0, 4.0, 8.0, 12.0}) {
-        line3D(image, {-1.55, 1.10, z}, {1.55, 1.10, z}, scene, kGhost);
-        for (double side : {-1.0, 1.0}) {
-            const double post = side * 1.90;
-            const double shoulder = side * 1.55;
-            line3D(image, {post, kRunwayFloor, z}, {post, 0.75, z}, scene, kGhost);
-            line3D(image, {post, 0.75, z}, {shoulder, 1.10, z}, scene, reflector);
-            line3D(image, {post, kRunwayFloor, z}, {side * 1.63, kRunwayFloor, z}, scene, reflector);
-        }
-    }
-
-    // Đặt bộ trục ở chân cổng thứ hai: nhìn được cả trục Z vì nó lệch trục nhìn.
-    if (scene.debug) {
-        const Vec3 foot{-1.90, kRunwayFloor, 4.0};
-        line3D(image, foot, {-1.35, kRunwayFloor, 4.0}, scene, kAxisX);
-        line3D(image, foot, {-1.90, kRunwayFloor + 0.55, 4.0}, scene, kAxisY);
-        line3D(image, foot, {-1.90, kRunwayFloor, 4.55}, scene, kAxisZ);
-    }
-}
-```
-
-Vòng lặp đầu vẽ đường dọc sàn, vòng thứ hai vẽ đường ngang. Các chân cổng, vai vát và thanh ngang giữ nguyên tọa độ X/Y ở cả bốn cổng; chỉ Z thay đổi. Chúng thu nhỏ dần vì cùng đi qua phép chia cho Z, không phải vì ta vẽ sẵn bốn hình chữ nhật có kích thước pixel khác nhau.
-
-### Tự ghép trong `work/`
-
-Các đoạn trên giải thích phần mới. Khi viết, mở từng tệp dưới đây để thấy chỗ cần sửa trong **bản của bài trước**. Đoạn nào đã gõ rồi thì chỉ đối chiếu, không chèn thêm lần nữa.
-
-Cắt đoạn theo hai mặt phẳng giới hạn độ sâu; giữ phần nằm giữa chúng.
+Phần bổ sung ở đây còn cắt đoạn dóng của dụng cụ đo tại near/far. Bạn không cần cắt một ngôi sao thành hai phần: mỗi ngôi chỉ được xét ở vị trí tâm.
 
 <CourseWorkFile project="11" step={5} path="include/lab.hpp" />
 
-Chiếu hai đầu đã cắt, kẻ vạch sàn rồi dựng cùng một cổng ở bốn vị trí. Đường dóng dưới đèn chỉ xuất hiện khi xem số đo.
+### Bước 3 — Lặp đúng phép chiếu vừa học
+
+{/* snippet include/starfield.hpp#paint-starfield */}
+```cpp title="include/starfield.hpp — dùng cùng một bộ chiếu cho mọi sao"
+inline void drawStarfield(Framebuffer& image, const Scene& scene, const Viewport& viewport) {
+    if (!validLens(scene.lens, viewport)) return;
+    starInk::clearSky(image, viewport);
+    const double focalPixels = 0.5 * viewport.height * verticalFocalScale(scene.lens);
+    const auto& stars = starCatalog();
+    for (std::size_t i = 0; i < stars.size(); ++i) {
+        const auto hit = projectPerspective(stars[i], scene.camera, scene.lens, viewport);
+        if (hit.status != ProjectionStatus::Visible || !hit.screen) continue;
+        const double worldRadius = 0.025 + 0.006 * (i % 5);
+        const double radius = std::clamp(focalPixels * worldRadius / hit.cameraPoint.z, 1.0, 5.0);
+        starInk::stamp(image, viewport, *hit.screen, radius, starInk::color(i));
+    }
+}
+```
+
+Theo dấu **một lượt lặp**: lấy vị trí world → chiếu với camera và ống kính hiện tại → chỉ khi nhìn thấy mới vẽ một chấm. Quy tắc màu và bán kính chỉ giúp mắt đọc ảnh; chúng **không quyết định tâm chấm phải đi tới pixel nào**. Bạn có thể tạm vẽ mọi sao cùng một cỡ để tự kiểm điều đó.
+
+Phần vẽ và kiểm điểm dưới đây là đường đi chính của bài. Trong cửa sổ C++, các phím ngoặc vuông chỉnh `near`; `SDLK_APOSTROPHE` và phím chấm phẩy chỉnh `far` để thử biên. Những tệp phụ đi kèm chỉ đưa trạng thái và dụng cụ lên màn hình.
+
+Tạo header này trong `work/include`. Đọc `makeStarCatalog` và vòng lặp `drawStarfield` trước; các hàm `starInk` chỉ tạo nền tối và rìa chấm mềm.
+
+<CourseWorkFile project="11" step={5} path="include/starfield.hpp" />
+
+Gọi `drawStarfield` từ `renderScene`. Đoạn dóng trên điểm thử chỉ là một dụng cụ để đọc độ lệch so với trục.
 
 <CourseWorkFile project="11" step={5} path="include/view.hpp" />
 
-Ghi chú sáu tình huống mẫu và hai cặp phím chỉnh vùng nhìn.
-
-<CourseWorkFile project="11" step={5} path="include/presentation.hpp" />
-
-Nối phím chỉnh near/far. Làm đốm sáng biến mất rồi kiểm xem mặt đường có còn không.
+Cho phép đổi khoảng gần/xa và gọi lại phần vẽ ở vị trí camera đang đứng.
 
 <CourseWorkFile project="11" step={5} path="src/main.cpp" />
 
+Hiện các trạng thái bị loại cùng thông số hiện tại.
+
+<CourseWorkFile project="11" step={5} path="include/presentation.hpp" />
+
 ## Ghép các phần lại
 
-Đặt `kRunwayFloor = -1.5` như trong phần sửa của `view.hpp`. Từ đèn, kẻ một đường dóng thẳng xuống sàn để người xem phân biệt đèn đang ở cao hay ở xa: chân đường dóng giữ nguyên X và Z, chỉ đổi Y. Đây là dấu để đọc vị trí, không phải một chiếc bóng được tính bằng ánh sáng.
-
-```cpp title="include/view.hpp — chân đèn trên mặt đường"
-inline void drawPlumbLine(Framebuffer& image, const Scene& scene) {
-    // Chân đường dóng giữ nguyên X và Z của đèn; chỉ thay Y bằng cao độ mặt sàn.
-    const Vec3 foot{scene.point.x, kRunwayFloor, scene.point.z};
-    constexpr std::uint32_t guide = 0x967B55FFu;
-    line3D(image, scene.point, foot, scene, guide);
-    line3D(image, {foot.x - 0.10, foot.y, foot.z}, {foot.x + 0.10, foot.y, foot.z}, scene, guide);
-    line3D(image, {foot.x, foot.y, foot.z - 0.10}, {foot.x, foot.y, foot.z + 0.10}, scene, guide);
-}
-```
-
-Trong `renderScene`, vẽ sàn và cổng trước, sau đó mới chiếu đèn, vẽ đường dóng nếu bật debug và đặt đốm sáng lên trên. Thứ tự này giúp vạch đường không tô đè lên đèn:
-
-```cpp title="include/view.hpp — gọi cảnh nền trước marker"
-drawDepthScene(image, scene);
-const auto projected = projectPerspective(scene.point, scene.camera, scene.lens, viewport);
-```
-
-Để thí nghiệm thay đổi near/far khi đang chạy, thêm bốn nhánh sau vào SDL_EVENT_KEY_DOWN, sau phần FOV/aspect:
-
-```cpp title="src/main.cpp — thay near/far trước phép chiếu kế tiếp"
-if (event.key.key == SDLK_LEFTBRACKET) {
-    scene.paused = true;
-    scene.lens.nearPlane = std::max(0.1, scene.lens.nearPlane - 0.1);
-}
-if (event.key.key == SDLK_RIGHTBRACKET) {
-    scene.paused = true;
-    scene.lens.nearPlane = std::min(2.0, scene.lens.nearPlane + 0.1);
-}
-if (event.key.key == SDLK_SEMICOLON) {
-    scene.paused = true;
-    scene.lens.farPlane = std::max(8.0, scene.lens.farPlane - 0.5);
-}
-if (event.key.key == SDLK_APOSTROPHE) {
-    scene.paused = true;
-    scene.lens.farPlane = std::min(24.0, scene.lens.farPlane + 0.5);
-}
-```
-
-Build lại `project_11_work` rồi thử F1–F6: mặc định visible, xa gấp đôi vẫn visible, trước near, sau camera, vượt far và ngoài góc nhìn. Canvas có cùng sáu preset. Các phím [ và ] chỉnh near trong [0.1,2]; ; và dấu nháy đơn chỉnh far trong [8,24].
-
-Chỉ điểm sáng bị loại; nền vẫn vẽ phần còn trong frustum. Đừng xóa cả scene khi point không visible. HUD hiển thị nguyên status, NDC/pixel “undefined” nếu chưa chia; nhờ đó ta phân biệt “marker không xuất hiện” với “renderer bị hỏng”.
+Đầu tiên nhìn sao mốc trên trục và một sao lệch sang bên. Dịch camera từng nấc bằng J/L hoặc thanh Camera.Z: mốc trên trục phải giữ tâm **khi còn nhìn thấy**; mốc lệch sẽ chạy ra ngoài. Sau đó thử cùng một ngôi sao ở hai FOV. Việc số sao nhìn thấy đổi trong lúc tổng số luôn là 96 là bình thường.
 
 ## Thử làm sai để hiểu đúng
 
-1. Cho point Z chạy lần lượt −1,0,10⁻¹²,near,far,far+0.01. Dự đoán từng status trước khi nhìn HUD; near/far chính xác phải visible nếu X=Y=0.
-
-2. Với near=0.5, đoạn từ (−1,0,0) đến (1,0,2) phải bị cắt tại (−0.5,0,0.5). Tự tính t=0.25, rồi đối chiếu clipDepth; đây là expected độc lập.
-
-3. Thay outside bằng clamp NDC về [-1,1]. Marker sẽ bám cạnh dù point không nhìn thấy. Khôi phục phân loại, không dùng clamp để giấu lỗi projection.
+1. Tạm giữ cả những kết quả `OutsideFrustum` rồi ép tọa độ vào cạnh gần nhất. Một dải chấm giả xuất hiện dọc mép khi tiến máy. Trả lại điều kiện chỉ vẽ điểm nhìn thấy được.
+2. Sử dụng mặt phẳng xa 8 thay vì 16. Mắt ở gốc sẽ không còn thấy sao ở `(0,0,10)`; đưa camera tới Z=3 thì độ sâu của nó chỉ còn 7. Đó là sao cũ đang quay lại vùng nhìn, không phải một sao mới sinh.
 
 ## Tự kiểm tra kết quả
 
-- Các guard chạy trước phép chia; không cast số không hữu hạn sang int.
-- Before-near khác behind, beyond-far khác outside.
-- Near/far đúng trên plane được nhận; invalid lens trả Invalid.
-- Đoạn cắt plane còn phần nhìn thấy được; screen clipping giữ rasterizer hữu hạn.
-- Marker ngoài khung không bị đẩy giả lên cạnh.
+- Tự chỉ được một tọa độ world và tìm được chỗ nó đi qua `projectPerspective` để trở thành chấm trên ảnh.
+- Điểm ở `Z=0` hoặc sau mắt không đến phép chia. Điểm ngoài mép không bị ghim vào viền.
+- Thay đổi camera hoặc FOV không sửa danh sách sao; có thể lùi về xem đúng bố cục cũ.
 
 ## Bài tập mở rộng
 
-Thêm bảng liệt kê camera-space Z và status của 20 điểm. Viết expected bằng các bất đẳng thức trên, không gọi lại projectPerspective để sinh expected.
+Đoán xem sao nào sẽ biến mất trước: `(0,0,4)` hay `(1,0,4)`, nếu cùng nhìn về +Z và tiến thẳng. Một ngôi có thể rời qua mép bên trong khi ngôi kia chỉ còn cách máy đúng `near`. Dùng điểm thử để kiểm từng dự đoán.
 
-[Sang bài tiếp theo — Cho điểm bay, dừng và bước từng nhịp](/projects/perspective-point/06-dieu-khien-va-chuyen-dong).
+[Bài tiếp: Giữ W để bay, thả phím để dừng](/projects/perspective-point/06-dieu-khien-va-chuyen-dong).

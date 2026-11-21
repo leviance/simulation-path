@@ -58,11 +58,12 @@ export default function FountainResults({
             ]}
           />
           <p>
-            Hạt mới có lõi trắng, chuyển dần sang xanh lam theo tuổi. Mặt lưới XZ luôn hiện, mỗi ô
-            rộng 1 m và đường chính cách nhau 5 m. Đây chỉ là mốc không gian, chưa có va chạm với
-            sàn; hạt dưới mặt phẳng bị che nhưng vẫn được mô phỏng. Emitter, vận tốc phóng và
-            lifetime mới áp dụng cho lần sinh kế tiếp; gravity tác động ngay ở bước sau. Đặt lại để
-            tạo lại tất cả bằng cấu hình hiện tại.
+            Giọt gần miệng vòi có màu ngọc nhạt, pha ánh bạc; giọt già dần ngả sang xanh thép. Dải
+            sáng mềm nằm ở nơi các giọt thật chồng lên nhau trong góc nhìn này; đó không phải một
+            mặt nước riêng. Mặt lưới XZ luôn hiện, mỗi ô rộng 1 m và đường chính cách nhau 5 m. Đây
+            chỉ là mốc không gian, chưa có va chạm với sàn; hạt dưới mặt phẳng bị che nhưng vẫn được
+            mô phỏng. Emitter, vận tốc phóng và lifetime mới áp dụng cho lần sinh kế tiếp; gravity
+            tác động ngay ở bước sau. Đặt lại để tạo lại tất cả bằng cấu hình hiện tại.
           </p>
           {scene.stage >= 4 && (
             <div

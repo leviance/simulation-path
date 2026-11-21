@@ -14,6 +14,8 @@ export interface PointScene {
   debug: boolean;
   measureDepth: boolean;
   elapsed: number;
+  forwardHeld: boolean;
+  backwardHeld: boolean;
 }
 export const initialPointScene = (): PointScene => ({
   point: { x: 1, y: 0.6, z: 4 },
@@ -21,7 +23,9 @@ export const initialPointScene = (): PointScene => ({
   lens: { verticalFovRadians: Math.PI / 3, nearPlane: 0.5, farPlane: 16 },
   aspect: 0,
   paused: true,
-  debug: true,
+  debug: false,
+  forwardHeld: false,
+  backwardHeld: false,
   measureDepth: false,
   elapsed: 0,
 });
@@ -32,6 +36,7 @@ export function viewportFor(scene: PointScene): PointViewport {
 }
 export function pointPreset(index: number): PointScene {
   const s = initialPointScene();
+  if (index !== 0) s.debug = true;
   if (index === 1) s.point.z = 8;
   if (index === 2) s.point = { x: 0, y: 0, z: 0.25 };
   if (index === 3) s.point = { x: 0, y: 0, z: -1 };
@@ -54,8 +59,8 @@ const clamp = (x: number, min: number, max: number) => Math.max(min, Math.min(ma
 export function changePoint(scene: PointScene, point: Vec3): PointScene {
   if (!finitePoint(point)) return scene;
   return {
-    ...scene,
-    paused: true,
+    ...stopFlight(scene),
+    debug: true,
     point: { x: clamp(point.x, -6, 6), y: clamp(point.y, -6, 6), z: clamp(point.z, -2, 20) },
   };
 }
@@ -68,11 +73,10 @@ export function movePoint(scene: PointScene, delta: Vec3): PointScene {
   });
 }
 export function changePointCamera(scene: PointScene, axis: keyof Vec3, value: number): PointScene {
-  if (!Number.isFinite(value)) return scene;
+  if (axis !== "z" || !Number.isFinite(value)) return scene;
   return {
-    ...scene,
-    paused: true,
-    camera: { position: { ...scene.camera.position, [axis]: clamp(value, -2, 2) } },
+    ...stopFlight(scene),
+    camera: { position: { x: 0, y: 0, z: clamp(value, 0, flightLimit) } },
   };
 }
 export function changePointLens(
@@ -87,26 +91,35 @@ export function changePointLens(
     farPlane: [8, 24],
   };
   return {
-    ...scene,
-    paused: true,
+    ...stopFlight(scene),
     lens: { ...scene.lens, [key]: clamp(value, ...(bounds[key] as [number, number])) },
   };
 }
-export function flightPoint(timeSeconds: number): Vec3 {
-  return {
-    x: Math.sin(0.9 * timeSeconds) * 2.2,
-    y: Math.cos(1.3 * timeSeconds) * 1.3,
-    z: 6 + Math.sin(0.55 * timeSeconds) * 4,
+export const flightLimit = 12;
+export function stopFlight(scene: PointScene): PointScene {
+  return { ...scene, paused: true, forwardHeld: false, backwardHeld: false };
+}
+export function flightDirection(scene: PointScene): number {
+  if (scene.forwardHeld && scene.backwardHeld) return 0;
+  if (scene.forwardHeld) return 1;
+  if (scene.backwardHeld) return -1;
+  if (!scene.paused) return 1;
+  return 0;
+}
+export function advancePoint(scene: PointScene, dt: number, direction = 1): PointScene {
+  if (!Number.isFinite(dt) || !Number.isFinite(direction) || dt <= 0 || direction === 0)
+    return scene;
+  const speed = 2;
+  const start = scene.camera.position.z;
+  const finish = clamp(start + clamp(direction, -1, 1) * speed * Math.min(dt, 0.1), 0, flightLimit);
+  const next = {
+    ...scene,
+    camera: { position: { ...scene.camera.position, z: finish } },
+    elapsed: scene.elapsed + Math.abs(finish - start) / speed,
   };
-}
-export function advanceFlightTime(current: number, deltaTime: number) {
-  if (!Number.isFinite(current) || !Number.isFinite(deltaTime) || deltaTime <= 0) return current;
-  return current + Math.min(deltaTime, 0.1);
-}
-export function advancePoint(scene: PointScene, dt: number): PointScene {
-  if (!Number.isFinite(dt) || dt <= 0) return scene;
-  const elapsed = advanceFlightTime(scene.elapsed, dt);
-  return { ...scene, elapsed, point: flightPoint(elapsed) };
+  if ((direction > 0 && finish >= flightLimit) || (direction < 0 && finish <= 0))
+    return stopFlight(next);
+  return next;
 }
 export function pointDisplay(scene: PointScene, stage: number) {
   if (stage >= 3)

@@ -1,59 +1,37 @@
 import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Chọn FOV và hình dạng viewport
+# Bay tới hay chỉ đổi ống kính?
 
 ## Vấn đề cần giải quyết
 
-Bạn đang đứng yên trước một đốm đèn. Đổi sang ống kính góc rộng, đèn trông gần tâm ảnh hơn, dù chẳng có gì trong cảnh vừa di chuyển. Ở bài 3 ta đã biết tác dụng của khoảng cách. Lần này hãy giữ nguyên điểm và camera, chỉ thay ống kính.
-
-Bài này nối góc FOV với công thức chiếu và xử lý cả trường hợp viewport rộng hoặc vuông. Ta phải tính lại phép chiếu cho hình dạng mới, không kéo dãn ảnh đã vẽ.
+Bạn thu hẹp ống kính và chấm sáng đi ra xa tâm. Bạn đưa máy tiến lên và chấm cũng đi ra xa tâm. Vậy “phóng to” và “bay tới” có phải chỉ là hai phím cho cùng một việc? Một ngôi sao đôi khi đánh lừa được mắt; **hai ngôi sao ở hai độ sâu** mới phân biệt được hai thao tác này.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Vertical FOV là góc mở từ cạnh dưới tới cạnh trên. Xét nửa khung nhìn ở mặt phẳng depth 1: nửa chiều cao world bằng tan(vFOV/2). Muốn cạnh trên về NDC.y=1, ta nhân với nghịch đảo:
+Tại một vị trí camera cố định, góc nhìn dọc (vertical FOV) quyết định bao nhiêu phần không gian lọt vào chiều cao của khung. Chia đôi góc mở để có một tam giác vuông. Nếu chiều cao viewport là $H$ pixel, tiêu cự tính bằng pixel là:
 
 $$
-f=\frac{1}{\tan(vFOV/2)},\quad a=\frac{w}{h},\quad
-n_x=\frac{x f}{z a},\quad n_y=\frac{y f}{z}.
+f_{\rm px}=\frac{H/2}{\tan(\theta/2)}.
 $$
 
-FOV phải đổi từ độ sang radian trước khi gọi tan. FOV rộng làm f nhỏ, nên điểm tiến gần tâm hơn. FOV là góc, f không có đơn vị; focalPixels=h×f/2 mới là độ dài tính theo pixel.
-
-NDC (Normalized Device Coordinates) là bước trung gian trước pixel: tâm ảnh là (0,0), hai cạnh trái/phải có X=−1/+1, hai cạnh dưới/trên có Y=−1/+1. Nhờ vậy, cùng một phép chiếu có thể dùng với nhiều kích thước viewport.
-
-Vì FOV được đo theo chiều dọc, chiều ngang phải tính thêm aspect a=w/h. Có thể kiểm ngay: độ lệch X theo pixel bằng (x/z)×f/a×w/2, rút gọn thành (x/z)×f×h/2. Hệ số pixel trên cả hai trục vì thế bằng nhau. Nếu quên chia X cho aspect, viewport rộng sẽ kéo cảnh theo chiều ngang.
-
-Screen có origin riêng (vₓ,vᵧ), không mặc định (0,0):
-
-$$
-s_x=v_x+\frac{n_x+1}{2}w,\qquad
-s_y=v_y+\frac{1-n_y}{2}h.
-$$
-
-Đây là tọa độ liên tục trên viewport. NDC.x=+1 nằm trên **cạnh phải** vₓ+w, không phải chỉ số pixel cuối. Pixel raster nằm ở miền nửa kín [vₓ,vₓ+w); hàm vẽ chịu trách nhiệm clip, không sửa công thức bằng width−1 rồi làm lệch tỉ lệ.
+Ở FOV 90°, $\tan(45^\circ)=1$. Với khung 800×800, $f_{\rm px}=400$. Hạ FOV làm tất cả độ lệch khỏi tâm tăng theo **cùng một hệ số** nếu các sao còn trong khung. Tiến camera thì đổi mẫu số $z_c$ riêng của từng sao: một bước tiến hai đơn vị giảm một nửa khoảng cách tới sao ở Z=4 nhưng chỉ giảm một phần tư khoảng cách tới sao ở Z=8.
 
 <InteractiveLab demo="projection" mode="projection-fov" />
 
 ## Viết code từng bước
 
-Mở lại thư mục `work/` của bài trước. Các đường dẫn như `include/lab.hpp` dưới đây đều tính từ **work/**. Configure lại sẽ không ghi đè phần bạn đã viết.
-
-Trước khi kéo thanh FOV, ghi lại `camera point`. Sau khi kéo, dòng đó phải giữ nguyên; chỉ NDC, pixel và kích thước nhìn thấy thay đổi. Kéo mép cửa sổ là một thí nghiệm **khác**: ở đây ứng dụng có chủ ý giữ nguyên bảng vẽ logic.
-
-```powershell title="Chạy chương trình đang viết (Windows, Visual Studio)"
+```powershell title="Windows / Visual Studio — chạy bài đang viết"
 cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
 cmake --build build-work --config Debug --target project_11_work --parallel 1
 .\build-work\Debug\project_11_work.exe
 ```
 
-`checkpoints/04` là bản tham khảo sau bài này. Khi muốn thử phần mình vừa sửa, hãy chạy `project_11_work`, không chạy checkpoint.
+`checkpoints/04` là bản tham khảo sau bài này. Tiếp tục sửa trong `work/`; cấu hình lại không ghi đè bài của bạn.
 
-### Bước 1 — Đổi góc mở thành focal scale
+### Bước 1 — Cho ống kính biết góc mở dọc
 
-PerspectiveLens đã có từ Starter; giữ nguyên struct này. Thêm verticalFocalScale, cameraToNdc và ndcToScreen theo thứ tự dưới, không định nghĩa lại PerspectiveLens:
-
-```cpp title="include/lab.hpp — lens có FOV và hai plane"
+```cpp title="include/lab.hpp — góc nhìn dọc và cặp mặt cắt"
 struct PerspectiveLens {
     double verticalFovRadians = kPi / 3.0;
     double nearPlane = 0.5;
@@ -62,17 +40,17 @@ struct PerspectiveLens {
 ```
 
 {/* snippet include/lab.hpp#fov-scale */}
-```cpp title="include/lab.hpp — dùng tangent của nửa góc"
+```cpp title="include/lab.hpp — tiêu cự theo nửa góc mở"
 inline double verticalFocalScale(const PerspectiveLens& lens) {
     return 1.0 / std::tan(lens.verticalFovRadians * 0.5);
 }
 ```
 
-Mặc định 60°=π/3. validLens đã chặn góc không nằm trong (0,π); UI giới hạn hẹp hơn [25°,110°] để thí nghiệm dễ quan sát.
+`verticalFovRadians` dùng radian. Bài 03 chọn tạm hệ số bằng 1; bây giờ ta thay nó bằng kết quả của `verticalFocalScale`. Đây là hệ số không đơn vị: chỉ khi nhân với **nửa chiều cao viewport** mới ra tiêu cự theo pixel.
 
-### Bước 2 — Chuẩn hóa đúng chiều FOV
+### Bước 2 — Đưa tọa độ lên khung chữ nhật
 
-```cpp title="include/lab.hpp — camera point tới NDC"
+```cpp title="include/lab.hpp — thu độ lệch ngang về khung NDC"
 inline Vec2 cameraToNdc(Vec3 cameraPoint, const PerspectiveLens& lens, double aspectRatio) {
     const Vec2 divided = perspectiveDivide(cameraPoint);
     const double focalScale = verticalFocalScale(lens);
@@ -80,128 +58,59 @@ inline Vec2 cameraToNdc(Vec3 cameraPoint, const PerspectiveLens& lens, double as
 }
 ```
 
-Tại sao chỉ X chia aspect? FOV đang đo chiều dọc. Khi w tăng mà h giữ nguyên, camera thấy rộng hơn theo X; cùng một world displacement chiếm phần nhỏ hơn bề ngang. Nhân aspect vào Y sẽ thay đổi cả góc dọc, trái với định nghĩa.
+Trong `cameraToNdc`, `aspectRatio = width / height`. Vì FOV được định nghĩa theo chiều dọc, ta chia thêm cho aspect ở thành phần ngang. Góc mở 90° không có nghĩa rằng hai chiều dùng hai tiêu cự tùy ý: ô pixel vẫn vuông, vật không bị kéo dẹt.
 
-### Bước 3 — Đổi NDC sang viewport có origin
-
-```cpp title="include/lab.hpp — đặt ảnh trong bảng logic"
+```cpp title="include/lab.hpp — đặt ảnh vào viewport"
 inline Vec2 ndcToScreen(Vec2 ndc, const Viewport& viewport) {
     return {viewport.x + (ndc.x + 1.0) * 0.5 * viewport.width, viewport.y + (1.0 - ndc.y) * 0.5 * viewport.height};
 }
 ```
 
-viewportFor đã có trong Starter. Giữ nguyên hàm này; đọc lại để thấy phím V sẽ chọn vùng nào, không thêm một định nghĩa trùng tên:
+Cộng gốc `viewport.x`, `viewport.y` sau khi đổi từ NDC. Đây là tọa độ liên tục trên khung; đến lượt tô framebuffer mới chọn pixel. Một lần lật Y trong `ndcToScreen` là đủ.
 
-```cpp title="include/scene.hpp — ba viewport thật, không scale ảnh méo"
-inline Viewport viewportFor(const Scene& scene) {
-    if (scene.aspect == 1) {
-        return {150.0, 100.0, 800.0, 600.0};
-    }
-    if (scene.aspect == 2) {
-        return {250.0, 100.0, 600.0, 600.0};
-    }
-    return {};
-}
-```
-
-### Tự ghép trong `work/`
-
-Các đoạn trên giải thích phần mới. Khi viết, mở từng tệp dưới đây để thấy chỗ cần sửa trong **bản của bài trước**. Đoạn nào đã gõ rồi thì chỉ đối chiếu, không chèn thêm lần nữa.
-
-Dùng nửa góc mở theo chiều dọc để tính tiêu cự. Đổi NDC sang vị trí có tính cả gốc viewport.
+Đặt `verticalFocalScale`, `cameraToNdc` và `ndcToScreen` vào đường chiếu vừa làm ở bài 03.
 
 <CourseWorkFile project="11" step={4} path="include/lab.hpp" />
 
-Dùng cùng tiêu cự cho tâm đốm sáng và bán kính của nó.
+### Bước 3 — Dùng cùng ống kính để vẽ tâm và kích thước
 
-<CourseWorkFile project="11" step={4} path="include/view.hpp" />
-
-Thêm phím đổi ống kính và khung nhìn; không động tới world point.
-
-<CourseWorkFile project="11" step={4} path="src/main.cpp" />
-
-Hiện FOV và aspect thật để phân biệt hai lần thử.
-
-<CourseWorkFile project="11" step={4} path="include/presentation.hpp" />
-
-## Ghép các phần lại
-
-Trong projectPerspective, thay ba dòng tính aspect/ndc/screen tạm ở bài 3 bằng:
-
-```cpp title="include/lab.hpp — thay nhánh focal scale tạm"
+```cpp title="include/lab.hpp — nối hai hàm vào phép chiếu chính"
 const double aspectRatio = viewport.width / viewport.height;
 const Vec2 ndc = cameraToNdc(cameraPoint, lens, aspectRatio);
 const Vec2 screen = ndcToScreen(ndc, viewport);
 ```
 
-Giữ nguyên các guard và cách gán ProjectionResult. Tiếp theo, thay renderScene bằng hàm dưới để **bán kính marker cũng dùng focal mới**, không chỉ tâm marker:
+Trong `include/view.hpp`, tìm `focalPixels *= verticalFocalScale`. Nếu đổi ống kính cho tâm ngôi sao nhưng không đổi hệ số dùng cho bán kính của chấm, vị trí và kích thước sẽ kể hai câu chuyện khác nhau. Trong vòng sự kiện tìm `SDLK_EQUALS` và phím trừ để thử hai góc mở; V đổi aspect của viewport. Kéo rộng cửa sổ SDL có thể chỉ nới phần viền, không phải là đổi FOV.
 
-```cpp title="include/view.hpp — cùng focal cho tâm và bán kính"
-inline void renderScene(Framebuffer& image, const Scene& scene) {
-    image.clear(kBackground);
-    const Viewport viewport = viewportFor(scene);
-    [[maybe_unused]] const Vec2 center{viewport.x + viewport.width * 0.5, viewport.y + viewport.height * 0.5};
-    const auto projected = projectPerspective(scene.point, scene.camera, scene.lens, viewport);
-    if (projected.status == ProjectionStatus::Visible && projected.screen) {
-        // Bán kính world 0.12, vị trí cũng được chiếu perspective; không giả depth bằng size.
-        double focalPixels = viewport.height * 0.5;
-        focalPixels *= verticalFocalScale(scene.lens);
-        const int radius = static_cast<int>(std::clamp(std::lround(0.12 * focalPixels / projected.cameraPoint.z), 3L, 30L));
-        drawPointMarker(image, *projected.screen, radius, viewport, scene.debug);
-    }
-}
-```
+Tính bán kính từ tiêu cự đang dùng, không lấy lại hệ số tạm ở bài trước.
 
-Trong nhánh SDL_EVENT_KEY_DOWN, sau các phím camera, thêm:
+<CourseWorkFile project="11" step={4} path="include/view.hpp" />
 
-```cpp title="src/main.cpp — chỉnh FOV và chuyển viewport"
-if (event.key.key == SDLK_EQUALS) {
-    scene.paused = true;
-    scene.lens.verticalFovRadians = std::max(25.0 * lab::kPi / 180.0, scene.lens.verticalFovRadians - lab::kPi / 180.0);
-}
-if (event.key.key == SDLK_MINUS) {
-    scene.paused = true;
-    scene.lens.verticalFovRadians = std::min(110.0 * lab::kPi / 180.0, scene.lens.verticalFovRadians + lab::kPi / 180.0);
-}
-if (event.key.key == SDLK_V && !event.key.repeat) {
-    scene.paused = true;
-    scene.aspect = (scene.aspect + 1) % 3;
-}
-```
+Gắn thao tác đổi góc mở và tỷ lệ khung; chương trình cần vẽ lại ngay cả khi sao đứng yên.
 
-Trong presentFramebuffer, sau khối in NDC/screen và trước SDL_RenderPresent, thêm dòng lens:
+<CourseWorkFile project="11" step={4} path="src/main.cpp" />
 
-```cpp title="include/presentation.hpp — đọc đúng FOV và aspect đang dùng"
-std::snprintf(value, sizeof(value), "vFOV %.1f deg | near %.2f far %.2f | aspect %.4f | resize letterboxes, V changes viewport", scene.lens.verticalFovRadians * 180.0 / kPi, scene.lens.nearPlane, scene.lens.farPlane, viewportFor(scene).width / viewportFor(scene).height);
-if (!text(renderer, 16, 746, value)) {
-    return false;
-}
-```
+Hiện FOV và aspect đang dùng để so hai ảnh trong cùng điều kiện.
 
-Build lại `project_11_work`. Khi sửa nhiều nơi, hãy kiểm từng đường đi: phím sửa scene.lens → projectPerspective đổi NDC → renderScene vẽ ảnh mới → HUD hiện đúng lens.
+<CourseWorkFile project="11" step={4} path="include/presentation.hpp" />
 
-Trong SDL, +/− thay FOV, V chuyển 16:9 → 4:3 → 1:1. Trong Canvas dùng Vertical FOV và Aspect. Cả ba viewport có cùng tâm (550,400), nhưng kích thước khác nhau. Khi thử số, nhớ focalPixels còn phụ thuộc chiều cao.
+## Ghép các phần lại
 
-Window resize vẫn **letterbox bảng logic 1100×800**, không đổi aspect ngầm và không làm méo ảnh. Muốn kiểm aspect của phép chiếu, dùng V/Aspect. Hai việc này khác nhau; việc kéo window rộng mà scene không đổi FOV là chủ ý của bản triển khai này.
+Trước tiên giữ nguyên camera tại gốc, đặt sao ở Z=4 và ghi độ lệch của nó. Thu hẹp FOV rồi làm lại cho Z=8. Sau đó trả FOV về cũ, cho camera tiến hai đơn vị và so từng sao. Mỗi lượt chỉ đổi **một** điều: hoặc góc mở, hoặc vị trí camera.
 
 ## Thử làm sai để hiểu đúng
 
-1. Giữ point, đổi FOV 60°→90°. Displacement giảm, không phải tăng; f giảm từ √3 xuống 1. Nếu ngược, hãy kiểm tan và radian.
-
-2. Bỏ phép chia aspect ở ndc.x, chọn viewport 16:9. Cùng world length trên X/Y sẽ không còn cùng scale pixel. Khôi phục chia aspect.
-
-3. Dùng viewport (10,20,800,600), FOV90°, point (1,0.5,4): tính focalPixels=300, screen=(485,282.5). Không dùng inverse làm expected cho test này.
+1. Thử truyền cả góc mở vào `tan` thay vì nửa góc. Tại FOV 90° bạn sẽ không thu được hệ số bằng 1. Dùng phép tính 45° trên giấy để dò lại dòng sai.
+2. Bỏ phép chia cho aspect rồi chuyển từ khung vuông sang 16:9. Một thay đổi về hình dạng khung đã làm sai tỉ lệ ngang của cảnh. Khôi phục aspect, kiểm cả một điểm không nằm ở tâm để lỗi không bị che mất.
 
 ## Tự kiểm tra kết quả
 
-- FOV60° có focal scale √3; FOV90° có focal scale 1.
-- Point trên trục nhìn nằm đúng tâm viewport, kể cả viewport có origin khác 0.
-- X/Y cùng dùng focalPixels theo chiều cao, không bị kéo méo ở các aspect.
-- NDC +1 được hiểu là cạnh liên tục, marker không ghi sang panel.
-- Resize và đổi Aspect được mô tả/hoạt động đúng hai nhiệm vụ riêng.
+- Với khung 800×800, FOV 90°, sao `(1,0.6,4)` và mắt tại gốc cho pixel `(500,340)`.
+- Chỉ dịch mắt tới Z=2, giữ ống kính cũ: pixel phải thành `(600,280)`.
+- Phân biệt được phóng to bằng ống kính, bay tới bằng camera và thay tỷ lệ khung bằng viewport.
 
 ## Bài tập mở rộng
 
-Thêm chế độ nhập focalPixels thay vì FOV. Suy lại vFOV=2×atan(h/(2×focalPixels)) và kiểm rằng hai chế độ cho cùng pixel.
+Giả sử bạn đổi FOV để sao ở Z=4 trông giống hệt lúc tiến hai đơn vị. Cũng với ống kính mới ấy, ngôi sao ở Z=8 có giống vị trí khi bay tới không? Trả lời bằng **hệ số độ lệch**, không cần biết góc mới bằng bao nhiêu độ.
 
-[Sang bài tiếp theo — Chặn điểm không thể nhìn thấy](/projects/perspective-point/05-near-plane-va-view-frustum).
+[Bài tiếp: Từ một điểm đến cả trường sao](/projects/perspective-point/05-near-plane-va-view-frustum).

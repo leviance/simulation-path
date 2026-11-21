@@ -1,113 +1,44 @@
 import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Hoàn thiện demo và kiểm chứng
+# Bay thử rồi kiểm lại phép chiếu
 
 ## Vấn đề cần giải quyết
 
-Bạn sẽ mang hàm chiếu sang bài tam giác xoay. Trước khi dùng nó ba lần cho ba đỉnh, hãy thử chứng minh nó đúng với **một** điểm. Đừng vội nhìn các con số: chọn nơi đốm sáng sẽ xuất hiện nếu đưa nó ra xa gấp đôi, rồi mới bật thước để kiểm tra dự đoán.
-
-Bài cuối sẽ thêm chế độ ẩn thông tin debug để quan sát cảnh, sau đó kiểm công thức bằng một ví dụ tính tay. Cuối bài có toàn bộ mã nguồn chạy độc lập; bạn cũng sẽ biết cách chạy tests trên chính những file mình vừa viết trong `work/`, thay vì chỉ kiểm bản mẫu.
+Tắt dụng cụ và bay thử như người lần đầu mở chương trình. Theo một ngôi sao lệch tâm khi nhấn W, thả tay rồi lùi bằng S. Nếu cảnh tỏa đều ra ngoài, hình có thể **trông đúng** dù phép chiếu vẫn sai. Làm sao biết bạn vừa bay qua các điểm đứng yên trong không gian, chứ không chỉ xem một hiệu ứng nở ra trên ảnh?
 
 ## Hiểu ý tưởng trước khi viết code
 
-Round-trip rất hữu ích nhưng không phải bằng chứng duy nhất. Nếu chiều xuôi và chiều ngược cùng sai một quy ước, chúng vẫn có thể trả về điểm cũ.
-
-Vì vậy cần một đáp án được tính độc lập, còn gọi là oracle. Chọn FOV 90°, viewport có gốc (10,20), rộng 800 và cao 600 pixel. Khi đó focalPixels=600/2=300. Với P=(1,0.5,4) và camera tại gốc:
-
-$$
-s_x=10+400+300\frac{1}{4}=485,\quad
-s_y=20+300-300\frac{0.5}{4}=282.5.
-$$
-
-Đổi riêng Z=8 cho (447.5,301.25). Ví dụ này đồng thời kiểm perspective, Y flip và viewport origin.
-
-Lỗi round-trip chỉ có nghĩa khi point visible và inverse có kết quả. Điểm sau camera trả “không xác định”, không phải 0 rồi được tính là một test thành công.
+Kiểm hai thứ độc lập. Thứ nhất: chương trình có đặt một sao đã biết đến **đúng một pixel có thể tính trên giấy** không? Thứ hai: khi người xem tiến lên, chương trình có thay đổi đúng **tọa độ camera mà vẫn giữ nguyên tọa độ sao** không? Chỉ kiểm thao tác bay rồi thấy ảnh đẹp sẽ bỏ sót lỗi thứ nhất. Chỉ kiểm một bức ảnh tĩnh lại bỏ sót lỗi thứ hai.
 
 <InteractiveLab demo="projection" mode="projection-full" />
 
 ## Viết code từng bước
 
-Mở lại thư mục `work/` của bài trước. Các đường dẫn như `include/lab.hpp` dưới đây đều tính từ **work/**. Configure lại sẽ không ghi đè phần bạn đã viết.
-
-Tách ảnh để ngắm khỏi lớp dùng để đo. Phím F tắt các dấu phụ. Phím M dừng chuyển động và bật thước: A là đốm sáng thật; vòng rỗng B đánh dấu nơi nó **sẽ** xuất hiện ở độ sâu gấp đôi. B không phải đốm sáng thứ hai trong cảnh.
-
-```powershell title="Chạy chương trình đang viết (Windows, Visual Studio)"
+```powershell title="Windows / Visual Studio — chạy bài đang viết"
 cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
 cmake --build build-work --config Debug --target project_11_work --parallel 1
 .\build-work\Debug\project_11_work.exe
 ```
 
-`checkpoints/08` là bản tham khảo sau bài này. Khi muốn thử phần mình vừa sửa, hãy chạy `project_11_work`, không chạy checkpoint.
+`checkpoints/08` là bản tham khảo sau bài này. Tiếp tục sửa trong `work/`; cấu hình lại không ghi đè bài của bạn.
 
-### Bước 1 — Tắt debug mà vẫn giữ cảnh 3D
+### Bước 1 — Tự đặt một đáp số trước khi chạy chương trình
 
-```cpp title="include/presentation.hpp — HUD chỉ là lớp bổ sung"
-if (!scene.debug) {
-    return finishFrame(renderer, capturePath);
-}
+Khung 800×800, FOV dọc 90°, tâm `(400,400)`, sao mốc `(1,0.6,4)`. Khi mắt ở gốc, ta được `(400 + 400/4, 400 − 400×0.6/4) = (500,340)`. Tiến tới Z=2 làm độ sâu còn 2, nên kết quả mới là `(600,280)`. Không đổi tọa độ world của sao để có hai kết quả này.
+
+```cpp title="tests/tests.cpp — một pixel đã tính trên giấy"
+const auto point = lab::projectPerspective({1.0, 0.5, 4.0}, camera, lens, viewport);
+check(point.status == lab::ProjectionStatus::Visible && point.screen.has_value(), "analytic point visible");
+check(point.screen && close(point.screen->x, 485.0) && close(point.screen->y, 282.5), "independent analytic pixel");
 ```
 
-Trong SDL_EVENT_KEY_DOWN, sau phần Space/N, thêm:
+Đoạn trong `tests/tests.cpp` dùng thêm một viewport **không ở gốc**: `(10,20,800,600)`, tức tâm `(410,320)` chứ không phải `(400,300)`. Với sao `(1,0.5,4)` phải thu được `(485,282.5)`. Hai ca kiểm cố tình không dùng vị trí do chính chương trình xuất ra làm đáp án.
 
-```cpp title="src/main.cpp — F chỉ đổi debug một lần khi nhấn"
-if (event.key.key == SDLK_F && !event.key.repeat) {
-    scene.debug = !scene.debug;
-}
-```
-
-Đặt nhánh if (!scene.debug) trong presentFramebuffer **sau SDL_RenderTexture và trước các lệnh vẽ HUD**. Nếu đặt trước upload/vẽ ảnh, chế độ sạch có thể chỉ hiện nền cũ. Phím F đổi scene.debug. drawDepthScene vẫn vẽ lưới và các khung tại Z=2/4/8/12; chỉ axes/crosshair/HUD bị tắt. Canvas cũng có nút Ẩn debug, ẩn cả readout. Một cảnh trống khi tắt debug là sai yêu cầu: hình học nền không được phụ thuộc lớp giải thích.
-
-### Bước 2 — Viết test với đáp án độc lập
-
-```cpp title="tests/tests.cpp — pixel biết trước, không lấy expected từ inverse"
-void knownProjection() {
-    const lab::Camera3D camera{};
-    lab::PerspectiveLens lens;
-    lens.verticalFovRadians = lab::kPi * 0.5;
-    const lab::Viewport viewport{10.0, 20.0, 800.0, 600.0};
-    // Tính tay bằng focalPixels = 300, không gọi inverse để tạo expected.
-    const auto point = lab::projectPerspective({1.0, 0.5, 4.0}, camera, lens, viewport);
-    check(point.status == lab::ProjectionStatus::Visible && point.screen.has_value(), "analytic point visible");
-    check(point.screen && close(point.screen->x, 485.0) && close(point.screen->y, 282.5), "independent analytic pixel");
-    const auto farther = lab::projectPerspective({1.0, 0.5, 8.0}, camera, lens, viewport);
-    check(farther.screen && close(farther.screen->x, 447.5) && close(farther.screen->y, 301.25), "double depth halves displacement");
-    const auto centered = lab::projectPerspective({0.0, 0.0, 4.0}, camera, lens, viewport);
-    check(centered.screen && close(centered.screen->x, 410.0) && close(centered.screen->y, 320.0), "viewport origin included");
-    const auto translated = lab::worldToCamera({3.0, 2.0, 8.0}, {{1.0, -1.0, 2.0}});
-    check(close(translated.x, 2.0) && close(translated.y, 3.0) && close(translated.z, 6.0), "world minus camera");
-}
-```
-
-tests/tests.cpp trong ZIP đã có hàm check, close, các case và main gọi chúng. Giữ nguyên file này; không tạo thêm một main trùng tên. check chỉ ghi nhận lỗi và tăng biến failures, nó không dừng chương trình ngay. Vì vậy mọi lần đọc optional đều nằm sau điều kiện point.screen && ...; nếu quên guard, chính test có thể đọc dữ liệu không tồn tại thay vì báo lỗi projection.
-
-Tests còn kiểm near/far chính xác, invalid FOV/viewport/NaN, giao điểm clipping tính tay, ảnh CPU có lưới/marker ở clean mode và không vẽ marker behind. check ghi failure và trả EXIT_FAILURE; không dùng assert bị tắt ở Release.
-
-### Bước 3 — Bổ sung round-trip, không lạm dụng nó
-
-{/* snippet include/lab.hpp#round-trip */}
-```cpp title="include/lab.hpp — không báo lỗi bằng zero khi phép đo chưa xác định"
-inline std::optional<double> projectionRoundTripError(Vec3 point, const Camera3D& camera, const PerspectiveLens& lens, const Viewport& viewport) {
-    const ProjectionResult projected = projectPerspective(point, camera, lens, viewport);
-    if (projected.status != ProjectionStatus::Visible || !projected.screen) {
-        return std::nullopt;
-    }
-    const auto restored = screenToCameraAtDepth(*projected.screen, projected.cameraPoint.z, lens, viewport);
-    if (!restored) {
-        return std::nullopt;
-    }
-    return std::hypot(restored->x - projected.cameraPoint.x, restored->y - projected.cameraPoint.y, restored->z - projected.cameraPoint.z);
-}
-```
-
-Chạy trên nhiều FOV, aspect và depth hợp lệ. Mục tiêu error nhỏ hơn 10⁻⁹ world; nó bổ sung cho numeric oracle, không thay thế oracle.
-
-### Bước 4 — Hai lần chiếu, một phép đo
-
-Lấy A từ kết quả chiếu hiện tại. Tạo B bằng cách nhân đôi **Z tính từ camera**, giữ X và Y, rồi đưa B qua đúng hàm chiếu đã dùng cho A. Vì tâm ảnh không nhất thiết là (0,0), phải trừ tâm trước khi đo. Không cần tính tỉ số: khi đèn nằm trên trục nhìn thì cả hai khoảng cách đều bằng 0.
+### Bước 2 — Bật thước đo, rồi cất dụng cụ để bay tiếp
 
 {/* snippet include/lab.hpp#depth-ruler */}
-```cpp title="include/lab.hpp — đo khoảng cách từ tâm tới hai ảnh"
+```cpp title="include/lab.hpp — đo từ tâm tới A và ảnh ở độ sâu gấp đôi"
 inline std::optional<DepthMeasurement> measureDoubleDepth(Vec3 point, const Camera3D& camera, const PerspectiveLens& lens, const Viewport& viewport) {
     const auto first = projectPerspective(point, camera, lens, viewport);
     if (first.status != ProjectionStatus::Visible || !first.screen) {
@@ -128,39 +59,56 @@ inline std::optional<DepthMeasurement> measureDoubleDepth(Vec3 point, const Came
 }
 ```
 
-Trong bài kiểm số ở trên, tâm là (410,320). Đo lần lượt hai đoạn (75,−37.5) và (37.5,−18.75): độ dài xấp xỉ 83.85 và 41.93 px. Nếu B đã vượt mặt phẳng xa, hãy trả về `std::nullopt`; một kết quả không đo được khác với một khoảng cách bằng 0.
+Trong khung hoàn chỉnh, F mở dụng cụ và M bật thước. A là điểm thử; vòng B là ảnh của một điểm giả định có cùng X/Y so với mắt nhưng có **độ sâu gấp đôi**. B phải nằm đúng nửa đường từ tâm ảnh tới A. B không phải một ngôi sao mới trong danh sách 96 sao. Nếu điểm thứ hai vượt `far` thì không đủ dữ kiện để đo.
 
-### Tự ghép trong `work/`
-
-Các đoạn trên giải thích phần mới. Khi viết, mở từng tệp dưới đây để thấy chỗ cần sửa trong **bản của bài trước**. Đoạn nào đã gõ rồi thì chỉ đối chiếu, không chèn thêm lần nữa.
-
-Chiếu A và B riêng rẽ, đo từ tâm viewport; không lấy kết quả A chia hai để làm đáp án B.
+Hoàn thiện thước và phép đo sai số đi-về; kiểm kết quả rỗng trước khi dùng.
 
 <CourseWorkFile project="11" step={8} path="include/lab.hpp" />
 
-Lưu trạng thái bật thước riêng với trạng thái chạy quỹ đạo.
+Tách trạng thái hiển thị dụng cụ khỏi camera đang dùng để bay.
 
 <CourseWorkFile project="11" step={8} path="include/scene.hpp" />
 
-Chỉ dựng vòng B nếu cả hai vị trí đều nhìn thấy. Tắt debug phải giữ nguyên cổng và đèn.
+### Bước 3 — Kiểm riêng việc chiếu ngược và vòng lặp thực tế
+
+{/* snippet include/lab.hpp#round-trip */}
+```cpp title="include/lab.hpp — đo sai số khi đi và về"
+inline std::optional<double> projectionRoundTripError(Vec3 point, const Camera3D& camera, const PerspectiveLens& lens, const Viewport& viewport) {
+    const ProjectionResult projected = projectPerspective(point, camera, lens, viewport);
+    if (projected.status != ProjectionStatus::Visible || !projected.screen) {
+        return std::nullopt;
+    }
+    const auto restored = screenToCameraAtDepth(*projected.screen, projected.cameraPoint.z, lens, viewport);
+    if (!restored) {
+        return std::nullopt;
+    }
+    return std::hypot(restored->x - projected.cameraPoint.x, restored->y - projected.cameraPoint.y, restored->z - projected.cameraPoint.z);
+}
+```
+
+Chiếu một điểm, dùng `screenToCameraAtDepth` để tìm lại nó ở độ sâu ban đầu, rồi so với tọa độ camera ban đầu. Phép đi-về này rất tiện để kiểm ở nhiều FOV và aspect. Nó **không thay thế phép kiểm tính tay**: hai hàm cùng sai theo hai chiều ngược nhau vẫn có thể cho sai số đi-về bằng 0.
+
+Mở các thay đổi cuối, nhất là phần tách chấm của dụng cụ khỏi phần vẽ sao. Khi tắt F, cả trường sao vẫn phải có mặt. Kho lưu mã ở cuối trang và `final/` trong ZIP là toàn bộ chương trình chạy được, không phải chỉ vài hàm minh họa.
+
+Khi tắt dụng cụ, vẫn vẽ danh sách sao; chỉ ẩn điểm thử và các đường đo.
 
 <CourseWorkFile project="11" step={8} path="include/view.hpp" />
 
-Ghi hai khoảng cách theo pixel. Nếu không đo được, cho biết vì sao.
-
-<CourseWorkFile project="11" step={8} path="include/presentation.hpp" />
-
-Nối phím M với thước, phím F với lớp thông tin; vẫn kéo được đốm sáng sau khi đo.
+Nối phím F, M và reset. Thao tác xem số không được âm thầm di chuyển sao trong thế giới.
 
 <CourseWorkFile project="11" step={8} path="src/main.cpp" />
 
+Kiểm cả màn bay sạch lẫn chế độ có thông số trước khi đóng gói.
+
+<CourseWorkFile project="11" step={8} path="include/presentation.hpp" />
+
 ## Ghép các phần lại
 
-### Chạy bản bạn vừa viết
+Nhấn R rồi bay tới một đoạn, lùi lại tới Z=0. Không thay FOV hoặc aspect giữa hai lần so. Các sao phải trở về cùng bố cục, mốc trên trục ở đúng tâm cho đến khi nó khuất. Quỹ đạo thấy trên màn hình sinh từ phép chia phối cảnh; dữ liệu của sao không có vận tốc riêng.
 
-Bấm F1 rồi M (Canvas: **Đo ở hai độ sâu**). Đốm màu hổ phách là A; nhìn dọc đường thước từ tâm ảnh đến A, bạn sẽ gặp vòng B ở giữa. Kéo đèn ra sát trục nhìn: cả hai dấu dồn về tâm. Tăng Z cho tới khi B vượt `far`: vòng phải biến mất, không được nhảy về góc cửa sổ.
+Chạy CTest trên **bài của bạn trong `work/`** sau khi ghép xong. Không chuyển sang `final/` để khiến test xanh.
 
-```powershell title="Kiểm chính work/ ở cả hai cấu hình"
+```powershell title="Kiểm bài làm ở Debug và Release"
 cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
 cmake --build build-work --config Debug --target project_11_work project_11_tests --parallel 1
 ctest --test-dir build-work -C Debug --output-on-failure --timeout 30
@@ -168,40 +116,26 @@ cmake --build build-work --config Release --target project_11_work project_11_te
 ctest --test-dir build-work -C Release --output-on-failure --timeout 30
 ```
 
-Không cần đổi đường dẫn include trong CMake. Với `COURSE_WORKBOOK=ON`, CTest biên dịch bằng `work/include`. Bộ test đầy đủ dùng các hàm của bài 8, nên chỉ chạy nó khi đã hoàn tất bước này.
+Bạn cũng có thể chạy ngay bản hoàn chỉnh để đối chiếu: giải nén [ZIP của Project 11](/downloads/project-11-perspective-point.zip), mở terminal cạnh `CMakeLists.txt` rồi chạy:
 
-### Mở bản hoàn chỉnh để đối chiếu
-
-Phần **Toàn bộ mã nguồn của dự án** ở cuối trang và thư mục `final/` trong [ZIP Project 11](/downloads/project-11-perspective-point.zip) đều chứa ứng dụng C++ hoàn chỉnh. Để chạy mẫu trên Windows, dùng một thư mục build riêng:
-
-```powershell title="Chạy bản final đi cùng ZIP"
+```powershell title="Chạy thành phẩm độc lập"
 cmake -S . -B build-final
 cmake --build build-final --config Release --target project_11_final --parallel 1
 .\build-final\Release\project_11_final.exe
 ```
 
-Đừng vội thêm camera xoay hay Z-buffer. Bài này đã trả lời xong câu hỏi *một điểm hiện ở đâu*. Bài 12 sẽ xoay ba đỉnh trong không gian rồi đưa **từng đỉnh** qua cùng hàm chiếu; khi ấy mới cần bàn đến hình của tam giác.
-
 ## Thử làm sai để hiểu đúng
 
-1. Cho projectPerspective luôn trả tâm màn hình, đồng thời sửa inverse để luôn trả point đầu vào. Một round-trip được dựng sai có thể vẫn xanh, nhưng test pixel (485,282.5) sẽ đỏ. Khôi phục và giữ oracle độc lập.
-
-2. Tắt debug bằng F rồi thử FOV, depth, pause/step. Cảnh nền và point vẫn phải có chiều sâu. Nếu chúng biến mất, hãy tách debug overlay khỏi geometry.
-
-3. Cố đưa test thất bại rồi chạy Release. CTest phải trả failure; sau đó khôi phục test. Không chấp nhận suite chỉ hoạt động ở Debug.
+1. Tạm nhân đôi bán kính chấm thay vì dùng độ sâu mới khi tính **vị trí tâm**. Chạy phép kiểm `(500,340) → (600,280)`: sao có thể to ra, nhưng đáp số pixel không đạt. Khôi phục phép chia đúng rồi chạy CTest lại.
+2. Thử sinh danh sách sao mới sau mỗi lần reset rồi về lại Z=0. Người xem không còn nhận ra bố cục ban đầu, kể cả khi từng phép chiếu riêng lẻ đều đúng. Trả dữ liệu về danh sách bất biến để cùng trạng thái có thể cho cùng ảnh.
 
 ## Tự kiểm tra kết quả
 
-- Với FOV 90° và viewport lệch gốc, A nằm ở (485, 282.5), B ở (447.5, 301.25). B nằm giữa tâm và A, không phải giữa góc cửa sổ và A.
-- Đặt đèn đúng trên mặt phẳng gần hoặc xa: vẫn thấy nó nếu X/Y nằm trong khung. Đặt sau camera: không vẽ nó.
-- Chiếu rồi dựng ngược điểm ở nhiều góc nhìn. Một điểm bị loại phải báo “không xác định”, không được báo sai số bằng 0.
-- Tắt debug vẫn thấy đèn và mặt đường. Khi chỉnh đèn bằng tay, đồng hồ phải dừng.
-- Starter, tám checkpoint, final và tests build Debug/Release; CTest chạy không cần window.
-- Chọn điểm trên trục: A và B đều cách tâm 0 px. Chọn điểm mà B vượt `far`: phải thấy “không đo được”.
-- Thử kéo rồi thả ngoài cửa sổ; khi quay lại, đốm sáng không còn đi theo chuột.
+- Bắt đầu từ `work/`, build được chương trình và tự bay qua trường sao; cả Debug lẫn Release kiểm đúng mã mình viết.
+- Giữ W tiến, giữ S lùi, thả thì dừng khi không bật tự bay. Không lưu vị trí màn hình làm vị trí world của sao.
+- Điểm tâm, điểm lệch, phía sau mắt và ngoài giới hạn gần/xa đều cho đúng kết quả; thước không vẽ một vòng giả khi thiếu dữ liệu.
+- Tắt dụng cụ vẫn còn một cảnh hoàn chỉnh, không cần ảnh nền hoặc mô hình tàu để tạo cảm giác chuyển động.
 
 ## Bài tập mở rộng
 
-Thêm một điểm sáng thứ hai có cùng quỹ đạo nhưng lệch pha. Đối chiếu từng điểm bằng pipeline chung, không tạo một công thức chiếu riêng chỉ để hình trông đúng.
-
-[Tiếp tục Project 12 — Tam giác xoay](/projects/rotating-triangle).
+Hãy giữ `projectPerspective` và thay ba ngôi sao bất kỳ bằng ba đỉnh của một tam giác. Nếu mỗi đỉnh đều có pixel, bạn đã có đủ tọa độ để nối ba cạnh. Ở [Project 12 — Tam giác 3D xoay bằng chuột](/projects/rotating-triangle), việc mới là **xoay đỉnh trong không gian**; chiếc máy ảnh để nhìn chúng chính là thứ bạn vừa tự viết.

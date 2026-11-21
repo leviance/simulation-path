@@ -203,20 +203,6 @@ inline bool clipDepth(Vec3& start, Vec3& end, const PerspectiveLens& lens) {
     return true;
 }
 #endif
-#if LAB_CHECKPOINT >= 6
-// [snippet flight]
-inline Vec3 flightPoint(double timeSeconds) {
-    return {std::sin(0.9 * timeSeconds) * 2.2, std::cos(1.3 * timeSeconds) * 1.3, 6.0 + std::sin(0.55 * timeSeconds) * 4.0};
-}
-// [/snippet flight]
-
-inline double advanceFlightTime(double current, double deltaTime) {
-    if (!std::isfinite(current) || !std::isfinite(deltaTime) || deltaTime <= 0.0) {
-        return current;
-    }
-    return current + std::min(deltaTime, 0.1);
-}
-#endif
 #if LAB_CHECKPOINT >= 7
 // Một screen point là một tia; cần depth mới chọn được duy nhất một điểm.
 // [snippet drag-plane]

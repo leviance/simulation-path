@@ -16,7 +16,7 @@ inline constexpr std::size_t maximumParticles = 1'000'000;
 inline constexpr std::uint32_t defaultSeed = 0x32c0ffeeU;
 inline constexpr float fixedDt = 1.0F / 120.0F;
 
-// [snippet:ParticleAoS]
+// [snippet particle-aos]
 struct ParticleAoS {
     std::uint32_t id{};
     std::uint32_t generation{};
@@ -31,7 +31,7 @@ struct ParticleAoS {
     float hue{};
 };
 
-// [/snippet:ParticleAoS]
+// [/snippet particle-aos]
 static_assert(sizeof(float) == 4 && sizeof(ParticleAoS) == 44);
 
 // Metres, seconds and metres/second squared; every dynamic field is float32.
@@ -57,7 +57,7 @@ inline void validateConfig(const FountainConfig& config, float dt = fixedDt) {
     }
 }
 
-// [snippet:randomUnit]
+// [snippet random-unit]
 inline float randomUnit(std::uint32_t seed, std::uint32_t id, std::uint32_t generation, std::uint32_t channel) {
     std::uint32_t value = seed ^ (id * 0x9e3779b9U) ^ (generation * 0x85ebca6bU) ^ (channel * 0xc2b2ae35U);
     value ^= value >> 16U;
@@ -68,28 +68,32 @@ inline float randomUnit(std::uint32_t seed, std::uint32_t id, std::uint32_t gene
     return float(value >> 8U) * (1.0F / 16777216.0F);
 }
 
-// [/snippet:randomUnit]
+// [/snippet random-unit]
 
-// [snippet:spawnParticle]
+// [snippet spawn-particle]
 inline ParticleAoS spawnParticle(std::uint32_t id, std::uint32_t generation, const FountainConfig& config) {
     ParticleAoS particle{};
     particle.id = id;
     particle.generation = generation;
     const float angle = randomUnit(config.seed, id, generation, 1) * 6.28318530718F;
-    const float radialSpeed = std::sqrt(randomUnit(config.seed, id, generation, 2)) * config.spread;
+    // Phần lớn giọt nằm gần trục vòi; số ít ở mép tách ra thành màn nước.
+    const float edge = randomUnit(config.seed, id, generation, 2);
+    const float radialSpeed = config.spread * edge * edge;
     particle.positionX = config.emitterX;
     particle.positionZ = config.emitterZ;
-    particle.velocityX = std::cos(angle) * radialSpeed;
+    const float jitter = randomUnit(config.seed, id, generation, 3);
+    particle.velocityY = config.launchSpeed * ((0.98F + 0.10F * jitter) - 0.16F * edge);
+    // Một vòi nghiêng khoảng 18 độ. Sau khi rời vòi chỉ còn trọng lực.
+    particle.velocityX = 0.32F * particle.velocityY + std::cos(angle) * radialSpeed;
     particle.velocityZ = std::sin(angle) * radialSpeed;
-    particle.velocityY = config.launchSpeed * (0.85F + 0.3F * randomUnit(config.seed, id, generation, 3));
     particle.lifetime = config.lifetime * (0.75F + 0.5F * randomUnit(config.seed, id, generation, 4));
     particle.hue = randomUnit(config.seed, id, generation, 5);
     return particle;
 }
 
-// [/snippet:spawnParticle]
+// [/snippet spawn-particle]
 
-// [snippet:warmParticle]
+// [snippet warm-particle]
 inline ParticleAoS warmParticle(std::uint32_t id, const FountainConfig& config) {
     ParticleAoS particle = spawnParticle(id, 0, config);
     particle.age = randomUnit(config.seed, particle.id, 0, 6) * particle.lifetime;
@@ -101,9 +105,9 @@ inline ParticleAoS warmParticle(std::uint32_t id, const FountainConfig& config) 
     return particle;
 }
 
-// [/snippet:warmParticle]
+// [/snippet warm-particle]
 
-// [snippet:makeParticlesAoS]
+// [snippet make-particles-aos]
 inline std::vector<ParticleAoS> makeParticlesAoS(std::size_t count, const FountainConfig& config, bool warm = true) {
 #if LAB_CHECKPOINT < 1
     static_cast<void>(warm);
@@ -130,9 +134,9 @@ inline std::vector<ParticleAoS> makeParticlesAoS(std::size_t count, const Founta
     return particles;
 }
 
-// [/snippet:makeParticlesAoS]
+// [/snippet make-particles-aos]
 
-// [snippet:integrateParticle]
+// [snippet integrate-particle]
 inline void integrateParticle(ParticleAoS& particle, float dt, float gravity) {
     particle.velocityY += gravity * dt;
     particle.positionX += particle.velocityX * dt;
@@ -141,10 +145,10 @@ inline void integrateParticle(ParticleAoS& particle, float dt, float gravity) {
     particle.age += dt;
 }
 
-// [/snippet:integrateParticle]
+// [/snippet integrate-particle]
 
 #if LAB_CHECKPOINT >= 2
-// [snippet:advanceParticle]
+// [snippet advance-particle]
 inline bool advanceParticle(ParticleAoS& particle, const FountainConfig& config, float dt, bool newlyEmitted = false) {
     if (newlyEmitted) {
         particle = spawnParticle(particle.id, 0, config);
@@ -163,14 +167,14 @@ inline bool advanceParticle(ParticleAoS& particle, const FountainConfig& config,
     return true;
 }
 
-// [/snippet:advanceParticle]
+// [/snippet advance-particle]
 
 struct EmissionPlan {
     std::size_t active{};
     double remainder{};
 };
 
-// [snippet:planEmission]
+// [snippet plan-emission]
 inline EmissionPlan planEmission(std::size_t active, std::size_t capacity, double remainder, const FountainConfig& config, float dt) {
     validateConfig(config, dt);
     if (active > capacity || !std::isfinite(remainder) || remainder < 0 || remainder >= 1) {
@@ -183,12 +187,12 @@ inline EmissionPlan planEmission(std::size_t active, std::size_t capacity, doubl
     }
     return {active + births, available - std::floor(available)};
 }
-// [/snippet:planEmission]
+// [/snippet plan-emission]
 
 enum class MemoryWorkload { gravityOnly,
                             fullLifecycle };
 
-// [snippet:updateAoSRange]
+// [snippet update-aos-range]
 inline std::size_t updateAoSRange(std::span<ParticleAoS> particles, std::size_t begin, std::size_t end, const FountainConfig& config, float dt, MemoryWorkload workload, std::size_t oldActive) {
     std::size_t respawned = 0;
     if (workload == MemoryWorkload::gravityOnly) {
@@ -205,7 +209,7 @@ inline std::size_t updateAoSRange(std::span<ParticleAoS> particles, std::size_t 
     return respawned;
 }
 
-// [/snippet:updateAoSRange]
+// [/snippet update-aos-range]
 #endif
 
 inline bool finiteParticle(const ParticleAoS& particle) {

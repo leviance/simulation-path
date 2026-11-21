@@ -1,3 +1,4 @@
+import { drawStarfield } from "@/lib/labs/starfield";
 import type { Vec3 } from "@/lib/labs/normal";
 import {
   worldToCamera,
@@ -42,8 +43,8 @@ export function drawProjectionLab(
   if (debug) {
     ctx.fillStyle = "#e1e8fa";
     ctx.font = "18px ui-monospace";
-    let title = "ĐƯỜNG BĂNG ĐO ĐỘ SÂU";
-    let hint = "Điểm sáng là đèn. Đường dóng cho biết nó nằm phía trên vạch nào của sàn.";
+    let title = "BAY XUYÊN TRƯỜNG SAO";
+    let hint = "Mỗi chấm là một điểm đứng yên trong không gian. Chỉ camera dịch theo Z.";
     if (stage < 3) {
       title = "XEM TRƯỚC TRÊN MẶT PHẲNG XY";
       hint = "Đổi riêng Z: tọa độ của đèn thay đổi nhưng ảnh chưa dịch chuyển.";
@@ -58,7 +59,6 @@ export function drawProjectionLab(
   ctx.beginPath();
   ctx.rect(v.x, v.y, v.width, v.height);
   ctx.clip();
-  const floorY = -1.5;
   const line = (a: Vec3, b: Vec3, color: string) => {
     const depth = clipPointDepth(
       worldToCamera(a, scene.camera),
@@ -74,47 +74,20 @@ export function drawProjectionLab(
     if (clipped) drawLine(ctx, clipped[0], clipped[1], color, 1.5);
   };
   if (stage >= 5) {
-    // Vạch sơn, lề đường và khung đều dùng cùng phép chiếu với đèn.
-    for (let x = -4; x <= 4; x++) {
-      line({ x, y: floorY, z: 1 }, { x, y: floorY, z: 16 }, "#28334d");
-    }
-    for (let z = 1; z <= 16; z++) {
-      line({ x: -4, y: floorY, z }, { x: 4, y: floorY, z }, "#28334d");
-      if (z < 16) line({ x: 0, y: floorY, z }, { x: 0, y: floorY, z: z + 0.45 }, "#74839f");
-    }
-    for (const side of [-1, 1]) {
-      const x = side * 1.9;
-      line({ x, y: floorY, z: 1 }, { x, y: floorY, z: 16 }, "#426474");
-    }
-    for (const z of [2, 4, 8, 12]) {
-      line({ x: -1.55, y: 1.1, z }, { x: 1.55, y: 1.1, z }, "#74839f");
-      for (const side of [-1, 1]) {
-        const post = side * 1.9;
-        const shoulder = side * 1.55;
-        line({ x: post, y: floorY, z }, { x: post, y: 0.75, z }, "#74839f");
-        line({ x: post, y: 0.75, z }, { x: shoulder, y: 1.1, z }, "#75c9d1");
-        line({ x: post, y: floorY, z }, { x: side * 1.63, y: floorY, z }, "#75c9d1");
+    drawStarfield(ctx, scene, v);
+  } else {
+    if (stage < 3) {
+      for (let d = -280; d <= 280; d += 70) {
+        drawLine(ctx, { x: 550 + d, y: 120 }, { x: 550 + d, y: 680 }, "#28334d");
+        drawLine(ctx, { x: 30, y: 400 + d }, { x: 1070, y: 400 + d }, "#28334d");
       }
-    }
-    if (debug) {
-      const foot = { x: -1.9, y: floorY, z: 4 };
-      line(foot, { x: -1.35, y: floorY, z: 4 }, "#ff6b6b");
-      line(foot, { x: -1.9, y: floorY + 0.55, z: 4 }, "#53f0ae");
-      line(foot, { x: -1.9, y: floorY, z: 4.55 }, "#84a9ff");
-    }
-  } else if (stage < 3) {
-    for (let d = -280; d <= 280; d += 70) {
-      drawLine(ctx, { x: 550 + d, y: 120 }, { x: 550 + d, y: 680 }, "#28334d");
-      drawLine(ctx, { x: 30, y: 400 + d }, { x: 1070, y: 400 + d }, "#28334d");
     }
   }
   const r = pointDisplay(scene, stage);
-  if (r.status === "visible" && r.screen) {
+  if ((stage < 8 || debug) && r.status === "visible" && r.screen) {
     if (stage >= 5 && debug) {
-      const foot = { x: scene.point.x, y: floorY, z: scene.point.z };
-      line(scene.point, foot, "#967b55");
-      line({ ...foot, x: foot.x - 0.1 }, { ...foot, x: foot.x + 0.1 }, "#967b55");
-      line({ ...foot, z: foot.z - 0.1 }, { ...foot, z: foot.z + 0.1 }, "#967b55");
+      const axis = { x: scene.camera.position.x, y: scene.camera.position.y, z: scene.point.z };
+      line(axis, scene.point, "#55778f");
     }
     const focalPixels = v.height * 0.5 * (stage >= 4 ? verticalFocalScale(scene.lens) : 1);
     const radius =
@@ -159,12 +132,35 @@ export function drawProjectionLab(
     ctx.stroke();
   }
   ctx.restore();
+  if (!debug) {
+    ctx.fillStyle = "#99b7d6";
+    ctx.font = "14px ui-monospace, monospace";
+    ctx.fillText("PROJECT 11   /   PHÉP CHIẾU PHỐI CẢNH", 30, 35);
+    ctx.fillStyle = "#e6eefb";
+    ctx.font = "600 30px system-ui";
+    ctx.fillText("Bay xuyên trường sao", 30, 75);
+    ctx.fillStyle = "#bacde2";
+    ctx.font = "17px ui-monospace, monospace";
+    ctx.fillText(
+      `Camera Z: ${scene.camera.position.z.toFixed(2)} / 12   ·   FOV dọc: ${Math.round((scene.lens.verticalFovRadians * 180) / Math.PI)}°`,
+      30,
+      726,
+    );
+    ctx.font = "18px system-ui";
+    ctx.fillText(
+      scene.camera.position.z >= 12
+        ? "Đã tới cuối vùng sao. Giữ S để quay về, hoặc R để bắt đầu lại."
+        : "Giữ W để tiến, S để lùi. Thả phím và nhìn xem các sao dừng ở đâu.",
+      30,
+      760,
+    );
+  }
   if (debug) {
     ctx.fillStyle = "#e1e8fa";
     ctx.font = "18px ui-monospace";
     ctx.fillText(
       stage >= 5
-        ? "Bốn cổng đều rộng 3,8 đơn vị. Chỉ vị trí của chúng khác nhau: Z = 2, 4, 8 và 12."
+        ? "Tọa độ sao thuộc về thế giới. Hãy so nó với độ sâu đang đọc trong hệ camera."
         : "Mốc để so sánh là tâm khung nhìn, không phải góc trên bên trái màn hình.",
       30,
       738,

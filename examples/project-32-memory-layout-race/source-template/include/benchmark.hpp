@@ -8,7 +8,7 @@ struct TimingStats {
     double median{}, minimum{}, maximum{};
 };
 
-// [snippet:summarizeTimes]
+// [snippet summarize-times]
 inline TimingStats summarizeTimes(std::vector<double> samples) {
     if (samples.size() != 5 || std::any_of(samples.begin(), samples.end(), [](double value) {
             return !std::isfinite(value) || value < 0;
@@ -18,7 +18,7 @@ inline TimingStats summarizeTimes(std::vector<double> samples) {
     return {samples[samples.size() / 2], samples.front(), samples.back()};
 }
 
-// [/snippet:summarizeTimes]
+// [/snippet summarize-times]
 struct BenchmarkRow {
     std::size_t count{}, updated{};
     MemoryWorkload workload{MemoryWorkload::fullLifecycle};
@@ -97,6 +97,7 @@ struct BenchmarkJob {
         notice = "Preparing seeded input; allocation/copy excluded from kernel";
     }
 
+    // [snippet trial-order]
     void chooseMethod() {
         // Method 0 is AoS, method 1 is SoA. Odd samples reverse the pair.
         method = 0;
@@ -114,6 +115,7 @@ struct BenchmarkJob {
         phase = BenchmarkPhase::reset;
     }
 
+    // [/snippet trial-order]
     void resetUnit() {
         const std::size_t end = std::min(row.count, target + 4096);
         const auto started = Clock::now();
@@ -139,7 +141,7 @@ struct BenchmarkJob {
         }
     }
 
-    // [snippet:benchmarkKernelUnit]
+    // [snippet benchmark-kernel-unit]
     void kernelUnit() {
         const std::size_t end = std::min(row.count, target + 4096);
         const auto started = Clock::now();
@@ -181,9 +183,10 @@ struct BenchmarkJob {
         }
     }
 
-    // [/snippet:benchmarkKernelUnit]
+    // [/snippet benchmark-kernel-unit]
     void verifyUnit() {
         const std::size_t end = std::min(row.count, target + 4096);
+        // [snippet verify-pair]
         for (std::size_t index = target; index < end; ++index) {
             const auto& first = workAoS[index];
             if (first.id != index || !finiteParticle(first))
@@ -196,6 +199,7 @@ struct BenchmarkJob {
             row.maximumErrorRatio = std::max(row.maximumErrorRatio, particleErrorRatio(first, second));
 #endif
         }
+        // [/snippet verify-pair]
         target = end;
         if (target < row.count)
             return;
@@ -264,12 +268,14 @@ struct BenchmarkJob {
 #endif
 
 #if LAB_CHECKPOINT >= 6
+// [snippet traffic-fields]
 struct TrafficModel {
     std::size_t usefulBytes{}, uniqueLines{}, loadedBytes{};
     bool upperBound{};
 };
+// [/snippet traffic-fields]
 
-// [snippet:modelTraffic]
+// [snippet model-traffic]
 inline TrafficModel modelTraffic(std::size_t count, Layout layout, MemoryWorkload workload) {
     if (count > maximumParticles)
         throw std::invalid_argument("Traffic model budget");
@@ -298,6 +304,6 @@ inline TrafficModel modelTraffic(std::size_t count, Layout layout, MemoryWorkloa
     return result;
 }
 
-// [/snippet:modelTraffic]
+// [/snippet model-traffic]
 #endif
 } // namespace lab

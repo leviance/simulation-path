@@ -51,7 +51,7 @@ export const roadmapSeed = [
   },
   {
     id: 11,
-    title: "Điểm sáng bay trong không gian: chiếu một điểm 3D xuống màn hình",
+    title: "Bay xuyên trường sao: tự viết phép chiếu phối cảnh",
     part: "TỰ DỰNG ĐỒ HỌA 3D TRÊN CPU, CHƯA DÙNG OPENGL",
   },
   {

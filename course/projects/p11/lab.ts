@@ -1,69 +1,82 @@
 import type { ProjectLabMeta } from "../../labs/types";
+
 const lab = {
   native: {
     directory: "/field-notes/perspective-point",
     withDemo: true,
-    overview: ["runway"],
-    lessons: { "projection-full": ["ruler"] },
+    overview: ["start", "flight"],
+    lessons: { "projection-motion": ["flight"], "projection-full": ["start", "flight", "ruler"] },
     takes: {
-      runway: {
-        title: "Đốm sáng giữa bốn cổng",
+      start: {
+        title: "Trước khi nhấn W",
         source: "Project 11 · C++/SDL3 · Release",
-        poster: "piste.png",
-        alt: "Đốm sáng màu hổ phách nằm lệch phải, phía trên mặt đường kẻ ô. Bốn cổng có cùng kích thước thật thu nhỏ dần về tâm.",
+        poster: "departure.png",
+        alt: "Trường sao trên nền tối ở camera Z=0. Một ngôi sao màu hổ phách nằm ở phía trên bên phải tâm ảnh.",
         caption:
-          "Nhìn các cổng thay vì chỉ nhìn kích thước đốm sáng: mỗi cổng có cùng chiều ngang và được vẽ bằng cùng một hàm.",
+          "Hãy tìm sao hổ phách trước khi chuyển sang ảnh tiếp theo. Vị trí thật của nó là (1; 0,6; 4).",
+      },
+      flight: {
+        title: "Tiến thêm hai đơn vị",
+        source: "Project 11 · C++/SDL3 · Release",
+        poster: "in-flight.png",
+        alt: "Vẫn bầu trời ấy ở camera Z=2. Sao hổ phách xuất hiện xa tâm hơn, còn sao nằm trên trục nhìn vẫn ở giữa.",
+        caption:
+          "Máy ảnh đi từ Z=0 đến Z=2; ống kính vẫn 60°. Độ sâu của sao hổ phách giảm một nửa nên khoảng cách từ ảnh của nó tới tâm tăng gấp đôi.",
       },
       ruler: {
-        title: "Nếu đẩy đèn ra xa gấp đôi thì sao?",
+        title: "Kiểm hai độ sâu khi dừng bay",
         source: "Project 11 · C++/SDL3 · Release",
         poster: "depth-ruler.png",
-        alt: "Vòng rỗng màu lam nằm trên thước giữa tâm ảnh và đốm sáng màu hổ phách. Hai số đo bên dưới là khoảng cách tính bằng pixel.",
+        alt: "Trường sao thật ở phía sau, sao thử A và vòng đo B hiện cùng hai khoảng cách đến tâm ảnh.",
         caption:
-          "A là vị trí thật của đèn. B là ảnh dự đoán khi giữ X/Y và nhân đôi độ sâu tính từ camera. Nhấn M trong bản C++ để làm lại phép đo.",
+          "Nhấn M. B là vị trí dự đoán của A khi nhân đôi độ sâu so với camera, không phải một ngôi sao khác trong danh sách.",
       },
     },
   },
   base: {
-    label: "PROJECTION LAB",
-    title: "Điểm 3D đi tới pixel nào?",
-    description: "Điều khiển điểm sáng, so độ sâu, FOV/aspect và từng trạng thái bị loại.",
+    label: "PHÉP CHIẾU PHỐI CẢNH",
+    title: "Bay xuyên trường sao",
+    description:
+      "Bấm vào khung hình rồi giữ W để bay. Vì sao sao lệch tâm tỏa ra hai bên, còn sao ngay trước mặt thì không?",
   },
   modes: {
     "projection-point": {
-      title: "Vẽ điểm sáng và điều khiển ba tọa độ",
-      description: "Dựng marker trên framebuffer, rồi nối WASD/QE với world point bằng delta time.",
+      title: "Thắp ngôi sao đầu tiên",
+      description:
+        "Dùng framebuffer để đánh dấu một sao. Đổi riêng Z để thấy điều còn thiếu trong hình vẽ XY.",
     },
     "projection-camera": {
-      title: "Đặt camera vào không gian",
-      description: "Giữ world point riêng và đổi gốc tọa độ bằng vị trí camera.",
+      title: "Khi người xem tiến về phía ngôi sao",
+      description:
+        "Cùng một ngôi sao, nhưng ở hai chỗ đứng khác nhau bạn đo được hai độ sâu khác nhau.",
     },
     "projection-divide": {
-      title: "Vì sao điểm ở xa tiến về tâm?",
-      description: "Nhìn hai tam giác đồng dạng, tự viết x/z, y/z rồi kiểm vị trí điểm sáng.",
+      title: "Vì sao các ngôi sao tỏa ra từ tâm ảnh?",
+      description: "Vẽ đường nhìn qua sao, rút ra X/Z và Y/Z rồi thử đoán pixel trước khi chạy.",
     },
     "projection-fov": {
-      title: "Chọn FOV và hình dạng viewport",
-      description: "Tự tính focal scale, NDC và pixel; đổi aspect mà không kéo méo cảnh.",
+      title: "Bay tới hay chỉ đổi ống kính?",
+      description:
+        "So ảnh ở hai góc mở và hai vị trí camera. Kiểm kết quả trên cả khung vuông lẫn khung rộng.",
     },
     "projection-visibility": {
-      title: "Chặn điểm không thể nhìn thấy",
-      description: "Kiểm vùng nhìn, cắt đoạn ở near/far rồi dựng lưới sàn và bốn khung 3D.",
+      title: "Từ một điểm đến cả trường sao",
+      description:
+        "Đi qua danh sách 96 tọa độ cố định, chỉ vẽ những sao mà camera thật sự nhìn được.",
     },
     "projection-motion": {
-      title: "Cho điểm bay, dừng và bước từng nhịp",
+      title: "Giữ W để bay, thả phím để dừng",
       description:
-        "Tách điều khiển tay khỏi quỹ đạo thời gian, không để hai nguồn input tranh nhau.",
+        "Dùng thời gian giữa hai khung hình để bay; thử thả phím, lùi lại và so với lúc xuất phát.",
     },
     "projection-drag": {
-      title: "Kéo điểm mà không làm mất depth",
-      description:
-        "Đảo phép chiếu tại một độ sâu đã biết và quản lý pointer capture đúng chủ sở hữu.",
+      title: "Tùy chọn: kéo ngôi sao thử ở độ sâu đã biết",
+      description: "Biết độ sâu rồi, hãy đi ngược từ con trỏ về tọa độ 3D mà không sửa trường sao.",
     },
     "projection-full": {
-      title: "Hoàn thiện demo và kiểm chứng",
+      title: "Bay thử rồi kiểm lại phép chiếu",
       description:
-        "Tắt debug để xem cảnh sạch; kiểm tra bằng nghiệm tính tay, biên và mã hoàn chỉnh.",
+        "Chạy bản hoàn chỉnh, đo ngôi sao hổ phách, kiểm các trường hợp biên rồi dùng lại hàm chiếu ở Project 12.",
     },
   },
 } satisfies ProjectLabMeta;

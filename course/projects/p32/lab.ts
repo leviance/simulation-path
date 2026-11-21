@@ -1,10 +1,54 @@
 import type { ProjectLabMeta } from "../../labs/types";
 const lab = {
+  native: {
+    directory: "/field-notes/cpu-fountain",
+    withDemo: true,
+    overview: ["jet", "profile", "plan"],
+    lessons: {
+      "layout-scene": ["jet"],
+      "aos-layout": ["jet", "narrow"],
+      "layout-validation": ["jet", "profile", "plan"],
+    },
+    takes: {
+      jet: {
+        title: "Theo đường nước từ miệng vòi đến khi rơi",
+        source: "C++/SDL3 · Release · F1 · 1.000.000 hạt sống",
+        poster: "single.png",
+        alt: "Trên mặt lưới tối, một dòng nước bạc bay xiên lên từ một điểm. Dòng mở dần, rồi tách thành những giọt xanh nhạt đang rơi.",
+        caption:
+          "Bắt đầu ở chân tia nước rồi nhìn dọc lên ngọn. Lúc mới phun, các giọt còn sát nhau nên trông gần như một dòng liền; đến phía bên kia, có thể phân biệt những giọt đang rơi. Không có mặt nước dựng sẵn.",
+      },
+      profile: {
+        title: "Nhìn ngang để thấy nơi giọt đổi chiều",
+        source: "Cùng snapshot C++ · F3 · nhìn ngang",
+        poster: "profile.png",
+        alt: "Nhìn ngang thấy nhánh nước đi lên hẹp hơn phần màn giọt rơi về phía trước.",
+        caption:
+          "Ở đỉnh đường bay, vận tốc theo chiều cao bằng không nhưng giọt vẫn tiến theo chiều ngang. Các nét dài ở phía rơi chỉ hướng vận tốc, không phải những hạt mới.",
+      },
+      plan: {
+        title: "Nhìn từ trên để thấy độ xòe",
+        source: "Cùng snapshot C++ · F2 · nhìn từ trên",
+        poster: "plan.png",
+        alt: "Nhìn thẳng xuống mặt lưới: tia nước trải từ một điểm phát thành một dải giọt có bề rộng.",
+        caption:
+          "Góc ngang cho biết tia nước cao bao nhiêu. Góc trên cho biết nó tản rộng đến đâu. Chỉ camera đổi chỗ; tuổi và vị trí của tất cả hạt đều như ở ảnh trước.",
+      },
+      narrow: {
+        title: "Nếu các giọt không tản sang hai bên?",
+        source: "C++/SDL3 · cùng seed · độ xòe 0 m/s",
+        poster: "narrow.png",
+        alt: "Cùng một vòi ở góc nhìn nghiêng; tắt vận tốc tản khiến dòng nước hẹp lại, vẫn bị kéo cong bởi trọng lực.",
+        caption:
+          "Đặt độ xòe về 0 rồi khởi tạo lại. Hạt vẫn bay lên và rơi, nhưng không lệch khỏi mặt phẳng đi qua trục vòi. So với ảnh đầu để tách tác dụng của độ xòe khỏi tác dụng của trọng lực.",
+      },
+    },
+  },
   base: {
     label: "CPU FOUNTAIN · AoS / SoA",
-    title: "Cùng đài phun, khác cách đặt dữ liệu",
+    title: "Theo một giọt nước qua hai cách lưu hạt",
     description:
-      "Canvas cập nhật tối đa 20.000 hạt float32 để học mô hình; bản C++ có preset một triệu hạt sống. Đổi layout giữ nguyên state. Màu biểu thị tuổi hạt, không dùng hoạt ảnh định sẵn.",
+      "Ảnh phía trên là bản C++ chạy một triệu hạt. Canvas cho bạn tạm dừng, chọn một giọt rồi theo dõi nó qua lần sinh kế tiếp hoặc khi đổi AoS sang SoA. Bản web giới hạn 20.000 hạt; hãy dùng bản C++ Release để đo tốc độ.",
   },
   modes: {
     "layout-scene": {

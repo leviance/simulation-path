@@ -1,6 +1,30 @@
 import type { Camera } from "./scene.ts";
 
 export const fountainFocalScale = 1.20710678118;
+export const fountainViews = ["oblique", "plan", "profile"] as const;
+export type FountainView = (typeof fountainViews)[number];
+
+/** A viewpoint never changes a position, velocity or simulation timestamp. */
+export function fountainCamera(view: FountainView = "oblique"): Camera {
+  if (view === "plan") return { yaw: 0, pitch: -Math.PI / 2, distance: 12, x: 2.2, y: 0, z: 0 };
+  if (view === "profile") return { yaw: 0, pitch: -0.06, distance: 10.8, x: 2.2, y: 2.1, z: 0 };
+  return { yaw: -0.36, pitch: -0.22, distance: 10.7, x: 2.2, y: 2.1, z: 0 };
+}
+
+export function activeFountainView(camera: Camera) {
+  return fountainViews.find((view) => {
+    const target = fountainCamera(view);
+    return (
+      camera.yaw === target.yaw &&
+      camera.pitch === target.pitch &&
+      camera.distance === target.distance &&
+      camera.x === target.x &&
+      camera.y === target.y &&
+      camera.z === target.z
+    );
+  });
+}
+
 export function fountainViewBasis(camera: Camera) {
   const cy = Math.cos(camera.yaw),
     sy = Math.sin(camera.yaw),

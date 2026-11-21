@@ -130,13 +130,32 @@ void clippingAndPixels() {
     lab::Scene scene;
     scene.debug = false;
     lab::renderScene(image, scene);
-    const auto colored = std::count(image.pixels.begin(), image.pixels.end(), lab::kShape);
-    const auto grid = std::count(image.pixels.begin(), image.pixels.end(), lab::kGrid);
-    check(colored > 0 && grid > 0, "clean mode retains marker and actual 3D scene");
-    lab::applyPreset(scene, 3);
-    scene.debug = false;
+    const auto departure = image.pixels;
+    const auto viewportStart = lab::viewportFor(scene);
+    const auto gold = lab::projectPerspective(lab::starCatalog()[0], scene.camera, scene.lens, viewportStart);
+    check(gold.screen.has_value(), "guide star visible on departure");
+    if (gold.screen) {
+        const int index = static_cast<int>(gold.screen->y) * image.width + static_cast<int>(gold.screen->x);
+        check(image.pixels[index] == lab::starInk::color(0), "native guide color lands at projected world point");
+    }
+    scene.point.z = -1.0;
     lab::renderScene(image, scene);
-    check(std::count(image.pixels.begin(), image.pixels.end(), lab::kShape) == 0, "behind marker not rasterized");
+    check(image.pixels == departure, "clean field ignores the independent test probe");
+    scene.debug = true;
+    lab::renderScene(image, scene);
+    check(image.pixels == departure, "behind-camera probe adds no invented pixel");
+    scene.debug = false;
+    lab::setCameraDepth(scene, 2.0);
+    lab::renderScene(image, scene);
+    check(image.pixels != departure, "flight moves actual star pixels on the CPU framebuffer");
+    const auto next = lab::projectPerspective(lab::starCatalog()[0], scene.camera, scene.lens, viewportStart);
+    if (next.screen && gold.screen) {
+        const int newIndex = static_cast<int>(next.screen->y) * image.width + static_cast<int>(next.screen->x);
+        check(image.pixels[newIndex] == lab::starInk::color(0), "same star reaches a new pixel");
+    } else check(false, "guide remains in view after two units");
+    lab::setCameraDepth(scene, 0.0);
+    lab::renderScene(image, scene);
+    check(image.pixels == departure, "return flight recovers the identical sky");
     image.clear(lab::kBackground);
     const lab::Viewport viewport{10.0, 10.0, 100.0, 100.0};
     lab::drawPointMarker(image, {110.0, 60.0}, 10, viewport, true);
@@ -144,31 +163,75 @@ void clippingAndPixels() {
     check(image.pixels[60 * lab::Framebuffer::width + 109] != lab::kBackground, "marker clips up to last covered pixel");
 }
 
+void starfieldAndLens() {
+    lab::Scene scene;
+    scene.lens.verticalFovRadians = lab::kPi * 0.5;
+    const lab::Viewport square{0.0, 0.0, 800.0, 800.0};
+    const auto catalog = lab::makeStarCatalog();
+    check(catalog.size() == 96, "same finite set of 96 world stars");
+    const auto initial = lab::projectPerspective(catalog[0], scene.camera, scene.lens, square);
+    check(initial.screen && close(initial.screen->x, 500.0) && close(initial.screen->y, 340.0), "independent guide at departure");
+    lab::setCameraDepth(scene, 2.0);
+    const auto flown = lab::projectPerspective(catalog[0], scene.camera, scene.lens, square);
+    check(flown.screen && close(flown.screen->x, 600.0) && close(flown.screen->y, 280.0), "guide pixel after two units");
+    for (double depth : {0.0, 2.0, 6.0, 9.0}) {
+        lab::setCameraDepth(scene, depth);
+        const auto axial = lab::projectPerspective(catalog[1], scene.camera, scene.lens, square);
+        check(axial.screen && close(axial.screen->x, 400.0) && close(axial.screen->y, 400.0), "on-axis star stays at the optical center");
+    }
+    lab::setCameraDepth(scene, 10.0);
+    check(!lab::projectPerspective(catalog[1], scene.camera, scene.lens, square).screen, "no pixel on or behind the eye");
+    // Hai sao nằm trên cùng tia lúc đầu: zoom không tách chúng; tiến camera thì có.
+    lab::setCameraDepth(scene, 0.0);
+    const lab::Vec3 a{1.0, 0.0, 4.0}, b{2.0, 0.0, 8.0};
+    for (double fov : {45.0, 70.0, 90.0}) {
+        scene.lens.verticalFovRadians = fov * lab::kPi / 180.0;
+        const auto near = lab::projectPerspective(a, scene.camera, scene.lens, square);
+        const auto far = lab::projectPerspective(b, scene.camera, scene.lens, square);
+        check(near.screen && far.screen && close(near.screen->x, far.screen->x), "optical zoom preserves a shared ray");
+    }
+    lab::setCameraDepth(scene, 2.0);
+    const auto near = lab::projectPerspective(a, scene.camera, scene.lens, square);
+    const auto far = lab::projectPerspective(b, scene.camera, scene.lens, square);
+    check(near.screen && far.screen && close(near.screen->x - far.screen->x, 200.0 / 3.0), "dolly separates near and far on the original ray");
+    for (std::size_t i = 0; i < catalog.size(); ++i) {
+        const auto fixed = lab::starCatalog()[i];
+        check(fixed.x == catalog[i].x && fixed.y == catalog[i].y && fixed.z == catalog[i].z, "camera never changes world stars");
+    }
+}
+
 void timeAndInput() {
-    check(close(lab::advanceFlightTime(2.0, -1.0), 2.0), "negative dt ignored");
-    check(close(lab::advanceFlightTime(2.0, NAN), 2.0), "NaN dt ignored");
-    check(close(lab::advanceFlightTime(2.0, 9.0), 2.1), "stalled frame capped");
-    double timeA = 0.0;
-    double timeB = 0.0;
-    for (int i = 0; i < 60; ++i) {
-        timeA = lab::advanceFlightTime(timeA, 1.0 / 60.0);
-    }
-    for (int i = 0; i < 20; ++i) {
-        timeB = lab::advanceFlightTime(timeB, 0.05);
-    }
-    const auto a = lab::flightPoint(timeA);
-    const auto b = lab::flightPoint(timeB);
-    check(close(a.x, b.x) && close(a.y, b.y) && close(a.z, b.z), "same elapsed gives same orbit across dt partitions");
-    check(close(lab::flightPoint(0.0).z, 6.0) && close(lab::flightPoint(0.0).y, 1.3), "flight analytic starting position");
+    lab::Scene a, b;
+    for (int i = 0; i < 60; ++i) lab::advanceScene(a, 1.0 / 60.0);
+    for (int i = 0; i < 20; ++i) lab::advanceScene(b, 0.05);
+    check(close(a.elapsed, 1.0) && close(a.camera.position.z, 2.0) && close(a.camera.position.z, b.camera.position.z), "same flight across dt partitions");
+    for (int i = 0; i < 20; ++i) lab::advanceScene(b, 0.05, -1.0);
+    check(close(b.camera.position.z, 0.0), "fly back to departure");
     lab::Scene scene;
     const auto initial = scene.point;
-    lab::advanceScene(scene, NAN);
-    check(scene.point.x == initial.x && scene.point.y == initial.y && scene.point.z == initial.z, "invalid dt leaves manual point unchanged");
+    for (double dt : {-1.0, 0.0, std::numeric_limits<double>::quiet_NaN()}) lab::advanceScene(scene, dt);
+    lab::advanceScene(scene, 0.1, NAN);
+    check(scene.camera.position.z == 0.0 && scene.elapsed == 0.0, "reject nonfinite input and nonpositive dt");
+    lab::advanceScene(scene, 9.0);
+    check(close(scene.elapsed, 0.1) && close(scene.camera.position.z, 0.2), "stalled frame is capped");
+    check(scene.point.x == initial.x && scene.point.y == initial.y && scene.point.z == initial.z, "observer moves, world point does not");
+    scene.forwardHeld = true;
+    check(lab::flightDirection(scene) == 1.0, "W flies forward");
+    scene.backwardHeld = true;
+    check(lab::flightDirection(scene) == 0.0, "W and S cancel");
+    scene.forwardHeld = false;
+    check(lab::flightDirection(scene) == -1.0, "only S flies backward");
+    lab::stopFlight(scene);
+    check(lab::flightDirection(scene) == 0.0, "lost focus clears both controls");
+    lab::setCameraDepth(scene, 11.95);
+    scene.paused = false;
+    lab::advanceScene(scene, 0.1);
+    check(scene.paused && scene.camera.position.z == 12.0, "stop at end of finite field");
     lab::movePoint(scene, {0.0, 0.0, 100.0});
-    check(scene.point.z == 20.0 && scene.paused, "manual bounds and pause");
+    check(scene.point.z == 20.0 && scene.paused, "manual probe bounded and paused");
     const auto before = scene.point;
     lab::movePoint(scene, {NAN, 1.0, 0.0});
-    check(scene.point.x == before.x && scene.point.y == before.y, "nonfinite input rejected atomically");
+    check(scene.point.x == before.x && scene.point.y == before.y, "nonfinite probe input rejected atomically");
 }
 } // namespace
 
@@ -178,10 +241,11 @@ int main() {
     rejectionCases();
     inverseAndAspect();
     clippingAndPixels();
+    starfieldAndLens();
     timeAndInput();
     if (failures != 0) {
         return EXIT_FAILURE;
     }
-    std::cout << "Projection: analytic, guards, inverse, aspect, clipping, pixels and dt passed\n";
+    std::cout << "Starfield: CPU pixels, immutable sky, projection, flight input, guards, inverse and dt passed\n";
     return EXIT_SUCCESS;
 }

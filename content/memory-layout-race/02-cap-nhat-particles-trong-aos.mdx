@@ -1,31 +1,57 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Phát hạt, cho rơi và tái sử dụng slot
+# Từ miệng vòi đến màn giọt rơi
 
 ## Vấn đề cần giải quyết
 
-Checkpoint 01 đã có một đài phun đứng yên. Giờ hãy cho chương trình tự tạo chuyển động: gravity đổi vận tốc, vận tốc đổi vị trí, age tăng và hạt hết tuổi thọ được sinh lại. Ta cũng cần nhìn thấy hạt **được phát dần**, thay vì chỉ có preset warm đã chứa đầy hạt.
+Ở bài trước ta xoay được camera nhưng giọt nước chưa hề chuyển động. Bây giờ hãy bắt đầu với 256 ô trống. Sau lần nhấn `N` đầu tiên, giọt nào đã rời vòi? Vài giây sau, nếu cả mảng đã đầy, ta còn phun tiếp được không?
 
-Phần SDL, camera và renderer giữ nguyên. Các thay đổi nằm ở include/particles.hpp, phương thức cập nhật trong Simulation và chỗ gọi chúng trong vòng lặp ứng dụng. Đừng thêm một vòng while riêng bên cạnh vòng SDL: input và render vẫn phải được phục vụ trong khi tính.
+Ta sẽ viết đúng hai việc: cho giọt đang sống tiến một bước và dùng lại ô nhớ khi nó hết tuổi. Làm xong, bạn có thể thử cùng một vòi ở hai độ xòe để kiểm xem mình đã cập nhật đúng các thành phần vận tốc chưa.
 
-## Theo chân một particle
+## Hiểu ý tưởng trước khi viết code
 
-Ta dùng trục Y hướng lên và gravity âm. Với dt = 1/120 giây, symplectic Euler cập nhật vận tốc **trước**, rồi dùng vận tốc mới để cập nhật vị trí:
+Đặt vòi hơi nghiêng về phía trước (chiều +X). Ngay cả khi độ xòe bằng 0, giọt vẫn tiến về phía trước khi trọng lực kéo nó xuống; vì thế ta nhìn ra được hai phía của tia: phía đang vươn lên và phía đang đổ xuống. Lúc này mọi quỹ đạo cùng nằm trong một mặt phẳng đứng. Tăng độ xòe để giọt lệch sang hai bên mặt phẳng ấy. Độ xòe (`spread`) chỉ tác động **lúc sinh**, không phải một lực tiếp tục đẩy giọt trong lúc bay.
 
-$$
-v_{y,n+1}=v_{y,n}+g\,dt,\qquad
-\mathbf p_{n+1}=\mathbf p_n+\mathbf v_{n+1}\,dt.
-$$
+Mỗi bước, ta sửa vận tốc trước: $v_y'=v_y+g\,dt$. Rồi dùng vận tốc vừa có để dịch chuyển: $y'=y+v_y' dt$. Còn nếu một giọt chỉ sống thêm 0,003 s trong bước dài 0,008 s? Ở cuối bước, giọt kế tiếp trong ô đó phải **đã 0,005 s tuổi**. Giữ phần thời gian thừa giúp vòng đời hạt không bị làm tròn theo tốc độ vẽ.
 
 <InteractiveLab demo="memory-layout-race" mode="aos-layout" />
 
-## Bắt tay xây dựng
+## Viết code từng bước
 
-### Bước 1 — Tiến vị trí, vận tốc và tuổi
+### Đặt vận tốc cho giọt vừa rời vòi
 
-Hàm integrateParticle đã có trong bộ khung nhưng chưa được vòng chạy sử dụng. Đọc nó trước khi thêm vòng đời:
+{/* snippet include/particles.hpp#spawn-particle */}
+```cpp title="include/particles.hpp — Đặt hướng và độ xòe đúng lúc giọt rời vòi"
+inline ParticleAoS spawnParticle(std::uint32_t id, std::uint32_t generation, const FountainConfig& config) {
+    ParticleAoS particle{};
+    particle.id = id;
+    particle.generation = generation;
+    const float angle = randomUnit(config.seed, id, generation, 1) * 6.28318530718F;
+    // Phần lớn giọt nằm gần trục vòi; số ít ở mép tách ra thành màn nước.
+    const float edge = randomUnit(config.seed, id, generation, 2);
+    const float radialSpeed = config.spread * edge * edge;
+    particle.positionX = config.emitterX;
+    particle.positionZ = config.emitterZ;
+    const float jitter = randomUnit(config.seed, id, generation, 3);
+    particle.velocityY = config.launchSpeed * ((0.98F + 0.10F * jitter) - 0.16F * edge);
+    // Một vòi nghiêng khoảng 18 độ. Sau khi rời vòi chỉ còn trọng lực.
+    particle.velocityX = 0.32F * particle.velocityY + std::cos(angle) * radialSpeed;
+    particle.velocityZ = std::sin(angle) * radialSpeed;
+    particle.lifetime = config.lifetime * (0.75F + 0.5F * randomUnit(config.seed, id, generation, 4));
+    particle.hue = randomUnit(config.seed, id, generation, 5);
+    return particle;
+}
+```
 
-```cpp title="include/particles.hpp — tiến vị trí, vận tốc và tuổi"
+Có hai phần trong vận tốc ngang. Phần cố định hướng về +X khiến vòi nghiêng khoảng 18° so với phương đứng; phần còn lại làm tia xòe. Khi `spread = 0`, ngay ở miệng vòi ta có `velocityX = 0.32 * velocityY` và `velocityZ = 0`. Khi mở độ xòe, nhiều giọt vẫn đi sát trục, còn những giọt ở rìa thường vươn lên chậm hơn một chút. Đó là hình của tia lúc phóng; **chẳng có công thức nào ở đây đặt giọt lên đường cong sau khi nó rời vòi**.
+
+Hàm sinh này đã có trong bộ khung. Ta đọc nó để biết hạt bắt đầu thế nào; **phần cần viết tiếp** là dùng nó đúng lúc phát hạt và lúc một hạt hết tuổi. Với cùng seed, ID và thế hệ, kết quả phải lặp lại để ta còn đối chiếu AoS với SoA sau này.
+
+### Tiến một hạt và xử lý đúng thời điểm hết tuổi
+
+{/* snippet include/particles.hpp#integrate-particle */}
+```cpp title="include/particles.hpp — Trọng lực chỉ đổi vận tốc theo chiều đứng"
 inline void integrateParticle(ParticleAoS& particle, float dt, float gravity) {
     particle.velocityY += gravity * dt;
     particle.positionX += particle.velocityX * dt;
@@ -35,15 +61,10 @@ inline void integrateParticle(ParticleAoS& particle, float dt, float gravity) {
 }
 ```
 
-Chỉ velocityY thay đổi do gravity; vận tốc X/Z giữ nguyên khi không có lực ngang. Age dùng cùng dt với chuyển động. Renderer tự đổi tọa độ thế giới sang màn hình, nên không đổi dấu gravity chỉ vì tọa độ pixel tăng xuống dưới.
+Thử tính bằng tay: cho $v_y=2$ m/s, $g=-8$ m/s², $dt=1/32$ s. Vận tốc mới là 1,75 m/s, độ cao tăng 0,0546875 m. Nếu kết quả của bạn là 0,0625 m, bạn vừa dùng vận tốc cũ.
 
-Đây là bước thời gian **mô phỏng**, không phải số mili giây dùng để tính. Một bước nặng có thể kéo dài nhiều frame thật nhưng chỉ làm thời gian mô phỏng tăng đúng dt khi hoàn tất. Bản này không hứa chạy kịp thời gian thực và không có vòng bù lag vô hạn.
-
-### Bước 2 — Tái sử dụng slot khi hết lifetime
-
-Ta không erase khỏi vector. Slot cũ giữ ID, tăng generation rồi nhận vận tốc, lifetime và hue của lần sinh mới. Thêm advanceParticle ngay sau integrateParticle:
-
-```cpp title="include/particles.hpp — sinh lại trong cùng slot"
+{/* snippet include/particles.hpp#advance-particle */}
+```cpp title="include/particles.hpp — Dùng lại cùng ID và tiêu đúng phần thời gian còn lại"
 inline bool advanceParticle(ParticleAoS& particle, const FountainConfig& config, float dt, bool newlyEmitted = false) {
     if (newlyEmitted) {
         particle = spawnParticle(particle.id, 0, config);
@@ -63,24 +84,12 @@ inline bool advanceParticle(ParticleAoS& particle, const FountainConfig& config,
 }
 ```
 
-`newlyEmitted` dành cho slot lần đầu được emitter kích hoạt; nó sinh ở generation 0. Với hạt đang sống, `remaining` là khoảng thời gian còn lại trước khi chết.
+`remaining` là thời gian thế hệ cũ còn sống. Khi `dt` vừa chạm hoặc vượt mốc này, hãy giữ ID, tăng `generation`, sinh hạt mới rồi chỉ tiến nó bằng `dt - remaining`. Tham số của bài được chặn để một bước không phải xử lý hai lần hết tuổi trong cùng một ô.
 
-Ví dụ hạt chỉ còn 0,002 giây mà dt là 0,008 giây: hạt mới phải tiến khoảng 0,006 giây sau lần sinh lại, không tiến thêm trọn 0,008 giây. Vì thế nhánh cuối dùng `dt - remaining`. Với dt tối đa 1/30 và lifetime thực tế tối thiểu 0,375 giây, một bước không thể chứa hai lần hết tuổi thọ. Giới hạn trong validateConfig là một phần của giả định này.
+### Đếm cả phần lẻ khi mở vòi
 
-spawnParticle không lấy ngẫu nhiên từ một bộ đếm dùng chung. Nó nhận seed, ID, generation và channel; duyệt các mảng theo layout khác về sau vẫn sinh cùng state. Generation tràn bị báo lỗi, không âm thầm quay về lần sinh đầu.
-
-### Bước 3 — Phát hạt mà không đánh mất phần lẻ
-
-Giả sử emitter phát 128 hạt/giây. Một bước 1/120 giây tạo trung bình khoảng 1,067 hạt. Nếu mỗi bước chỉ lấy phần nguyên rồi bỏ phần lẻ, tốc độ phát sẽ sai.
-
-Thêm kiểu EmissionPlan và hàm planEmission:
-
-```cpp title="include/particles.hpp — giữ phần lẻ của emission"
-struct EmissionPlan {
-    std::size_t active{};
-    double remainder{};
-};
-
+{/* snippet include/particles.hpp#plan-emission */}
+```cpp title="include/particles.hpp — Giữ lại phần chưa đủ để sinh một hạt"
 inline EmissionPlan planEmission(std::size_t active, std::size_t capacity, double remainder, const FountainConfig& config, float dt) {
     validateConfig(config, dt);
     if (active > capacity || !std::isfinite(remainder) || remainder < 0 || remainder >= 1) {
@@ -95,188 +104,57 @@ inline EmissionPlan planEmission(std::size_t active, std::size_t capacity, doubl
 }
 ```
 
-`remainder` giữ phần hạt chưa đủ để sinh. Mỗi bước cộng emissionRate × dt, lấy phần nguyên làm số slot mới, rồi mang phần lẻ sang bước tiếp theo. Khi pool đầy, phần lẻ được đưa về 0; từ đó các slot đã sống tự respawn, không tăng vector nữa.
+Nếu cho vòi phát 30 hạt/s nhưng đi 120 bước/s, mỗi bước chỉ đủ ngân sách cho 0,25 hạt. Sau bốn bước mới có một hạt; lấy phần nguyên rồi vứt phần dư ở mỗi bước sẽ khiến vòi im luôn. `planEmission` trả lại số ô sống mới và số dư để đem sang bước kế. Khi mảng đã đầy, để nguyên số ô và tái sử dụng chúng khi hết tuổi, không tích một hàng đợi sinh vô hạn.
 
-Quy ước của project: slot mới được sinh ở **đầu bước**, rồi tiến trọn dt của bước ấy. Đây là xấp xỉ phát theo fixed step, không phải mô phỏng chính xác thời điểm từng giọt rời vòi. Ở preset cold, các slot sống luôn là đoạn [0, active), nhờ vậy không cần xóa phần tử hay danh sách free phức tạp.
+<CourseWorkFile project="32" step={2} path="include/particles.hpp" />
 
-Thử tính tay trước: active = 1, capacity = 20, remainder = 0,5, emissionRate = 64 và dt = 1/32. Số hạt mới phải là 2, active thành 3 và remainder vẫn 0,5.
+### Để chương trình nhận phím giữa một bước dài
 
-### Bước 4 — Cập nhật một đoạn AoS
+Trong `work/include/simulation.hpp`, `beginStep` ghi nhớ kế hoạch phát hạt. `tickStep` chép và cập nhật từng nhóm tối đa 4.096 ô vào bộ đệm đích. Sau khoảng 6 ms nó có thể nhường lại cho SDL; chỉ khi đã đi hết mảng mới đổi hai bộ đệm và cộng `dt` vào đồng hồ. Như vậy màn hình không ghép nửa trước của tia nước ở thời điểm mới với nửa sau ở thời điểm cũ.
 
-Trước updateAoSRange, khai báo hai workload:
+<CourseWorkFile project="32" step={2} path="include/simulation.hpp" />
 
-```cpp title="include/particles.hpp — hai công việc dùng cho phép đo"
-enum class MemoryWorkload { gravityOnly,
-                            fullLifecycle };
+Nối phím tiến một bước và hai phím chỉnh độ xòe vào vòng sự kiện. Bảng hướng dẫn phải bắt đầu chỉ ra các phím điều khiển vật lý; trước bài này chúng chưa có tác dụng.
+
+<CourseWorkFile project="32" step={2} path="include/application.hpp" />
+
+<CourseWorkFile project="32" step={2} path="include/render_panel.hpp" />
+
+Sửa lời nhắc dưới cảnh trong `work/include/showcase.hpp` để người dùng biết cách mở vòi, tiến một bước và chỉnh độ xòe.
+
+<CourseWorkFile project="32" step={2} path="include/showcase.hpp" />
+
+Trong `work/src/main.cpp`, cho phép lệnh kiểm một bước vật lý đi qua phần kiểm tham số. Lệnh này phục vụ việc kiểm tự động; khi tự học vẫn nên nhìn vài giọt đầu bằng mắt.
+
+<CourseWorkFile project="32" step={2} path="src/main.cpp" />
+
+## Ghép các phần lại
+
+```bash title="Terminal — biên dịch chương trình trong work/"
+cmake --build build-work --config Release --target project_32_work --parallel 1
+.\build-work\Release\project_32_work.exe
 ```
 
-Đài phun luôn dùng fullLifecycle. GravityOnly chỉ là một phép đo cố ý chạm ít field để học về truy cập bộ nhớ; nó không phải chế độ vật lý thay thế của đài phun.
+Nhấn **1** để dành sẵn 256 ô trống, rồi **N** vài lần: số hạt sống tăng dần chứ không nhảy thẳng lên 256. Đợi tia nước rõ hơn bằng cách cho nó chạy, hoặc nhấn **2** để khởi tạo ngay 10.000 hạt đang ở nhiều độ tuổi khác nhau.
 
-```cpp title="include/particles.hpp — kernel cho đoạn [begin, end)"
-inline std::size_t updateAoSRange(std::span<ParticleAoS> particles, std::size_t begin, std::size_t end, const FountainConfig& config, float dt, MemoryWorkload workload, std::size_t oldActive) {
-    std::size_t respawned = 0;
-    if (workload == MemoryWorkload::gravityOnly) {
-        for (std::size_t index = begin; index < end; ++index) {
-            particles[index].velocityY += config.gravity * dt;
-        }
-    } else {
-        for (std::size_t index = begin; index < end; ++index) {
-            if (advanceParticle(particles[index], config, dt, index >= oldActive)) {
-                ++respawned;
-            }
-        }
-    }
-    return respawned;
-}
-```
+Thử giữ nguyên kích thước mảng và seed. Dùng phím dấu phẩy (`,`) đưa `spread` về 0, rồi nhấn **R**: nhìn ngang vẫn thấy giọt bay về phía trước rồi rơi; từ trên, vệt giọt nằm dọc theo X. Dùng phím dấu chấm (`.`) tăng độ xòe và nhấn **R** lần nữa: những lần sinh có cùng ID và thế hệ nay có thể lệch sang hai bên mà vẫn giữ cùng độ cao ở cùng độ tuổi. Mỗi lần nhấn chỉnh 0,5 m/s. Trong Canvas, thanh chỉnh độ xòe cho bạn làm cùng thí nghiệm. Nếu đổi thông số khi đang chạy mà không reset, **chỉ các lần sinh sau** nhận độ xòe mới.
 
-`oldActive` đánh dấu ranh giới trước bước: index từ oldActive trở đi là các slot vừa được phát. Hàm trả số lần **tái sinh do hết lifetime**, không trộn với số slot được phát lần đầu. Vì vậy births và respawns là hai bộ đếm khác nhau.
+`A/D` dời miệng vòi; `W/S` đổi tốc độ phóng; `G/H` đổi trọng lực; `[` và `]` đổi tuổi thọ khi sinh. Dời vòi không kéo những giọt đang bay đi theo. Trọng lực thì ngược lại: ảnh hưởng của nó bắt đầu ngay từ bước kế.
 
-Không cấp phát, render hay log bên trong kernel C++ này. Vector đích phải được chuẩn bị trước. Đến bài 03, ta mới đặt đồng hồ quanh lời gọi updateAoSRange để có phạm vi đo rõ ràng.
+## Thử làm sai để hiểu đúng
 
-### Bước 5 — Đưa kernel vào Simulation, không treo vòng SDL
-
-Trong Simulation đã có count, active, các buffer, con trỏ cursor và PendingWork từ starter. Thêm beginStep để chuẩn bị đích cho một fixed step:
-
-```cpp title="include/simulation.hpp — chuẩn bị bước nhưng chưa công bố state"
-void beginStep() {
-    validateConfig(config);
-    if (layout == Layout::soa) {
-        notice = "SoA update arrives in checkpoint 05; use AoS to simulate";
-        paused = true;
-        singleStep = false;
-        return;
-    }
-    const EmissionPlan plan = planEmission(active, count, emissionRemainder, config, fixedDt);
-    targetActive = plan.active;
-    targetRemainder = plan.remainder;
-    if (layout == Layout::aos)
-        nextAoS.resize(count);
-    cursor = updated = respawned = 0;
-    born = targetActive - active;
-    copyMs = updateMs = 0;
-    stepStarted = Clock::now();
-    pending = PendingWork::physics;
-}
-```
-
-Ta chưa đổi active hay thời gian ngay. Kế hoạch emission và state đích được giữ riêng; viewport tiếp tục đọc snapshot hoàn tất gần nhất. `nextAoS.resize(count)` nằm ngoài kernel và capacity có thể được dùng lại ở các bước sau.
-
-Phần còn lại của bước nằm trong tickStep:
-
-```cpp title="include/simulation.hpp — tính theo batch rồi commit cả bước"
-bool tickStep(double budgetMs = 6) {
-    if (pending != PendingWork::physics || (paused && !singleStep))
-        return false;
-    const auto deadline = Clock::now() + std::chrono::duration<double, std::milli>(budgetMs);
-    do {
-        const std::size_t end = std::min(count, cursor + 4096);
-        auto started = Clock::now();
-        if (layout == Layout::aos) {
-            std::copy(aos.begin() + cursor, aos.begin() + end, nextAoS.begin() + cursor);
-        }
-        copyMs += milliseconds(started);
-        const std::size_t updateEnd = std::min(end, targetActive);
-        if (cursor < updateEnd) {
-            started = Clock::now();
-            if (layout == Layout::aos) {
-                respawned += updateAoSRange(nextAoS, cursor, updateEnd, config, fixedDt, MemoryWorkload::fullLifecycle, active);
-            }
-            updateMs += milliseconds(started);
-            updated += updateEnd - cursor;
-        }
-        cursor = end;
-    } while (cursor < count && Clock::now() < deadline);
-    if (cursor < count)
-        return false;
-    if (layout == Layout::aos)
-        aos.swap(nextAoS);
-    active = targetActive;
-    committedUpdated = updated;
-    emissionRemainder = targetRemainder;
-    time += double(fixedDt);
-    ++steps;
-    wholeStepMs = milliseconds(stepStarted);
-    singleStep = false;
-    pending = PendingWork::none;
-    notice = "Complete step committed; updated=" + std::to_string(updated);
-    return true;
-}
-```
-
-Đọc hàm này theo ba đoạn:
-
-1. Mỗi batch sao chép tối đa 4.096 slot sang buffer đích, rồi chỉ cập nhật đoạn thực sự sống. Copy và update có đồng hồ riêng.
-2. Nếu chưa đi hết count, trả về vòng SDL sau ngân sách khoảng 6 ms. Con số 6 ms là ngân sách làm việc mỗi lần gọi, **không phải dt**.
-3. Chỉ khi đủ mọi slot mới swap buffer, gán active, tăng time và steps. `committedUpdated` lấy từ số target thật đã chạy qua kernel; đó không phải count được chép vào để làm đẹp báo cáo.
-
-Khi hủy, source không bị sửa nửa chừng. Đổi tham số cũng hủy phần việc dở trước khi tính bước khác. Phải có quy tắc này vì một triệu hạt không nhất thiết tính xong trong một frame.
-
-### Bước 6 — Gọi mô phỏng từ vòng SDL
-
-Thêm hàm sau vào namespace project32 trong include/application.hpp, trước runApplication. Hàm này chỉ quyết định khi nào bắt đầu hoặc tiếp tục một bước; việc cập nhật từng hạt vẫn nằm trong Simulation:
-
-```cpp title="include/application.hpp — chỗ cập nhật trong vòng SDL"
-inline void advanceSimulation(lab::Simulation& simulation, bool measuring, bool workflow) {
-    if (workflow && simulation.steps == 0 && simulation.pending == lab::PendingWork::none) {
-        simulation.singleStep = true;
-        simulation.beginStep();
-    }
-
-    if (measuring || (simulation.paused && !simulation.singleStep)) {
-        return;
-    }
-
-    if (simulation.pending == lab::PendingWork::none) {
-        simulation.beginStep();
-    }
-    simulation.tickStep();
-}
-```
-
-Trong runApplication, đặt lời gọi dưới đây **sau vòng SDL_PollEvent và trước drawFountain**. Giữ nguyên phần xử lý bàn phím: Space đổi paused, còn N yêu cầu một bước bằng singleStep.
-
-```cpp title="include/application.hpp — một lời gọi mỗi frame"
-advanceSimulation(simulation, measuring, workflow);
-```
-
-Ở checkpoint 02, measuring được khai báo là false ngay trước lời gọi; bài sau mới dùng nó để tạm ngừng đài phun trong lúc benchmark. workflow là chế độ kiểm thử bằng dòng lệnh: chương trình tự yêu cầu một bước rồi thoát sau khi kiểm tra kết quả. Khi mở cửa sổ bình thường, workflow là false.
-
-Hãy theo dõi một lần nhấn N: xử lý bàn phím bật singleStep, advanceSimulation đi qua điều kiện pause, rồi tickStep tính một phần công việc. Nếu chưa xong, frame sau tiếp tục bước ấy. Chỉ khi tickStep hoàn tất mới tắt singleStep. Vì vậy một lần nhấn tương ứng với một bước mô phỏng hoàn chỉnh, không phải một batch hay một frame vẽ.
-
-## Chạy checkpoint và đọc kết quả
-
-Chọn preset 256 slot trống. Trước khi chạy: allocated = 256 nhưng alive = 0. Tiến từng bước rồi đọc births, active, age và generation của slot 0. Khi pool đầy, active giữ nguyên; sau đủ lifetime, generation tăng và age trở về gần 0. Đài phun không có va chạm sàn: state của hạt có thể xuống dưới mặt lưới trước khi hết tuổi thọ. Renderer che phần này; đọc positionY và generation trong bảng chi tiết để theo dõi tiếp vòng đời.
-
-Canvas tối đa 20.000 hạt và batch nhỏ hơn để giữ trang phản hồi; bản C++ dùng tối đa một triệu. Các field và quy tắc vật lý giống nhau, nhưng đừng dùng FPS hoặc heap của JavaScript để kết luận về C++.
-
-```bash title="Terminal — chạy checkpoint 02"
-cmake --build build --config Debug --target project_32_checkpoint_2
-./build/Debug/project_32_checkpoint_2.exe
-```
-
-Trong cửa sổ C++, phím 1 chọn cold 256, Space chạy/dừng, N tiến một bước. A/D đổi emitter X, W/S đổi tốc độ phóng, G/H đổi gravity, [ và ] đổi lifetime cho lần sinh sau. R tạo lại cùng preset/cấu hình; camera vẫn dùng được khi pause.
-
-## Cố tình làm sai
-
-Trước khi đổi gravity thành 0, dự đoán hạt đang rơi sẽ bay lên lại hay giữ vận tốc rơi. Bỏ gia tốc không đưa vận tốc về 0.
-
-1. Tạm bỏ remainder trong kế hoạch emission. Với rate thấp, ghi active qua nhiều bước và so với phép tính tay; phần lẻ bị mất làm tốc độ phát sai. Khôi phục remainder.
-2. Trong nhánh respawn, tạm dùng dt thay cho dt − remaining. Age và position của hạt mới sẽ tiến nhiều hơn khoảng thời gian thật còn lại. Kiểm một fixture gần hết lifetime rồi khôi phục công thức.
-
-Không dùng ảnh đài phun làm bằng chứng duy nhất. Ghi state nhỏ trước/sau và dự đoán kết quả trước khi chạy.
+1. Cho tốc độ phát dưới một hạt mỗi bước và thử đặt số dư về 0 sau mỗi lần gọi `planEmission`. Nếu sau nhiều lần nhấn N mà `alive` vẫn bằng 0, hãy sửa phần tích lũy, không tăng tốc độ vẽ.
+2. Thay `dt - remaining` bằng `dt` đúng lúc sinh lại. Theo dõi một ô sắp hết tuổi: ID đúng nhưng giọt mới già hơn dự kiến. Trả phần thời gian còn lại về đúng chỗ trước khi tiếp tục.
 
 ## Tự kiểm tra kết quả
 
-- Preset cold phát dần từ 0, active không vượt capacity; khi đầy, không thêm slot mới.
-- Gravity sửa velocityY trước positionY; age tiến cùng dt và luôn nhỏ hơn lifetime sau một bước hợp lệ.
-- ID của slot không đổi; generation chỉ tăng khi hết tuổi thọ, không tăng mỗi frame.
-- Một bước chỉ tăng time và steps sau khi tính đủ; Hủy không công bố state dở.
-- Pause dừng thời gian nhưng camera/input vẫn dùng được; N tiến đúng một bước hoàn tất.
-- Updated là số hạt sống thực sự cập nhật, không phải số hạt được lấy mẫu để vẽ.
+- Cùng seed, độ xòe và số bước cho cùng kết quả dù xoay camera ở giữa.
+- Trong chế độ cold, `births` đếm ô lần đầu được dùng; `respawns` đếm lần thay giọt trong ô cũ.
+- Với độ xòe bằng 0, giọt đi về +X, không lệch theo Z. Chỉ tăng độ xòe không được làm thay đổi vận tốc dọc của cùng một lần sinh.
+- Giọt xuống dưới mặt lưới có thể bị che mà chưa hết tuổi. Đây là hệ hạt độc lập, không có va chạm sàn hay tương tác giữa các giọt.
 
 ## Bài tập mở rộng
 
-Chọn emissionRate rất thấp, đủ để nhiều bước liên tiếp không sinh hạt nào. Tự ghi lại active và remainder qua mười bước rồi đối chiếu chương trình. Sau đó viết một fixture có hạt gần hết tuổi thọ và kiểm cả ID, generation, age lẫn vị trí sau respawn.
+Nhìn cùng một ID khác trục ở cùng một độ tuổi sau hai lần reset với cùng seed. Khi tăng gấp đôi độ xòe từ một giá trị khác 0, khoảng lệch theo Z so với miệng vòi sẽ thay đổi khoảng bao nhiêu lần? Còn độ cao? So tọa độ, không lấy bề rộng theo pixel làm đại diện cho khoảng cách trong mô phỏng.
 
-Bài tiếp theo: [Đo một kernel AoS có thể kiểm chứng](/projects/memory-layout-race/03-do-baseline-aos).
+Học tiếp: [Đo vòng lặp đầu tiên bằng AoS](/projects/memory-layout-race/03-do-baseline-aos).

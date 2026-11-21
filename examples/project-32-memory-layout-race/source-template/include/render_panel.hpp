@@ -52,9 +52,12 @@ inline void drawFountainPanel(SDL_Renderer* renderer, const lab::Simulation& sim
     SDL_RenderDebugText(renderer, 18, 700, "STATIC INITIAL STATE: inspect the camera and particles; physics starts in checkpoint 02. R resets.");
 #endif
 #if LAB_CHECKPOINT >= 2
-    SDL_RenderDebugText(renderer, 18, 718, "A/D emitter  W/S launch speed  G/H gravity  [ ] birth lifetime  - + emission rate");
+    SDL_RenderDebugText(renderer, 18, 718, "A/D emitter   W/S speed   , / . spread   G/H gravity   [ ] birth lifetime   - + emission rate");
 #endif
-    SDL_RenderDebugText(renderer, 18, 736, "Drag left orbit / right pan, wheel zoom  |  arrows orbit  Home camera  F grid/reports  Esc cancel/exit");
+    SDL_RenderDebugText(renderer, 18, 736, "Drag orbit / pan   F1/F2/F3 views   Home camera   F close report   Esc cancel/exit");
+#if LAB_CHECKPOINT >= 8
+    SDL_RenderDebugText(renderer, 18, 785, "I inspect / close    Click a drop or Tab for next ID    U find next birth (first 4096 slots)");
+#endif
 #if LAB_CHECKPOINT >= 7
     SDL_RenderDebugText(renderer, 18, 754, "T benchmark workload  B selected N  C scaling both workloads  |  1 warm-up + 5 samples x 3 passes");
 #elif LAB_CHECKPOINT >= 3

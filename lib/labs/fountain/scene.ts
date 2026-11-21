@@ -13,6 +13,7 @@ import {
   type ParticleAoS,
   type ParticlesSoA,
 } from "./state.ts";
+import { fountainCamera } from "./camera.ts";
 
 export interface Camera {
   yaw: number;
@@ -82,7 +83,11 @@ export function createFountain(
   const count = [256, 2000, 20000, 256][preset];
   if (count === undefined) throw new Error("Unknown fountain preset");
   const cold = preset === 0;
-  const config = { ...defaultConfig(), emissionRate: count * 0.5, ...settings };
+  const config: FountainConfig = {
+    ...defaultConfig(),
+    emissionRate: count * 0.5,
+    ...settings,
+  };
   return {
     stage,
     preset,
@@ -107,7 +112,7 @@ export function createFountain(
     singleStep: false,
     jobPaused: false,
     pending: null,
-    camera: { yaw: 0.45, pitch: -0.38, distance: 14, x: 0, y: 1.9, z: 0 },
+    camera: fountainCamera(),
     selected: 0,
     notice: cold
       ? "Phát hạt từ pool trống; slot đã sinh sẽ được tái sử dụng."

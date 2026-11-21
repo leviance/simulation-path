@@ -39,7 +39,7 @@ Khi hoàn thành các phần tương ứng, người học có thể:
 
 ## Bản đồ 78 project
 
-Các số project là mốc để tra cứu, không phải 78 điều kiện phải vượt lần lượt. Chẳng hạn, Project 10 cho sẵn bộ chiếu để bạn tập trung vào pháp tuyến. Project 11 mở phần đó ra: bạn phải đưa được một đốm sáng tới đúng pixel. Project 12 giữ lại hàm vừa viết để xoay và vẽ cả một tam giác. Xa hơn, bạn có thể đi tới viewer OBJ (21), thế giới voxel đi bộ được (58–64), hoặc rẽ sang đo và tối ưu một đàn Boids mà vẫn giữ nguyên hành vi của nó (27–28).
+Các số project là mốc để tra cứu, không phải 78 điều kiện phải vượt lần lượt. Chẳng hạn, Project 10 cho sẵn bộ chiếu để bạn tập trung vào pháp tuyến. Project 11 mở phần đó ra: bạn tự viết phép chiếu và bay giữa các ngôi sao đứng yên trong không gian. Project 12 giữ lại hàm vừa viết để xoay và vẽ cả một tam giác. Xa hơn, bạn có thể đi tới viewer OBJ (21), thế giới voxel đi bộ được (58–64), hoặc rẽ sang đo và tối ưu một đàn Boids mà vẫn giữ nguyên hành vi của nó (27–28).
 
 Trên trang **Lộ trình**, mở **Chọn đường học theo thứ bạn muốn tự xây** để xem các mốc cho từng đích. Không cần học CT hay viết ngôn ngữ script trước khi thử dựng thế giới góc nhìn thứ nhất.
 

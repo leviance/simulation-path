@@ -11,6 +11,8 @@ int main(int argc, char** argv) {
     const char* capturePath = nullptr;
 #if LAB_CHECKPOINT >= 8
     bool startWithRuler = false;
+    bool midFlight = false;
+    bool flightSmoke = false;
 #endif
     for (int i = 1; i < argc; ++i) {
         const std::string_view argument = argv[i];
@@ -21,6 +23,10 @@ int main(int argc, char** argv) {
 #if LAB_CHECKPOINT >= 8
         } else if (argument == "--ruler") {
             startWithRuler = true;
+        } else if (argument == "--in-flight") {
+            midFlight = true;
+        } else if (argument == "--smoke-flight") {
+            flightSmoke = true;
 #endif
         } else {
             std::cerr << "Unknown or incomplete option: " << argument << '\n';
@@ -33,10 +39,14 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-    if (smoke || capturePath) {
+    if (smoke || capturePath
+#if LAB_CHECKPOINT >= 8
+        || flightSmoke
+#endif
+    ) {
         flags |= SDL_WINDOW_HIDDEN;
     }
-    SDL_Window* window = SDL_CreateWindow("Project 11 - Perspective Point", 1100, 800, flags);
+    SDL_Window* window = SDL_CreateWindow("Starfield | Perspective Flight - Project 11", 1100, 800, flags);
     if (!window) {
         std::cerr << SDL_GetError() << '\n';
         SDL_Quit();
@@ -69,6 +79,10 @@ int main(int argc, char** argv) {
     lab::Scene scene;
 #if LAB_CHECKPOINT >= 8
     scene.measureDepth = startWithRuler;
+    scene.debug = startWithRuler;
+    if (midFlight) {
+        lab::setCameraDepth(scene, 2.0);
+    }
 #endif
     bool running = true;
     bool failed = false;
@@ -98,6 +112,20 @@ int main(int argc, char** argv) {
         const std::uint64_t now = SDL_GetTicks();
         const double deltaTime = std::min(0.1, static_cast<double>(now - previousTicks) / 1000.0);
         previousTicks = now;
+#if LAB_CHECKPOINT >= 8
+        // Chạy một chuỗi sự kiện thật qua SDL; mỗi nhịp kiểm dùng đúng 0,1 giây.
+        if (flightSmoke && frames < 7) {
+            SDL_Event input{};
+            input.type = SDL_EVENT_KEY_DOWN;
+            input.key.key = SDLK_W;
+            if (frames == 1 || frames == 4) input.key.key = SDLK_S;
+            if (frames == 2 || frames == 3) input.type = SDL_EVENT_KEY_UP;
+            if (frames == 2) input.key.key = SDLK_S;
+            if (frames == 5) input.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+            if (frames == 6) input.key.key = SDLK_N;
+            if (!SDL_PushEvent(&input)) { failed = true; break; }
+        }
+#endif
         SDL_Event event{};
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) {
@@ -106,6 +134,9 @@ int main(int argc, char** argv) {
             if (event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED || event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_HIDDEN || event.type == SDL_EVENT_WINDOW_MINIMIZED) {
                 scene.paused = true;
                 dirty = true;
+#if LAB_CHECKPOINT >= 6
+                lab::stopFlight(scene);
+#endif
 #if LAB_CHECKPOINT >= 7
                 cancelDrag();
 #endif
@@ -113,11 +144,37 @@ int main(int argc, char** argv) {
             if (event.type == SDL_EVENT_WINDOW_EXPOSED || event.type == SDL_EVENT_WINDOW_SHOWN || event.type == SDL_EVENT_WINDOW_RESTORED) {
                 dirty = true;
             }
+#if LAB_CHECKPOINT >= 6
+            if (event.type == SDL_EVENT_KEY_UP) {
+                if (event.key.key == SDLK_W) scene.forwardHeld = false;
+                if (event.key.key == SDLK_S) scene.backwardHeld = false;
+                dirty = true;
+            }
+#endif
             if (event.type == SDL_EVENT_KEY_DOWN) {
                 dirty = true;
 #if LAB_CHECKPOINT >= 7
                 // Input đổi scene không được để lại một thao tác kéo dùng camera/depth cũ.
                 cancelDrag();
+#endif
+#if LAB_CHECKPOINT >= 6
+                switch (event.key.key) {
+                case SDLK_J: case SDLK_L: case SDLK_EQUALS: case SDLK_MINUS: case SDLK_V:
+                case SDLK_LEFTBRACKET: case SDLK_RIGHTBRACKET: case SDLK_SEMICOLON: case SDLK_APOSTROPHE:
+                case SDLK_F: case SDLK_M:
+                    lab::stopFlight(scene);
+                    break;
+                default: break;
+                }
+                // Không để key-repeat bật lại chuyến bay sau khi cửa sổ mất focus.
+                if (!event.key.repeat && event.key.key == SDLK_W) {
+                    scene.forwardHeld = true;
+                    scene.paused = true;
+                }
+                if (!event.key.repeat && event.key.key == SDLK_S) {
+                    scene.backwardHeld = true;
+                    scene.paused = true;
+                }
 #endif
                 if (event.key.key == SDLK_ESCAPE) {
                     running = false;
@@ -128,31 +185,16 @@ int main(int argc, char** argv) {
                         preset = static_cast<int>(event.key.key - SDLK_F1);
                     }
                     lab::applyPreset(scene, preset);
+                    if (event.key.key != SDLK_R) scene.debug = true;
                 }
 #if LAB_CHECKPOINT >= 2
                 if (event.key.key == SDLK_J) {
                     scene.paused = true;
-                    scene.camera.position.x = std::max(-2.0, scene.camera.position.x - 0.1);
+                    lab::setCameraDepth(scene, scene.camera.position.z - 0.1);
                 }
                 if (event.key.key == SDLK_L) {
                     scene.paused = true;
-                    scene.camera.position.x = std::min(2.0, scene.camera.position.x + 0.1);
-                }
-                if (event.key.key == SDLK_I) {
-                    scene.paused = true;
-                    scene.camera.position.y = std::min(2.0, scene.camera.position.y + 0.1);
-                }
-                if (event.key.key == SDLK_K) {
-                    scene.paused = true;
-                    scene.camera.position.y = std::max(-2.0, scene.camera.position.y - 0.1);
-                }
-                if (event.key.key == SDLK_U) {
-                    scene.paused = true;
-                    scene.camera.position.z = std::max(-2.0, scene.camera.position.z - 0.1);
-                }
-                if (event.key.key == SDLK_O) {
-                    scene.paused = true;
-                    scene.camera.position.z = std::min(2.0, scene.camera.position.z + 0.1);
+                    lab::setCameraDepth(scene, scene.camera.position.z + 0.1);
                 }
 #endif
 #if LAB_CHECKPOINT >= 4
@@ -189,9 +231,11 @@ int main(int argc, char** argv) {
 #endif
 #if LAB_CHECKPOINT >= 6
                 if (event.key.key == SDLK_SPACE && !event.key.repeat) {
-                    scene.paused = !scene.paused;
+                    const bool wasCruising = !scene.paused;
+                    lab::stopFlight(scene);
+                    scene.paused = wasCruising;
                 }
-                if (event.key.key == SDLK_N && !event.key.repeat && scene.paused) {
+                if (event.key.key == SDLK_N && !event.key.repeat && scene.paused && !scene.forwardHeld && !scene.backwardHeld) {
                     lab::advanceScene(scene, 0.1);
                 }
 #endif
@@ -217,12 +261,13 @@ int main(int argc, char** argv) {
                 const auto viewport = lab::viewportFor(scene);
                 const auto projected = lab::projectPerspective(scene.point, scene.camera, scene.lens, lab::viewportFor(scene));
                 const bool insideViewport = event.button.x >= viewport.x && event.button.x <= viewport.x + viewport.width && event.button.y >= viewport.y && event.button.y <= viewport.y + viewport.height;
-                if (insideViewport && projected.status == lab::ProjectionStatus::Visible && projected.screen && std::hypot(event.button.x - projected.screen->x, event.button.y - projected.screen->y) <= 24.0) {
+                const bool probeVisible = scene.debug;
+                if (probeVisible && insideViewport && projected.status == lab::ProjectionStatus::Visible && projected.screen && std::hypot(event.button.x - projected.screen->x, event.button.y - projected.screen->y) <= 24.0) {
                     owner = event.button.which;
                     grabOffset = {event.button.x - projected.screen->x, event.button.y - projected.screen->y};
                     dragDepth = projected.cameraPoint.z;
                     dragging = true;
-                    scene.paused = true;
+                    lab::stopFlight(scene);
                     dirty = true;
                     if (!SDL_CaptureMouse(true)) {
                         cancelDrag();
@@ -249,16 +294,16 @@ int main(int argc, char** argv) {
         // Giữ phím dùng delta time, không phụ thuộc tốc độ key-repeat của hệ điều hành.
         const bool* keys = SDL_GetKeyboardState(nullptr);
         lab::Vec3 direction{};
-        if (keys[SDL_SCANCODE_A]) {
+        if (keys[SDL_SCANCODE_LEFT]) {
             direction.x -= 1.0;
         }
-        if (keys[SDL_SCANCODE_D]) {
+        if (keys[SDL_SCANCODE_RIGHT]) {
             direction.x += 1.0;
         }
-        if (keys[SDL_SCANCODE_W]) {
+        if (keys[SDL_SCANCODE_UP]) {
             direction.y += 1.0;
         }
-        if (keys[SDL_SCANCODE_S]) {
+        if (keys[SDL_SCANCODE_DOWN]) {
             direction.y -= 1.0;
         }
         if (keys[SDL_SCANCODE_Q]) {
@@ -280,8 +325,13 @@ int main(int argc, char** argv) {
         (void)deltaTime;
 #endif
 #if LAB_CHECKPOINT >= 6
-        if (!scene.paused) {
-            lab::advanceScene(scene, deltaTime);
+        const double directionZ = lab::flightDirection(scene);
+        if (directionZ != 0.0) {
+            double frameTime = deltaTime;
+#if LAB_CHECKPOINT >= 8
+            if (flightSmoke) frameTime = 0.1;
+#endif
+            lab::advanceScene(scene, frameTime, directionZ);
             dirty = true;
         }
 #endif
@@ -318,6 +368,18 @@ int main(int argc, char** argv) {
                 running = false;
             }
         }
+#if LAB_CHECKPOINT >= 8
+        if (flightSmoke) {
+            constexpr double expected[] = {0.2, 0.2, 0.4, 0.4, 0.2, 0.2, 0.4, 0.4};
+            if (std::abs(scene.camera.position.z - expected[frames]) > 1e-8) {
+                std::cerr << "Flight input at frame " << frames << ": expected " << expected[frames] << ", got " << scene.camera.position.z << '\n';
+                failed = true;
+                break;
+            }
+            ++frames;
+            if (frames == 8) running = false;
+        }
+#endif
         SDL_Delay(16);
     }
     // Giải phóng capture trước, rồi texture, renderer, window theo thứ tự ngược.
@@ -331,6 +393,9 @@ int main(int argc, char** argv) {
     if (failed) {
         return EXIT_FAILURE;
     }
+#if LAB_CHECKPOINT >= 8
+    if (flightSmoke) std::cout << "SDL flight PASS: W/S, opposite keys, release, lost focus and single step\n";
+#endif
     if (smoke) {
         std::cout << "SDL smoke PASS: " << frames << " frames\n";
     }

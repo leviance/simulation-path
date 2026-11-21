@@ -1,87 +1,51 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Đo một kernel AoS có thể kiểm chứng
+# Đo vòng lặp đầu tiên bằng AoS
 
 ## Vấn đề cần giải quyết
 
-Đài phun đã chạy được. Nếu tăng số hạt rồi nhìn FPS, ta chỉ biết cả ứng dụng nhanh hay chậm; chưa biết thời gian nằm ở cập nhật, sao chép state hay vẽ/upload framebuffer.
+Khi đài phun có nhiều giọt, xoay camera sang chỗ trống có thể làm chương trình vẽ nhanh hơn. Nhưng có giọt nào được miễn trọng lực không? Không. Vì vậy, đọc FPS trước và sau khi xoay không trả lời được câu hỏi của bài: **CPU mất bao lâu để cập nhật cùng một nhóm hạt?**
 
-Bài này thêm phép đo **AoS trước**, chưa so tốc độ với SoA. Ta sẽ đo hai công việc trên cùng dữ liệu: chỉ sửa velocityY và chạy đầy đủ vòng đời. Kết quả đi kèm số target thực sự cập nhật, checksum, median và khoảng min–max. Một con số thời gian đứng riêng không đủ để đưa ra kết luận.
+Ta chưa cần viết SoA. Trước hết, hãy làm một chiếc đồng hồ đáng tin cho cách lưu hiện tại: `std::vector<ParticleAoS>`. Nếu sau này có một con số nhỏ hơn, ta còn biết chính xác mình đang so với điều gì.
 
-## Đi qua thuật toán bằng một ví dụ nhỏ
+## Hiểu ý tưởng trước khi viết code
 
-### Chốt chính xác công việc đang đo
+Hãy cho cùng một người hai việc khác nhau. Lần đầu chỉ cộng trọng lực vào `velocityY` của từng hạt. Lần sau vẫn qua bấy nhiêu hạt, nhưng phải tiến vị trí, tiến tuổi và sinh lại hạt hết tuổi. Chúng lần lượt là `gravity-only` và `full lifecycle`. Phép thứ nhất cố ý làm ít việc; **đài phun đang hiển thị vẫn luôn chạy đủ vòng đời**.
 
-GravityOnly tính `velocityY += gravity * dt` cho mọi hạt. Position, age và generation không đổi. Nó giúp quan sát một kiểu truy cập ít field, không thay thế solver trong đài phun.
-
-FullLifecycle gọi advanceParticle của bài 02: gravity, vị trí, age và cả respawn khi cần. Các hạt trong input warm có tuổi khác nhau, nên có thể gặp nhánh hết lifetime ngay trong phép đo. Cả hai workload dùng cùng cấu hình, seed, dt và số lượt đi qua dữ liệu.
-
-Ta chọn một warm-up không ghi vào bảng, rồi năm mẫu. **Mỗi mẫu gồm ba pass đủ N**, bắt đầu lại từ cùng input. Với N = 10.000, updated của một mẫu phải là 30.000 lượt cập nhật, không phải 30.000 hạt khác nhau. Thời gian median trong bảng cũng là tổng ba pass.
+Quy ước một mẫu đo gồm **ba pass** qua đủ $N$ hạt. Chọn $N=10.000$ thì cuối mẫu phải đếm được 30.000 lượt cập nhật, không phải 30.000 hạt khác nhau. Nếu đồng hồ trả về 1,8 ms cho mẫu ấy, chi phí trung bình mỗi lượt qua cả mảng là 0,6 ms. Đừng lấy 1,8 ms làm thời gian cho một khung SDL.
 
 <InteractiveLab demo="memory-layout-race" mode="aos-baseline" />
 
-## Bắt tay xây dựng
+## Viết code từng bước
 
-### Bước 1 — Khung phép đo nằm ở đâu?
+### Chọn chính xác phần việc đem cân
 
-Tạo include/benchmark.hpp theo source checkpoint 03. File này khai báo TimingStats, BenchmarkRow và BenchmarkJob. Để không bỏ sót phần nối các phương thức, hãy mở toàn bộ file ở cuối bài khi tự viết.
-
-BenchmarkJob là một tác vụ có bốn pha, không phải một while nặng chạy bên trong event handler:
-
-- Prepare sinh input warm vào initial; phần tạo dữ liệu không được tính vào kernel.
-- Reset chép initial sang workAoS cho một trial mới.
-- Kernel gọi updateAoSRange theo từng đoạn, đi đủ ba pass.
-- Verify đọc kết quả, kiểm state và tính checksum; sau đó chạy mẫu tiếp hoặc công bố dòng hoàn tất.
-
-`target` là vị trí trong pass, `step` là số pass đã xong và `sample` bằng −1 ở warm-up rồi 0…4 ở năm mẫu đo. `initial` không bị sửa bởi kernel; `workAoS` mới là dữ liệu nhận cập nhật. Đây là các state cần hiểu trước khi đọc các phương thức dưới.
-
-```cpp title="include/benchmark.hpp — dòng kết quả có phạm vi đo rõ"
-struct BenchmarkRow {
-    std::size_t count{}, updated{};
-    MemoryWorkload workload{MemoryWorkload::fullLifecycle};
-    TimingStats aos{}, soa{};
-    double copyMs{}, conversionMs{}, checksumAoS{}, checksumSoA{};
-    float maximumDifference{}, maximumErrorRatio{};
-    bool paired{};
-};
-```
-
-`copyMs` đo riêng một lần reset ở mẫu đầu; nó không nằm trong aos.median và cũng không phải tổng thời gian copy của cả benchmark. Các field SoA đã có chỗ trong kiểu kết quả để dùng từ bài 07. Ở checkpoint 03, paired là false và giao diện ghi **SoA chưa đo**, không in 0 ms rồi coi đó là bên thắng.
-
-### Bước 2 — Chuẩn bị lại input ở ngoài timer kernel
-
-Trong BenchmarkJob, resetUnit chép tối đa 4.096 record mỗi lần:
-
-```cpp title="include/benchmark.hpp — reset trial rồi mới vào pha kernel"
-void resetUnit() {
-    const std::size_t end = std::min(row.count, target + 4096);
-    const auto started = Clock::now();
-    if (method == 0) {
-        std::copy(initial.begin() + target, initial.begin() + end, workAoS.begin() + target);
+{/* snippet include/particles.hpp#update-aos-range */}
+```cpp title="include/particles.hpp — Hai cách đi qua cùng một đoạn mảng AoS"
+inline std::size_t updateAoSRange(std::span<ParticleAoS> particles, std::size_t begin, std::size_t end, const FountainConfig& config, float dt, MemoryWorkload workload, std::size_t oldActive) {
+    std::size_t respawned = 0;
+    if (workload == MemoryWorkload::gravityOnly) {
+        for (std::size_t index = begin; index < end; ++index) {
+            particles[index].velocityY += config.gravity * dt;
+        }
+    } else {
+        for (std::size_t index = begin; index < end; ++index) {
+            if (advanceParticle(particles[index], config, dt, index >= oldActive)) {
+                ++respawned;
+            }
+        }
     }
-    if (sample == 0) {
-        if (method == 0)
-            row.copyMs += milliseconds(started);
-        else
-            row.conversionMs += milliseconds(started);
-    }
-    target = end;
-    if (target == row.count) {
-        target = 0;
-        phase = BenchmarkPhase::kernel;
-    }
+    return respawned;
 }
 ```
 
-initial và workAoS đã được resize ở prepareCase. Mỗi trial bắt đầu từ cùng state; nếu cứ cập nhật tiếp trên output của trial trước, tuổi và số lần respawn sẽ khác, làm thay đổi công việc cần so.
+Hai nhánh đều làm trên `[begin, end)`. Chỉ nhánh vòng đời cần biết nhóm ô nào vừa được phát và cần đếm số hạt sinh lại. Chọn việc bằng biến `workload`, không giảm số phần tử hoặc đổi `dt` cho nhánh được đem so.
 
-Đồng hồ copy chỉ bao quanh thao tác copy. Khi đủ N record mới chuyển sang pha kernel. Thời gian chờ quay lại vòng SDL giữa các batch không được cộng vào thời gian kernel.
+### Đặt đồng hồ sát hai đầu vòng cập nhật
 
-### Bước 3 — Đặt đồng hồ quanh đúng vòng cập nhật
-
-Đây là kernelUnit của checkpoint 03, đặt bên trong BenchmarkJob:
-
-```cpp title="include/benchmark.hpp — đo từng đoạn và đếm target đã làm"
+{/* snippet include/benchmark.hpp#benchmark-kernel-unit */}
+```cpp title="include/benchmark.hpp — Đếm lượt cập nhật thay vì đếm số lần gọi hàm"
 void kernelUnit() {
     const std::size_t end = std::min(row.count, target + 4096);
     const auto started = Clock::now();
@@ -119,53 +83,14 @@ void kernelUnit() {
 }
 ```
 
-Đọc thứ tự thật kỹ: lấy mốc thời gian, gọi updateAoSRange, cộng elapsed, rồi mới cập nhật bộ đếm tiến độ. `trialUpdated` cộng số target của từng đoạn đã chạy. Sau ba pass, nếu nó không bằng 3 × N thì phép đo bị báo lỗi; row.updated lấy từ chính bộ đếm đó.
+Trong `BenchmarkJob`, một lượt xử lý tối đa 4.096 phần tử. `trialUpdated += end - target` cộng số phần tử **vừa làm xong**. Sau ba lượt qua đủ mảng mới được ghi thời gian vào mẫu. Khung SDL có thể nhận input giữa các đoạn; thời gian người dùng xoay camera không bị tính vào tổng `kernelMs`.
 
-Không gọi renderer, không in log, không đổi layout và không tạo vector trong đoạn được đo. Ngân sách khoảng 6 ms của tick chỉ quyết định lúc trả quyền cho UI; nó không bị cộng như thời gian ngủ vào kernelMs. Chi phí gọi đồng hồ và chia batch vẫn tồn tại, nhất là ở N nhỏ, nên không xem kết quả là một phép đo phần cứng tuyệt đối.
+Tạo dữ liệu cố định một lần cho ca đo. Trước mỗi mẫu, chép bản đầu vào sang mảng làm việc **trước khi** bấm đồng hồ. Sau khi tắt đồng hồ, duyệt kết quả để kiểm ID, kiểm số hữu hạn và tính `checksum`. Nhờ vậy phép đo có một đầu ra thật. Checksum không thay việc kiểm từng trường: hai sai khác ngược dấu có thể triệt nhau trong một tổng.
 
-### Bước 4 — Đọc kết quả, rồi mới nhận một mẫu
+### Mô tả năm lần đo thay vì chọn lần đẹp nhất
 
-Verify không được bỏ qua chỉ vì đồng hồ đã có số:
-
-```cpp title="include/benchmark.hpp — kiểm output và hoàn tất năm mẫu"
-void verifyUnit() {
-    const std::size_t end = std::min(row.count, target + 4096);
-    for (std::size_t index = target; index < end; ++index) {
-        const auto& first = workAoS[index];
-        if (first.id != index || !finiteParticle(first))
-            throw std::runtime_error("AoS state validation failed");
-        row.checksumAoS += particleChecksum(first);
-    }
-    target = end;
-    if (target < row.count)
-        return;
-    if (paired && row.maximumErrorRatio > 1)
-        throw std::runtime_error("AoS/SoA state mismatch");
-    target = 0;
-    trial = 0;
-    ++sample;
-    if (sample < 5) {
-        chooseMethod();
-        return;
-    }
-    row.aos = summarizeTimes(aosTimes);
-    rows.push_back(row);
-    if (++caseIndex < sizes.size() * workloads.size())
-        prepareCase();
-    else {
-        active = false;
-        notice = "Complete: 1 warm-up + 5 samples, 3 full-N passes each; checksum verified";
-    }
-}
-```
-
-Mỗi ID phải đúng slot; mọi field động phải hữu hạn và age nằm trong khoảng hợp lệ. particleChecksum đọc position, velocity, age, lifetime và hue bằng một tổng có trọng số; kết quả được lưu và in ra ngoài. Nhờ vậy output của kernel có mục đích sử dụng thực sự.
-
-Checksum **không phải bằng chứng duy nhất** về correctness: hai state khác nhau vẫn có thể cho cùng tổng. Ta có fixture độc lập cho mô hình và, từ bài 07, so trực tiếp mọi field giữa AoS/SoA. Ở bài này, các field SoA và nhánh paired chưa hoạt động.
-
-Năm mẫu đi vào summarizeTimes:
-
-```cpp title="include/benchmark.hpp — median và min–max của năm mẫu"
+{/* snippet include/benchmark.hpp#summarize-times */}
+```cpp title="include/benchmark.hpp — Báo trung vị và cả hai đầu của khoảng đo"
 inline TimingStats summarizeTimes(std::vector<double> samples) {
     if (samples.size() != 5 || std::any_of(samples.begin(), samples.end(), [](double value) {
             return !std::isfinite(value) || value < 0;
@@ -176,53 +101,40 @@ inline TimingStats summarizeTimes(std::vector<double> samples) {
 }
 ```
 
-Với năm thời gian 1, 2, 4, 6, 9 ms, median là 4 ms và khoảng quan sát là [1, 9] ms. Đây không phải confidence interval; min–max giúp thấy độ dao động của đúng năm lần đo ấy. Hàm từ chối thiếu mẫu, số âm hoặc NaN/Inf thay vì âm thầm báo kết quả đẹp.
+Lượt chạy đầu là `warm-up`: nó đi qua đúng lượng dữ liệu nhưng không nằm trong năm mẫu đo. Nếu năm mẫu là 5, 3, 8, 4 và 4 ms, khi sắp xếp ta được 3, 4, **4**, 5, 8. Ghi trung vị 4 ms **cùng khoảng 3–8 ms**. Máy không hứa lặp lại y hệt, kể cả khi dữ liệu hạt giống hệt.
 
-## Chạy checkpoint và đọc kết quả
+<CourseWorkFile project="32" step={3} path="include/benchmark.hpp" />
 
-Trong ứng dụng SDL, phím T chọn workload, B gọi benchmark.start với cấu hình hiện tại và N đã chọn. Vòng SDL gọi benchmark.tick mỗi frame. Khi benchmark đang active, vật lý đài phun bị đóng băng để không tranh cùng một luồng; input/camera vẫn được xử lý.
+Nối phím `T` để chọn việc cần đo và `B` để đo ở quy mô đang dùng. Bảng báo cáo phải nói **SoA chưa đo**, đừng hiện một số 0 trông như đã chạy. Cửa sổ và tùy chọn `--benchmark` dùng cùng tác vụ, nên giải thích của ta áp dụng cho cả hai.
 
-Bản dòng lệnh dùng cùng job:
+<CourseWorkFile project="32" step={3} path="include/application.hpp" />
 
-```cpp title="src/main.cpp — cùng tác vụ cho phép đo hữu hạn"
-lab::BenchmarkJob job{};
-job.start({}, {10'000, 100'000, 1'000'000}, {lab::MemoryWorkload::gravityOnly, lab::MemoryWorkload::fullLifecycle});
-while (job.active)
-    job.tick();
+<CourseWorkFile project="32" step={3} path="include/render_panel.hpp" />
+
+<CourseWorkFile project="32" step={3} path="src/main.cpp" />
+
+## Ghép các phần lại
+
+```bash title="Terminal — biên dịch chương trình trong work/"
+cmake --build build-work --config Release --target project_32_work --parallel 1
+.\build-work\Release\project_32_work.exe
 ```
 
-CLI không phục vụ camera nên có thể gọi tick liên tiếp, nhưng job vẫn có deadline 30 giây và từng tick có ngân sách. Trong UI, Space pause/tiếp tục phép đo; X hủy. Deadline tính cả thời gian pause. Chỉ các dòng đã kiểm xong mới được giữ lại; bị hủy không được ghi như một thí nghiệm hoàn tất.
+Với 10.000 hạt, dừng đài phun rồi nhấn **B**. Ghi loại việc, số lượt, checksum và trung vị. Chuyển `T`, lặp lại trên cùng quy mô. Muốn chạy các quy mô đã định từ terminal, dùng `.\build-work\Release\project_32_work.exe --benchmark`. Chữ `Release` quan trọng: bạn đang đo mã đã tối ưu của chính chương trình vừa viết.
 
-Canvas minh họa quy trình trong JavaScript worker và cho hủy/tạm dừng. Nó không có layout object 44 byte như C++ và không đo cùng compiler. Dùng nó để đọc số pass, checksum và phạm vi timer; dùng **Release C++** cho kết luận hiệu năng.
+## Thử làm sai để hiểu đúng
 
-```bash title="Terminal — baseline AoS trong Release"
-cmake --build build --config Release --target project_32_checkpoint_3
-./build/Release/project_32_checkpoint_3.exe --benchmark
-```
-
-CLI đo cả hai workload ở 10.000, 100.000 và 1.000.000 hạt. Chạy không có --benchmark để mở đài phun; phím B chỉ đo N đang chọn. Checkpoint 03 chỉ đo AoS, dù bảng kết quả đã dành field cho SoA.
-
-## Cố tình làm sai
-
-Bạn đoán gravity-only hay full lifecycle tốn thời gian hơn ở cùng N? Ghi dự đoán và giữ cả kết quả trái dự đoán.
-
-1. Tạm bỏ reset giữa các trial. Ghi age/generation trước mỗi trial để thấy điểm xuất phát đã khác; đây không còn cùng công việc. Khôi phục reset trước khi so thời gian.
-2. Tạm đưa lệnh in console vào giữa mốc bắt đầu/kết thúc kernel. Thời gian giờ chứa cả I/O, không còn chỉ là update. Chuyển logging ra ngoài timer rồi đo lại.
-
-Ở N nhỏ, độ phân giải đồng hồ và nhiễu máy có thể làm các lần đo khó ổn định. Không sửa số liệu để ép một thứ tự mong muốn.
+1. Tạm cho một pass dừng khi mới đến nửa mảng nhưng vẫn coi như đã xong. Đoạn kiểm `trialUpdated` phải bác mẫu ấy; chạy nhanh vì làm thiếu không được tính là tối ưu.
+2. Thử dời lệnh chép mảng vào trong khoảng bấm đồng hồ. Kết quả bây giờ là *chép + cập nhật*. Trả việc chép về ngoài timer, hoặc đặt cho phép đo mới một tên khác; không dùng hai số ấy làm một cặp so sánh.
 
 ## Tự kiểm tra kết quả
 
-- Có một warm-up và đủ năm mẫu, mỗi mẫu đúng ba pass đủ N; updated = 3 × N.
-- Gravity-only không đổi position/age; full lifecycle có cập nhật và respawn thật.
-- Copy, tạo input, checksum, render và thời gian chờ UI nằm ngoài kernel timer.
-- Mỗi dòng có workload, N, median, min–max và checksum đã được sử dụng.
-- SoA được ghi là chưa đo; không tính speedup ở bài này.
-- Pause, Cancel và deadline không để một dòng dở xuất hiện như dòng hoàn tất.
-- Benchmark chính chạy Release; ghi compiler, cấu hình máy và các flags đang dùng cùng kết quả.
+- Hai workload dùng cùng dữ liệu, kiểu `float` và thời lượng bước. Đổi loại phép đo không làm tia nước đổi hình.
+- Một warm-up, năm mẫu, ba pass đủ N trong mỗi mẫu; mỗi dòng báo cả min/max và checksum hữu hạn.
+- Chưa có số liệu SoA ở bài này. Phép đo trong Canvas dùng JavaScript; không thể lấy nó thay số đo Release của C++.
 
 ## Bài tập mở rộng
 
-Từ median ba pass, tính throughput theo số lượt cập nhật mỗi giây: 3 × N / (medianMs / 1000). So nó với FPS của cửa sổ và giải thích vì sao hai số trả lời hai câu hỏi khác nhau. Không suy ra FPS toàn ứng dụng bằng cách lấy nghịch đảo kernel time.
+Chạy cùng một ca hai lần, giữ cả mười mẫu nếu tự bổ sung chỗ ghi lại. Hai lần có cùng checksum không? Khoảng min–max có chồng nhau không? Một kết quả để kiểm tính lặp lại của mô hình; kết quả kia để biết đồng hồ dao động đến đâu.
 
-Bài tiếp theo: [Đổi layout mà không làm đổi trạng thái](/projects/memory-layout-race/04-chuyen-state-sang-soa).
+Học tiếp: [Giữ nguyên đài phun khi đổi sang SoA](/projects/memory-layout-race/04-chuyen-state-sang-soa).

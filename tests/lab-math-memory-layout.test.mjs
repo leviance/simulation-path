@@ -30,6 +30,85 @@ import {
   cancelPending,
 } from "../lib/labs/fountain/scene.ts";
 import { panFountainCamera, projectFountainPoint } from "../lib/labs/fountain/camera.ts";
+import { nextExpirySlot, maxInspectedDrops } from "../lib/labs/fountain/inspection.ts";
+
+test("P32 one tilted jet: spread changes jitter at birth, not the nozzle direction or gravity", () => {
+  const narrow = { ...defaultConfig(), emitterX: -1, emitterZ: 2, spread: 0 };
+  const broad = { ...narrow, spread: 4 };
+  for (let id = 0; id < 128; id++) {
+    for (const generation of [0, 3]) {
+      const slim = spawnParticle(id, generation, narrow);
+      const open = spawnParticle(id, generation, broad);
+      assert.deepEqual([open.positionX, open.positionY, open.positionZ], [-1, 0, 2]);
+      assert.ok(Math.abs(slim.velocityX - 0.32 * slim.velocityY) < 2e-6);
+      assert.equal(Math.abs(slim.velocityZ), 0);
+      const u2 = randomUnit(broad.seed, id, generation, 2);
+      const u3 = randomUnit(broad.seed, id, generation, 3);
+      assert.ok(
+        Math.abs(open.velocityY - broad.launchSpeed * (0.98 + 0.1 * u3 - 0.16 * u2)) < 2e-6,
+      );
+      const jitter = Math.hypot(open.velocityX - 0.32 * open.velocityY, open.velocityZ);
+      assert.ok(Math.abs(jitter - broad.spread * u2 * u2) < 2e-6);
+      for (const field of ["id", "generation", "velocityY", "age", "lifetime", "hue"])
+        assert.equal(slim[field], open[field]);
+    }
+  }
+  const drop = spawnParticle(8, 0, { ...narrow, launchSpeed: 4 });
+  let seenFalling = false;
+  for (let step = 0; step < 100; step++) {
+    integrateParticle(drop, fixedDt, narrow.gravity);
+    if (drop.velocityY < 0 && drop.positionY > 0) seenFalling = true;
+  }
+  assert.ok(seenFalling, "the narrow jet still rises and falls in the nozzle plane");
+  assert.ok(drop.positionX > narrow.emitterX);
+  assert.equal(drop.positionZ, narrow.emitterZ);
+  assert.throws(() => validateConfig({ ...narrow, spread: 5.5 }), /budget/);
+});
+
+test("P32 changing spread leaves a live snapshot intact; respawn and reset use the new value", () => {
+  const scene = createFountain(8, 3);
+  const slot = nextExpirySlot(scene);
+  const original = structuredClone(scene.aos);
+  scene.config.spread = 0;
+  assert.deepEqual(scene.aos, original);
+  const drop = { ...scene.aos[slot], age: scene.aos[slot].lifetime - fixedDt / 2 };
+  assert.notEqual(Math.abs(drop.velocityZ), 0);
+  assert.ok(advanceParticle(drop, scene.config));
+  assert.equal(Math.abs(drop.velocityZ), 0);
+  assert.equal(drop.id, original[slot].id);
+  assert.equal(drop.generation, original[slot].generation + 1);
+  const reset = createFountain(8, 3, scene.config);
+  for (const [id, next] of reset.aos.entries()) {
+    assert.equal(next.id, id);
+    assert.equal(next.generation, 0);
+    assert.equal(Math.abs(next.velocityZ), 0);
+    assert.equal(next.positionZ, scene.config.emitterZ);
+    assert.equal(next.velocityY, original[id].velocityY);
+    assert.equal(next.age, original[id].age);
+  }
+});
+
+test("P32 expiry inspector queries a bounded committed snapshot; next birth keeps its slot", () => {
+  const cold = createFountain(2, 0);
+  assert.equal(nextExpirySlot(cold), -1);
+  const scene = createFountain(8);
+  const snapshot = scene.aos.map((drop) => ({ ...drop }));
+  const expected = scene.aos
+    .slice(0, maxInspectedDrops)
+    .reduce((first, drop) =>
+      drop.lifetime - drop.age < first.lifetime - first.age ? drop : first,
+    );
+  const slot = nextExpirySlot(scene);
+  assert.equal(slot, expected.id);
+  assert.deepEqual(scene.aos, snapshot);
+  assert.ok(expected.lifetime - expected.age < fixedDt);
+  scene.singleStep = true;
+  assert.ok(beginPhysics(scene));
+  while (scene.pending) tickPending(scene);
+  assert.equal(scene.aos[slot].id, expected.id);
+  assert.equal(scene.aos[slot].generation, expected.generation + 1);
+  assert.ok(scene.aos[slot].age < fixedDt);
+});
 
 test("P32 independent emission, gravity and respawn fixtures", () => {
   const config = defaultConfig();

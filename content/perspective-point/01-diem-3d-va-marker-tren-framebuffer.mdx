@@ -1,47 +1,35 @@
 import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Vẽ điểm sáng và điều khiển ba tọa độ
+# Thắp ngôi sao đầu tiên
 
 ## Vấn đề cần giải quyết
 
-Ở [Project 10](/projects/3d-compass), bạn đã kéo một đỉnh tam giác rồi nhìn mũi tên pháp tuyến đổi hướng. Khi ấy bộ chiếu được cho sẵn: bạn bảo nó vẽ một điểm 3D và nhận lại một vị trí trên màn hình. Bây giờ ta mở chính chiếc hộp ấy. Đích đầu tiên rất nhỏ: giữ D để đốm sáng chạy sang phải; giữ E để số Z tăng mà đốm sáng **chưa** đi đâu cả.
+Mở [trường sao ở bài cuối](/projects/perspective-point/08-hoan-thien-va-kiem-chung), bấm vào hình rồi giữ W một lúc. Chọn một chấm lệch khỏi tâm và theo dõi nó; thả phím trước khi nó rời khỏi khung. Bạn vừa thấy cả bầu trời trôi qua, dù trong chương trình **không ngôi sao nào tự bay**. Hãy thử đoán thứ gì đã thay đổi.
 
-Tải ZIP ở trang tổng quan, giải nén rồi mở thư mục có CMakeLists.txt. Starter đã có window, renderer, texture và framebuffer CPU từ Project 01. Các file được tách theo việc chúng làm: lab.hpp giữ kiểu toán học, scene.hpp giữ state, view.hpp vẽ pixel, presentation.hpp đưa ảnh lên SDL, main.cpp quản lý vòng lặp và input. Starter chỉ hiện nền; bài này thêm điểm sáng.
+Ta sẽ tự làm lại cảnh ấy, bắt đầu với một ngôi sao. Chưa cần vẽ tàu, hành tinh hay vệt sáng. Nếu một điểm chưa hiện đúng pixel thì thêm 95 điểm chỉ khiến lỗi khó nhìn hơn.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Một điểm 3D cần ba tọa độ X, Y, Z. Nhưng ta chưa cần giải quyết cả phép chiếu ngay. Trước hết, hãy dùng X/Y để đặt điểm lên màn hình, còn Z vẫn được lưu trong dữ liệu để kiểm tra phím Q/E:
-
-$$
-s_x=c_x+70x,\qquad s_y=c_y-70y.
-$$
-
-Trong công thức, (cₓ,cᵧ) là tâm viewport; mỗi đơn vị trong world tạm ứng với 70 pixel. Dấu trừ ở Y đổi chiều từ Y hướng lên trong world sang Y hướng xuống trên màn hình. Đây **không phải perspective projection**: tăng Z mà hình chưa đổi là đúng với mục đích của bản xem trước này. Đến bài 3, ta sẽ thay công thức đó bằng phép chiếu có độ sâu.
-
-Điểm sáng không phải một pixel quá nhỏ để quan sát. Ta vẽ một đốm màu hổ phách, có lõi sáng và dấu chữ thập để xác định tâm. Bán kính lúc này cố định 10 pixel; đến bài 3 cả vị trí lẫn kích thước sẽ phụ thuộc độ sâu.
+Hãy phân biệt **vị trí của sao** với **vị trí chấm sáng trên màn hình**. Dữ liệu thứ nhất có ba số: X sang phải, Y hướng lên và Z đi về phía trước. Dữ liệu thứ hai chỉ cần cột và hàng. Ở bài này ta thử cách dễ nhất: bỏ qua Z, mỗi đơn vị X hoặc Y ứng với 70 pixel. Đây chỉ là bản xem thử XY, chưa phải phép chiếu phối cảnh.
 
 <InteractiveLab demo="projection" mode="projection-point" />
 
 ## Viết code từng bước
 
-Giải nén ZIP rồi mở terminal ngay cạnh `CMakeLists.txt`. Lệnh configure bên dưới tạo `work/` từ `starter/` **một lần**. Chạy thử trước khi viết, sau đó sửa trong `work/include` và `work/src`. Giữ nguyên `starter/` để lúc nào cũng có chỗ đối chiếu.
+Giải nén [gói mã C++/SDL3](/downloads/project-11-perspective-point.zip). Mở terminal ở thư mục chứa `CMakeLists.txt` rồi chạy **bộ khung chưa sửa**. Starter đã có cửa sổ SDL, renderer, texture và framebuffer của Project 01. Từ đây ta thêm tọa độ, vẽ chấm rồi nối bàn phím.
 
-Hãy chạy bản khởi đầu trước khi sửa. Cửa sổ có nền nhưng chưa có đốm sáng. Trong vòng lặp, dữ liệu đi theo thứ tự: đọc phím → cập nhật `scene.point` → vẽ vào framebuffer → đưa ảnh lên SDL. Ta sẽ gắn từng việc vào đúng chỗ trên đường đi ấy.
-
-```powershell title="Chạy chương trình đang viết (Windows, Visual Studio)"
+```powershell title="Windows / Visual Studio — chạy bài đang viết"
 cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
 cmake --build build-work --config Debug --target project_11_work --parallel 1
 .\build-work\Debug\project_11_work.exe
 ```
 
-`checkpoints/01` là bản tham khảo sau bài này. Khi muốn thử phần mình vừa sửa, hãy chạy `project_11_work`, không chạy checkpoint.
+`checkpoints/01` là bản tham khảo sau bài này. Tiếp tục sửa trong `work/`; cấu hình lại không ghi đè bài của bạn.
 
-### Bước 1 — Đọc dữ liệu đã có trong bộ khung
+### Bước 1 — Cho ngôi sao một địa chỉ
 
-Vec2, Vec3, Camera3D, PerspectiveLens, Viewport và hàm finite đã có trong `work/include/lab.hpp`. Scene cùng viewportFor và applyPreset đã có trong `work/include/scene.hpp`. Đọc lại hai khai báo dưới để biết mình đang sửa dữ liệu nào; **không khai báo thêm một Vec3 hay Scene trùng tên**.
-
-```cpp title="include/lab.hpp — một vị trí có ba thành phần"
+```cpp title="include/lab.hpp — một vị trí gồm ba tọa độ"
 struct Vec3 {
     double x{};
     double y{};
@@ -49,186 +37,80 @@ struct Vec3 {
 };
 ```
 
-Scene là nơi lưu state của chương trình, tách khỏi framebuffer:
+Trong `include/scene.hpp`, tìm `scene.point`. Nó khởi đầu ở `(1, 0.6, 4)`: lệch một đơn vị sang phải, cao hơn mắt 0,6 đơn vị và ở phía trước. Đổi kích thước cửa sổ không được thay đổi ba số ấy. Bộ khung đã có hai kiểu dữ liệu này; không khai báo thêm một Vec3 hay Scene trùng tên.
 
-```cpp title="include/scene.hpp — point và các biến cấu hình giữ nguyên qua frame"
-struct Scene {
-    Vec3 point{1.0, 0.6, 4.0};
-    Camera3D camera{};
-    PerspectiveLens lens{};
-    int aspect = 0;
-    bool paused = true;
-    bool debug = true;
-    double elapsed = 0.0;
-};
-```
-
-Camera, lens, elapsed và debug đã có trong khung để các checkpoint dùng chung cấu trúc; hai bài đầu chưa dùng chúng để chiếu. point khởi đầu tại (1,0.6,4). Đừng đổi point thành pixel rồi ghi ngược vào state. Hàm previewPoint chỉ trả một Vec2 tạm:
+### Bước 2 — Từ hai số X/Y tới chấm đầu tiên
 
 {/* snippet include/lab.hpp#preview-xy */}
-```cpp title="include/lab.hpp — bản xem trước XY"
+```cpp title="include/lab.hpp — bản xem thử XY"
 inline Vec2 previewPoint(Vec3 point) {
     return {point.x * 70.0, point.y * 70.0};
 }
 ```
 
-### Bước 2 — Tự vẽ marker vào framebuffer
-
-```cpp title="include/view.hpp — vẽ từng pixel của điểm sáng"
-inline void drawPointMarker(Framebuffer& image, Vec2 center, int radius, const Viewport& viewport, bool debug) {
-    const int cx = static_cast<int>(std::lround(center.x));
-    const int cy = static_cast<int>(std::lround(center.y));
-    for (int y = -radius; y <= radius; ++y) {
-        for (int x = -radius; x <= radius; ++x) {
-            const int px = cx + x;
-            const int py = cy + y;
-            if (px < viewport.x || px >= viewport.x + viewport.width || py < viewport.y || py >= viewport.y + viewport.height) {
-                continue;
-            }
-            const int distanceSquared = x * x + y * y;
-            if (distanceSquared <= radius * radius) {
-                std::uint32_t color = kShape;
-                if (distanceSquared < radius * radius / 4) {
-                    color = kWhite;
-                }
-                image.putPixel(px, py, color);
-            }
-            if (debug && (x == 0 || y == 0)) {
-                image.putPixel(px, py, kMarker);
-            }
-        }
-    }
-}
+```cpp title="include/view.hpp — đặt tâm chấm lên framebuffer"
+Vec3 point = scene.point;
+const Vec2 preview = previewPoint(point);
+drawPointMarker(image, {center.x + preview.x, center.y - preview.y}, 10, viewport, true);
 ```
 
-Thêm drawPointMarker vào namespace `lab` của `work/include/view.hpp`, ngay trước `renderScene`. Hai vòng lặp xét một hình vuông nhỏ quanh tâm. Điều kiện x²+y²≤r² giữ lại phần đĩa; phần giữa dùng màu trắng. Kiểm tra viewport chạy trước putPixel để marker không ghi sang vùng chữ. Thay toàn bộ renderScene đang chỉ tô nền bằng hàm dưới. Hàm lấy preview, cộng tâm viewport và gọi drawPointMarker. Đọc cả hàm để biết chính xác ảnh được ghép ở đâu:
+`previewPoint` trả về độ lệch so với tâm, không phải chỉ số pixel. Ngôi sao mặc định lệch phải 70 pixel, lên trên 42 pixel. Khi gọi `drawPointMarker` ta cộng độ lệch X nhưng **trừ** độ lệch Y: hàng số 0 của framebuffer nằm ở phía trên. Sau khi tô pixel, vòng lặp sẵn có gọi `SDL_UpdateTexture` để đưa ảnh mới lên cửa sổ.
 
-```cpp title="include/view.hpp — từ world point tới ảnh xem trước"
-inline void renderScene(Framebuffer& image, const Scene& scene) {
-    image.clear(kBackground);
-    const Viewport viewport = viewportFor(scene);
-    [[maybe_unused]] const Vec2 center{viewport.x + viewport.width * 0.5, viewport.y + viewport.height * 0.5};
-    // Bản xem trước song song chỉ để kiểm framebuffer/input ở hai bài đầu.
-    for (int offset = -280; offset <= 280; offset += 70) {
-        drawLine(image, 550 + offset, 120, 550 + offset, 680, kGrid);
-        drawLine(image, 30, 400 + offset, 1070, 400 + offset, kGrid);
-    }
-    Vec3 point = scene.point;
-    const Vec2 preview = previewPoint(point);
-    drawPointMarker(image, {center.x + preview.x, center.y - preview.y}, 10, viewport, true);
-}
-```
-
-### Bước 3 — Bắt phím rồi cập nhật theo dt
-
-Thêm `movePoint` vào namespace `lab` của `work/include/scene.hpp`. Trong `work/src/main.cpp`, scene, dirty, deltaTime và khối PollEvent đã có sẵn; đặt khối đọc phím dưới đây **sau vòng SDL_PollEvent và trước if (dirty)**. Không tạo thêm vòng lặp while (running).
-
-W/A/S/D đổi Y/X; Q đưa điểm lại gần camera bằng cách giảm Z, E tăng Z. Đọc SDL_GetKeyboardState sau khi đã PollEvent. Dùng scancode, không dùng keycode làm chỉ số mảng. Đây là khối input trong main.cpp:
-
-```cpp title="src/main.cpp — giữ phím và đi với tốc độ 2 world/s"
-const bool* keys = SDL_GetKeyboardState(nullptr);
-lab::Vec3 direction{};
-if (keys[SDL_SCANCODE_A]) {
-    direction.x -= 1.0;
-}
-if (keys[SDL_SCANCODE_D]) {
-    direction.x += 1.0;
-}
-if (keys[SDL_SCANCODE_W]) {
-    direction.y += 1.0;
-}
-if (keys[SDL_SCANCODE_S]) {
-    direction.y -= 1.0;
-}
-if (keys[SDL_SCANCODE_Q]) {
-    direction.z -= 1.0;
-}
-if (keys[SDL_SCANCODE_E]) {
-    direction.z += 1.0;
-}
-const double length = std::hypot(direction.x, direction.y, direction.z);
-if (length > 0.0 && (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0) {
-    const double distance = 2.0 * deltaTime / length;
-    lab::movePoint(scene, {direction.x * distance, direction.y * distance, direction.z * distance});
-    dirty = true;
-}
-```
-
-```cpp title="include/scene.hpp — input tay sửa world point, không sửa pixel"
-inline void movePoint(Scene& scene, Vec3 delta) {
-    if (!finite(delta)) {
-        return;
-    }
-    scene.point.x = std::clamp(scene.point.x + delta.x, -6.0, 6.0);
-    scene.point.y = std::clamp(scene.point.y + delta.y, -6.0, 6.0);
-    scene.point.z = std::clamp(scene.point.z + delta.z, -2.0, 20.0);
-    scene.paused = true;
-}
-```
-
-movePoint từ chối delta không hữu hạn trước khi sửa bất kỳ thành phần nào. Clamp là giới hạn vùng điều khiển world, không phải clamp kết quả projection lên cạnh màn hình.
-
-length chuẩn hóa hướng khi giữ nhiều phím để đi chéo không nhanh hơn. distance=2×dt/length chia đều quãng đường cho ba thành phần. Chỉ nhận input khi window có focus; movePoint giới hạn vùng di chuyển và đặt paused=true. Cuối frame, ảnh CPU được chuyển lên texture bằng SDL_UpdateTexture:
-
-### Tự ghép trong `work/`
-
-Các đoạn trên giải thích phần mới. Khi viết, mở từng tệp dưới đây để thấy chỗ cần sửa trong **bản của bài trước**. Đoạn nào đã gõ rồi thì chỉ đối chiếu, không chèn thêm lần nữa.
-
-Viết phép đổi đơn vị tạm thời, từ tọa độ X/Y sang số pixel lệch tâm.
+Trong phần toán của `work/`, thêm `previewPoint` bên cạnh các kiểu tọa độ có sẵn.
 
 <CourseWorkFile project="11" step={1} path="include/lab.hpp" />
 
-Cho điểm di chuyển nhưng vẫn giữ riêng ba tọa độ thật.
-
-<CourseWorkFile project="11" step={1} path="include/scene.hpp" />
-
-Dùng tâm viewport để đặt đốm sáng; vẽ thử ở một vị trí cố định trước khi nối phím.
+Nối tọa độ vừa tính với framebuffer. Chú ý dấu trừ cho Y ở lời gọi vẽ chấm.
 
 <CourseWorkFile project="11" step={1} path="include/view.hpp" />
 
-Nối trạng thái phím với bước dịch chuyển; đến đây đốm sáng mới chạy.
+### Bước 3 — Dùng phím để kiểm điều vừa vẽ
+
+```cpp title="include/scene.hpp — chỉ thay vị trí điểm thử"
+scene.point.x = std::clamp(scene.point.x + delta.x, -6.0, 6.0);
+scene.point.y = std::clamp(scene.point.y + delta.y, -6.0, 6.0);
+scene.point.z = std::clamp(scene.point.z + delta.z, -2.0, 20.0);
+scene.paused = true;
+```
+
+```cpp title="src/main.cpp — hai mũi tên chỉnh chiều ngang"
+if (keys[SDL_SCANCODE_LEFT]) {
+    direction.x -= 1.0;
+}
+if (keys[SDL_SCANCODE_RIGHT]) {
+    direction.x += 1.0;
+}
+```
+
+Dùng các phím mũi tên chỉnh X/Y của điểm thử, dùng Q/E đổi Z. Hãy thử riêng từng chiều; chưa dùng W để bay ở bước này. Các cận trong `std::clamp` chỉ để điểm thử không đi xa đến mức bạn không tìm được nó nữa. Chúng không quyết định điểm có nằm trong ảnh hay không.
+
+Mở từng tệp sau để thấy đoạn cần thêm hoặc thay trong `work/`, kể cả chỗ gọi hàm trong vòng lặp SDL.
+
+Thêm phần cập nhật điểm vào cảnh; giới hạn này dành cho điều khiển, không phải để kẹp pixel.
+
+<CourseWorkFile project="11" step={1} path="include/scene.hpp" />
+
+Cuối cùng nối mũi tên và Q/E với hàm cập nhật, đánh dấu phải vẽ lại khi vị trí thay đổi.
 
 <CourseWorkFile project="11" step={1} path="src/main.cpp" />
 
 ## Ghép các phần lại
 
-Trong main.cpp, giữ nguyên khối upload/present đã có từ Starter; renderScene chạy trước upload, còn `finishFrame` gọi `SDL_RenderPresent` sau khi đã vẽ xong. Cụ thể:
-
-```cpp title="src/main.cpp — upload ảnh sau khi vẽ"
-if (dirty) {
-    lab::renderScene(image, scene);
-    if (!SDL_UpdateTexture(texture, nullptr, image.pixels.data(), lab::Framebuffer::width * static_cast<int>(sizeof(std::uint32_t))) || !lab::presentFramebuffer(renderer, texture, scene, capturePath)) {
-        std::cerr << SDL_GetError() << '\n';
-        failed = true;
-        break;
-    }
-    dirty = false;
-    if (capturePath) {
-        running = false;
-    }
-}
-```
-
-Build lại `project_11_work`. Bạn phải thấy điểm sáng lệch phải và lệch lên so với tâm. W đưa nó lên, D đưa nó sang phải. Q/E chỉ đổi world Z trong HUD, chưa thay hình; đừng sửa điều đó bằng cách đổi bán kính giả. Window resize dùng bảng logic 1100×800 có letterbox nên không kéo dãn ảnh.
+Build lại `project_11_work`. Nhấn mũi tên phải, rồi lên: sao phải đi sang phải, rồi lên. Bây giờ **chỉ nhấn E**. Con số Z tăng, chấm không rời khỏi pixel cũ. Vậy bản xem thử đang làm đúng điều ta đã viết, nhưng vẫn thiếu hẳn cảm giác tiến về phía trước.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi dấu trừ trước preview.y thành dấu cộng. W sẽ kéo điểm xuống dù Y tăng. Khôi phục dấu trừ và giải thích hai quy ước trục.
-
-2. Bỏ deltaTime khỏi distance rồi chạy ở nhiều tốc độ frame. Điểm sẽ chạy nhanh chậm theo máy. Khôi phục speed×dt; không dùng key-repeat để đo vận tốc.
-
-3. Giữ W+D rồi chỉ giữ D trong cùng thời gian. Hai quãng đường world phải bằng nhau nhờ normalize, không phải hai thành phần đều chạy với tốc độ 2.
+1. Đổi dấu trừ trước độ lệch Y thành dấu cộng. Nâng sao lên trong thế giới, chấm lại tụt xuống màn hình. Sửa dấu ở bước chuyển sang pixel, không đảo cả trục Y.
+2. Thử làm chấm nhỏ lại khi tăng Z mà vẫn giữ nguyên tâm chấm. Nó nhỏ đi thật, nhưng có trôi về tâm màn hình không? Trả bán kính về như cũ. **Đổi kích thước không thay được phép chiếu vị trí.**
 
 ## Tự kiểm tra kết quả
 
-- Window, nền, marker và HUD hiện được; không cần công thức 3D để có sản phẩm đầu tiên.
-- Point ban đầu là (1,0.6,4); WASD/QE đổi đúng thành phần.
-- Input tay dùng dt, chỉ khi có focus; state world không chứa pixel.
-- Thay Z không đổi ảnh ở bản xem trước, thay X/Y có đổi ảnh.
-- R/F1 về preset mặc định; Esc thoát và giải phóng tài nguyên.
+- Đọc được cả ba tọa độ, chỉ ra được dòng mã bỏ qua Z.
+- Cùng X/Y, điểm ở Z=4 và Z=8 nằm đúng cùng một chỗ trong bản xem thử.
+- Tắt chương trình, build lại rồi mở đúng target `project_11_work` vẫn điều khiển được chấm vừa vẽ.
 
 ## Bài tập mở rộng
 
-Thêm một phím đưa point về gốc X=Y=0 nhưng giữ Z. Hãy viết bằng thay đổi state, không đặt pixel trực tiếp.
+Đặt X=0, Y=0. Nếu camera đi thẳng tới ngôi sao này, bạn dự đoán nó sẽ rời khỏi tâm hay ở yên cho tới khi camera đi qua? Ghi dự đoán lại; bài 03 sẽ cho bạn cách kiểm.
 
-[Sang bài tiếp theo — Đặt camera vào không gian](/projects/perspective-point/02-tu-world-space-sang-camera-space).
+[Bài tiếp: Khi người xem tiến về phía ngôi sao](/projects/perspective-point/02-tu-world-space-sang-camera-space).

@@ -99,17 +99,22 @@ export function emptyParticle(id: number): ParticleAoS {
 }
 export function spawnParticle(id: number, generation: number, config: FountainConfig): ParticleAoS {
   const angle = f(randomUnit(config.seed, id, generation, 1) * f(2 * Math.PI));
-  const radialSpeed = f(f(Math.sqrt(randomUnit(config.seed, id, generation, 2))) * config.spread);
+  const radialSample = randomUnit(config.seed, id, generation, 2);
+  const radialSpeed = f(f(config.spread * radialSample) * radialSample);
+  const verticalSample = randomUnit(config.seed, id, generation, 3);
+  const verticalVelocity = f(
+    config.launchSpeed * f(f(f(0.98) + f(f(0.1) * verticalSample)) - f(f(0.16) * radialSample)),
+  );
   return {
     id,
     generation,
     positionX: f(config.emitterX),
     positionY: 0,
     positionZ: f(config.emitterZ),
-    velocityX: f(f(Math.cos(angle)) * radialSpeed),
-    velocityY: f(
-      config.launchSpeed * f(f(0.85) + f(f(0.3) * randomUnit(config.seed, id, generation, 3))),
-    ),
+    // A fixed tilt at the nozzle makes the outgoing and returning water legible.
+    // Changing spread affects jitter around that axis, not the tilt or gravity.
+    velocityX: f(f(f(0.32) * verticalVelocity) + f(f(Math.cos(angle)) * radialSpeed)),
+    velocityY: verticalVelocity,
     velocityZ: f(f(Math.sin(angle)) * radialSpeed),
     age: 0,
     lifetime: f(

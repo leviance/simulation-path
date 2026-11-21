@@ -1,50 +1,34 @@
 import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Kéo điểm mà không làm mất depth
+# Tùy chọn: kéo ngôi sao thử ở độ sâu đã biết
 
 ## Vấn đề cần giải quyết
 
-Hai chiếc cổng ở xa gần khác nhau có thể che lên cùng một pixel. Vậy khi bạn nắm đốm sáng bằng chuột, chương trình nên đặt nó ở đâu trong không gian? Chỉ tọa độ chuột thì chưa đủ. Ta sẽ mượn thêm một con số mà chương trình biết chắc: độ sâu của đốm sáng ngay lúc bạn nhấn xuống.
+Bạn đã bay được qua một trường sao hoàn chỉnh ở bài 06. Bài này là phần **tùy chọn** cho ai muốn nắm một điểm thử bằng chuột để xem phép chiếu chạy ngược ra sao. Điểm thử là dụng cụ đo: kéo nó không được di chuyển bất kỳ ngôi sao nào trong trường.
 
-Hãy nhớ tia ở bài 3: nhiều điểm trên cùng tia từ camera đều có chung ảnh trên màn hình. Trong bài này, điều kiện được chọn là giữ nguyên độ sâu của điểm lúc bắt đầu kéo.
+**Muốn sang phần hoàn thiện ngay?** Lấy hai tệp `include/lab.hpp` và `src/main.cpp` của `checkpoints/07` đặt vào đúng hai vị trí tương ứng trong `work/` (giữ lại bản riêng nếu đã tự sửa thêm). Build lại một lần rồi mở [bài 08](/projects/perspective-point/08-hoan-thien-va-kiem-chung). Bạn không cần học xử lý chuột để hiểu vì sao các sao tỏa ra từ tâm.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Ta chọn giữ camera-space depth hiện tại. Khi đã biết z, đảo các công thức là đủ:
-
-$$
-n_x=\frac{2(s_x-v_x)}{w}-1,\quad n_y=1-\frac{2(s_y-v_y)}{h},
-$$
-
-$$
-x=n_x z\tan(vFOV/2)a,\quad y=n_y z\tan(vFOV/2).
-$$
-
-Kết quả là tọa độ trong camera space; cộng camera.position mới trở về world space để cập nhật scene.point. Ta lưu cameraDepth ngay khi nhấn chuột. Nếu người dùng đổi camera, FOV hoặc viewport giữa chừng, ta kết thúc thao tác kéo thay vì tiếp tục dùng dữ liệu của góc nhìn cũ.
-
-Nhấn lên mép marker không được làm tâm nhảy đến chuột. Lưu grabOffset=mouse−screenCenter; khi kéo, targetCenter=mouse−grabOffset. Chỉ một pointer được quyền điều khiển thao tác.
+Một pixel chỉ quy định **hướng nhìn**. Nếu hai sao nằm trên cùng một tia, bạn bấm vào đúng pixel đó thì chương trình vẫn chưa thể biết bạn muốn chọn độ sâu nào. Ta chọn một quy ước: chỉ kéo **điểm thử đã biết**, mặt phẳng kéo vuông góc hướng nhìn và có độ sâu đúng bằng độ sâu của điểm lúc nhấn. Bấy giờ mỗi pixel chỉ ứng với một điểm trên mặt phẳng đó.
 
 <InteractiveLab demo="projection" mode="projection-drag" />
 
 ## Viết code từng bước
 
-Mở lại thư mục `work/` của bài trước. Các đường dẫn như `include/lab.hpp` dưới đây đều tính từ **work/**. Configure lại sẽ không ghi đè phần bạn đã viết.
-
-Thử nắm ở mép, không phải chính giữa đốm sáng. Nếu nó giật vào dưới con trỏ ngay khi nhấn, phép chiếu có thể vẫn đúng; cái bị mất là khoảng cách giữa chỗ nắm và tâm đốm sáng. Lưu riêng khoảng cách này và Z ban đầu.
-
-```powershell title="Chạy chương trình đang viết (Windows, Visual Studio)"
+```powershell title="Windows / Visual Studio — chạy bài đang viết"
 cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
 cmake --build build-work --config Debug --target project_11_work --parallel 1
 .\build-work\Debug\project_11_work.exe
 ```
 
-`checkpoints/07` là bản tham khảo sau bài này. Khi muốn thử phần mình vừa sửa, hãy chạy `project_11_work`, không chạy checkpoint.
+`checkpoints/07` là bản tham khảo sau bài này. Tiếp tục sửa trong `work/`; cấu hình lại không ghi đè bài của bạn.
 
-### Bước 1 — Viết inverse với depth bắt buộc
+### Bước 1 — Đảo phép chiếu ở một độ sâu cho trước
 
 {/* snippet include/lab.hpp#drag-plane */}
-```cpp title="include/lab.hpp — chọn một điểm trên tia tại depth đã biết"
+```cpp title="include/lab.hpp — chọn một điểm trên tia khi biết độ sâu"
 inline std::optional<Vec3> screenToCameraAtDepth(Vec2 screen, double depth, const PerspectiveLens& lens, const Viewport& viewport) {
     if (!validLens(lens, viewport) || !std::isfinite(screen.x) || !std::isfinite(screen.y) || !std::isfinite(depth) || depth < lens.nearPlane || depth > lens.farPlane) {
         return std::nullopt;
@@ -60,13 +44,15 @@ inline std::optional<Vec3> screenToCameraAtDepth(Vec2 screen, double depth, cons
 }
 ```
 
-Hàm trả optional giống chiều xuôi: depth không thuộc [near,far] hoặc lens/viewport không hợp lệ thì không có kết quả. Một target ngoài viewport vẫn có thể tạo một camera point hữu hạn; điều này cần khi kéo ra ngoài, còn projection sau đó sẽ báo outside.
+Ngược với `ndcToScreen`, trước tiên trừ gốc viewport để lấy NDC. Sau đó nhân lại với `depth` và tangent nửa FOV. Kết quả vẫn đang tính **so với camera**; muốn lưu vào `scene.point` cần đưa nó về world bằng `cameraToWorld`. Chỉ dùng `depth` đã giữ lúc nhấn, không lấy một số Z khác ở mỗi lần di chuột.
 
-### Bước 2 — Nối chuột logic với inverse
+Thêm hàm dựng lại điểm trên mặt phẳng kéo vào phần toán của bạn.
 
-Trong main.cpp, **trước while (running)** và sau các biến scene/dirty, thêm state của thao tác kéo và hàm hủy. owner lưu mouse đang điều khiển, grabOffset giữ chỗ nắm, dragDepth giữ độ sâu. Lambda dùng [&] để đọc/sửa những biến đó, vì thế chúng phải được khai báo trước lambda:
+<CourseWorkFile project="11" step={7} path="include/lab.hpp" />
 
-```cpp title="src/main.cpp — state và thao tác hủy nằm ngoài vòng lặp"
+### Bước 2 — Nhớ ngón tay hoặc chuột nào đang kéo
+
+```cpp title="src/main.cpp — ghi lại thao tác kéo ngoài vòng sự kiện"
 bool dragging = false;
 SDL_MouseID owner{};
 lab::Vec2 grabOffset{};
@@ -77,9 +63,20 @@ const auto cancelDrag = [&]() {
 };
 ```
 
-Đặt updateDrag ngay sau cancelDrag, vẫn trước while (running):
+Nếu bấm lệch tâm chấm 6 pixel, chấm vẫn nên nằm lệch con trỏ 6 pixel khi kéo tiếp. `grabOffset` giữ phần lệch này. `owner` để một thiết bị thứ hai không giành mất thao tác đang diễn ra. Những biến đó sống bên ngoài vòng lặp: kéo chuột là một thao tác kéo dài qua nhiều sự kiện, không phải một lần bấm.
 
-```cpp title="src/main.cpp — giữ offset và depth trong suốt thao tác"
+### Bước 3 — Đặt lại điểm thử và kết thúc thao tác
+
+```cpp title="src/main.cpp — giữ điểm nắm và độ sâu khi nhấn"
+owner = event.button.which;
+grabOffset = {event.button.x - projected.screen->x, event.button.y - projected.screen->y};
+dragDepth = projected.cameraPoint.z;
+dragging = true;
+```
+
+Phần trên ghi nhớ độ sâu ngay lúc nhấn. Trong phần di chuột bên dưới, độ sâu ấy không được thay đổi:
+
+```cpp title="src/main.cpp — đổi con trỏ thành vị trí world tại độ sâu đã lưu"
 const auto updateDrag = [&](lab::Vec2 mouse) {
     const lab::Vec2 target{mouse.x - grabOffset.x, mouse.y - grabOffset.y};
     const auto cameraPoint = lab::screenToCameraAtDepth(target, dragDepth, scene.lens, lab::viewportFor(scene));
@@ -91,107 +88,31 @@ const auto updateDrag = [&](lab::Vec2 mouse) {
 };
 ```
 
-Lấy target từ chuột đã trừ offset, đảo sang camera point, đổi về world rồi giới hạn vùng thao tác. Ở biên world [-6,6], tâm có thể không theo kịp chuột vì giới hạn chủ ý này; depth không bị thay đổi.
+Nhận vị trí con trỏ theo tọa độ render của SDL, trừ `grabOffset` rồi mới chiếu ngược. Dùng vị trí cuối cùng khi thả nút; nếu cửa sổ mất focus hoặc đổi kích thước thì hủy kéo. Đừng cập nhật camera trong lúc người dùng đang đặt điểm. Ở bản cuối, bật dụng cụ trước: không thể nắm “vô hình” một điểm thử đang ẩn.
 
-### Bước 3 — Capture và kết thúc đúng owner
+Hai tệp dưới đây cho thấy chỗ khai báo, các nhánh sự kiện và lúc nhường lại chuột. Không có tệp dữ liệu sao nào phải sửa.
 
-```cpp title="src/main.cpp — hit-test và sở hữu một SDL_MouseID"
-const bool mouseEvent = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_BUTTON_UP;
-if (mouseEvent && !SDL_ConvertEventToRenderCoordinates(renderer, &event)) {
-    failed = true;
-    running = false;
-    break;
-}
-if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && !dragging) {
-    const auto viewport = lab::viewportFor(scene);
-    const auto projected = lab::projectPerspective(scene.point, scene.camera, scene.lens, lab::viewportFor(scene));
-    const bool insideViewport = event.button.x >= viewport.x && event.button.x <= viewport.x + viewport.width && event.button.y >= viewport.y && event.button.y <= viewport.y + viewport.height;
-    if (insideViewport && projected.status == lab::ProjectionStatus::Visible && projected.screen && std::hypot(event.button.x - projected.screen->x, event.button.y - projected.screen->y) <= 24.0) {
-        owner = event.button.which;
-        grabOffset = {event.button.x - projected.screen->x, event.button.y - projected.screen->y};
-        dragDepth = projected.cameraPoint.z;
-        dragging = true;
-        scene.paused = true;
-        dirty = true;
-        if (!SDL_CaptureMouse(true)) {
-            cancelDrag();
-        }
-    }
-}
-if (event.type == SDL_EVENT_MOUSE_MOTION && dragging && event.motion.which == owner) {
-    if ((event.motion.state & SDL_BUTTON_LMASK) == 0) {
-        cancelDrag();
-    } else {
-        updateDrag({event.motion.x, event.motion.y});
-    }
-}
-if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT && dragging && event.button.which == owner) {
-    updateDrag({event.button.x, event.button.y});
-    cancelDrag();
-}
-```
-
-Đặt toàn bộ khối mouse event trên **bên trong vòng SDL_PollEvent**, sau nhánh xử lý bàn phím. Không đặt nó sau vòng poll: lúc đó event có thể không còn là sự kiện bạn muốn xử lý.
-
-SDL_ConvertEventToRenderCoordinates đổi vị trí từ window/HiDPI/letterbox về bảng logic đúng một lần. Capture chỉ bật khi nhấn gần một marker visible; pointer down không sửa point. Motion chỉ nhận đúng mouse owner và còn giữ nút trái. Up nhận mẫu cuối trước cancelDrag. Nếu capture thất bại, thao tác bị hủy.
-
-Canvas dùng cùng inverse, nhưng pointerId và setPointerCapture của trình duyệt thay SDL_MouseID. Đừng nhân DPR vào mouse thêm lần nữa: DPR chỉ dành cho backing buffer.
-
-### Tự ghép trong `work/`
-
-Các đoạn trên giải thích phần mới. Khi viết, mở từng tệp dưới đây để thấy chỗ cần sửa trong **bản của bài trước**. Đoạn nào đã gõ rồi thì chỉ đối chiếu, không chèn thêm lần nữa.
-
-Đi từ pixel về NDC rồi tìm điểm trên mặt phẳng Z đã chọn.
-
-<CourseWorkFile project="11" step={7} path="include/lab.hpp" />
-
-Chỉ bắt đầu kéo khi nhấn trúng; giữ người sở hữu thao tác, vị trí nắm và độ sâu cho tới khi thả.
+Nối việc nắm, di, thả và mất focus; dùng capture để còn nhận lần thả ở ngoài cửa sổ.
 
 <CourseWorkFile project="11" step={7} path="src/main.cpp" />
 
 ## Ghép các phần lại
 
-Còn ba chỗ phải gọi cancelDrag để state cũ không sống quá lâu:
-
-- Trong nhánh SDL_EVENT_KEY_DOWN, đặt cancelDrag() ngay sau dirty=true, trước khi xử lý Space/N, reset, camera hay lens.
-- Trong nhánh đọc phím liên tục ở bài 1, gọi cancelDrag() trong if (length > 0 ...), **trước movePoint**.
-- Trước SDL_DestroyTexture ở cuối main, gọi cancelDrag() để nhả capture trước khi hủy window.
-
-Thay nhánh lifecycle cũ bằng nhánh dưới; focus/resize không được để chuột tiếp tục điều khiển theo cameraDepth cũ:
-
-```cpp title="src/main.cpp — hủy kéo và pause khi môi trường thay đổi"
-if (event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED || event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_HIDDEN || event.type == SDL_EVENT_WINDOW_MINIMIZED) {
-    scene.paused = true;
-    dirty = true;
-    cancelDrag();
-}
-```
-
-Ngay khi bắt đầu kéo, paused=true và dirty=true: HUD phải hiện PAUSED kể cả khi bạn mới nhấn giữ mà chưa di chuyển chuột. Trong Canvas, phím N/nút tiến một bước cũng nhả capture trước khi đặt point theo quỹ đạo; mẫu thả của thao tác cũ không được ghi đè bước mới.
-
-Build lại `project_11_work`, pause, nhấn lệch tâm marker khoảng 10 pixel rồi kéo. Marker phải giữ khoảng lệch đó và giữ nguyên cameraDepth. Nhấn lên nền không làm điểm nhảy.
-
-Blur/hidden/resize, reset, preset và input thay camera/lens đều hủy capture. Nếu không hủy, thao tác cũ có thể tiếp tục dùng cameraDepth hoặc offset đã lỗi thời. Trong Canvas, đổi bất kỳ slider/preset nào cũng kết thúc drag; phím Tab vẫn ra khỏi Canvas bình thường.
+Tạm dừng, nắm gần mép điểm thử, kéo sang phải rồi thả ở vị trí xa hơn một chút so với lần di chuột cuối. Điểm không giật vào giữa con trỏ; Z so với camera không đổi. Hãy thử ở một kích thước cửa sổ khác nữa, vì tọa độ chuột và pixel framebuffer không nhất thiết bằng nhau.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ grabOffset và gán targetCenter=mouse ngay từ down. Marker sẽ giật khi nhấn lệch tâm. Khôi phục offset và kiểm down không đổi point.
-
-2. Chỉ xử lý motion, không nhận vị trí của up. Di chuyển rồi thả nhanh: điểm cuối có thể bị bỏ. Khôi phục mẫu cuối của owner trước release capture.
-
-3. Bỏ cameraToWorld ở cuối inverse khi camera không ở origin. Điểm lệch đúng bằng camera.position. Dùng Camera.X=1 để thấy lỗi rõ, rồi khôi phục phép cộng.
+1. Thay độ sâu đã giữ bằng 1. Ảnh của điểm lúc kéo có thể vẫn bám chuột, nhưng cho camera tiến lại sẽ thấy nó đã bị kéo tới quá gần. Trả về độ sâu ban đầu.
+2. Bỏ `grabOffset`. Nhấn vào rìa của chấm mà chưa di chuột: tâm chấm bị giật tới con trỏ. Nên sửa phần nắm chứ không bù lệch vào tọa độ của cả camera.
 
 ## Tự kiểm tra kết quả
 
-- Down gần marker giữ nguyên point, down trên nền/nút phải không kéo.
-- Pointer khác không thay thao tác đang giữ; up/cancel/lost capture dọn đúng owner.
-- Depth không đổi khi kéo, world XY thay đúng hướng.
-- Up nhận mẫu cuối; rời viewport không làm rớt thao tác; mất nút trái hủy.
-- Capture không còn sau blur/resize/reset/preset/chỉnh lens/camera.
-- Inverse tại pixel (485,282.5), depth4, FOV90°, viewport (10,20,800,600) trả (1,0.5,4).
+- Kéo chỉ đổi điểm thử và giữ đúng độ sâu tính từ mắt đang đứng, kể cả khi camera không ở gốc.
+- Thả chuột hoặc chuyển cửa sổ kết thúc thao tác; di lại con trỏ không làm điểm tiếp tục chạy theo.
+- Có thể chạy đến cuối bài này bằng phần tùy chọn tự viết hoặc hai tệp tham khảo, không cần thay cả `work/`.
 
 ## Bài tập mở rộng
 
-Thêm chế độ kéo trên một world plane khác thay vì giữ camera depth. Chỉ làm sau khi viết rõ một pixel là tia nào và tia giao plane ở đâu; không đoán thêm Z từ screen Y.
+Biết viewport, FOV, một pixel **và** độ sâu, ta tìm được một điểm. Nếu cố ý bỏ dữ kiện cuối, hãy thử đưa ra hai đáp án world khác nhau mà đều chiếu trúng pixel để giải thích vì sao bài toán không còn nghiệm duy nhất.
 
-[Sang bài tiếp theo — Hoàn thiện demo và kiểm chứng](/projects/perspective-point/08-hoan-thien-va-kiem-chung).
+[Bài tiếp: Bay thử rồi kiểm lại phép chiếu](/projects/perspective-point/08-hoan-thien-va-kiem-chung).

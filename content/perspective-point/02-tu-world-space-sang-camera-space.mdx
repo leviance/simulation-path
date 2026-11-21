@@ -1,164 +1,122 @@
 import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Đặt camera vào không gian
+# Khi người xem tiến về phía ngôi sao
 
 ## Vấn đề cần giải quyết
 
-Hãy để đốm sáng đứng yên, rồi hình dung bạn bước sang phải một bước. Nó sẽ nằm về bên nào trong tầm mắt? Trên màn hình nó phải trượt sang trái, dù không một tọa độ nào của đốm sáng trong căn phòng thay đổi. Ta cần hai bộ số để diễn tả hai chuyện khác nhau đó.
-
-Ta sẽ lưu riêng vị trí camera và tính tọa độ của điểm so với camera. Camera trong project này chưa xoay, nên việc đổi hệ tọa độ chỉ cần một phép trừ.
+Một ngôi sao nằm tại Z=4. Người quan sát từ Z=0 bay tới Z=1. Ta đứng gần nó hơn, nhưng ngôi sao đâu có dời đến nơi khác. Nếu cứ trừ 1 vào tọa độ của mọi ngôi sao mỗi lần nhấn phím, sau này làm sao biết chúng vốn nằm ở đâu?
 
 ## Hiểu ý tưởng trước khi viết code
 
-Trong bài này camera nhìn theo +Z, X sang phải và Y lên trên. Đây là quy ước camera riêng của P11; không chép nguyên orbit basis của P10. Camera chỉ tịnh tiến, nên một điểm có hai cách mô tả:
-
-$$
-P_c=P_w-C,\qquad P_w=P_c+C.
-$$
-
-Ví dụ world point (3,2,8), camera (1,-1,2) cho camera point (2,3,6). Điểm trong world không hề chạy. Chỉ gốc mà ta dùng để đo nó thay đổi.
-
-Lưu ý Z trong camera space là độ sâu theo trục nhìn, không phải độ dài đoạn nối camera tới điểm. Chẳng hạn P=(3,0,4) có Z=4 nhưng cách camera 5 đơn vị. Phép chiếu ở bài sau cần số 4, không phải số 5.
+Hãy tưởng tượng một vạch số dọc theo hướng nhìn. Sao ở vạch 4, mắt ở vạch 1: nhìn từ mắt, sao ở phía trước 3 đơn vị. Ta cần giữ **cả hai câu trả lời**: `worldPoint.z = 4` để biết sao nằm ở đâu, `cameraPoint.z = 3` để lát nữa tính nó hiện ra sao. Vì camera chỉ tịnh tiến và luôn nhìn theo +Z, đổi gốc là đủ; chưa cần góc quay hoặc ma trận.
 
 <InteractiveLab demo="projection" mode="projection-camera" />
 
 ## Viết code từng bước
 
-Mở lại thư mục `work/` của bài trước. Các đường dẫn như `include/lab.hpp` dưới đây đều tính từ **work/**. Configure lại sẽ không ghi đè phần bạn đã viết.
-
-Để ý hai dòng số: `world` là vị trí trong căn phòng; `camera point` là vị trí lấy chỗ đứng của bạn làm gốc. Sau bài này, khi bạn chỉ di chuyển camera, đúng một trong hai dòng được phép đổi.
-
-```powershell title="Chạy chương trình đang viết (Windows, Visual Studio)"
+```powershell title="Windows / Visual Studio — chạy bài đang viết"
 cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
 cmake --build build-work --config Debug --target project_11_work --parallel 1
 .\build-work\Debug\project_11_work.exe
 ```
 
-`checkpoints/02` là bản tham khảo sau bài này. Khi muốn thử phần mình vừa sửa, hãy chạy `project_11_work`, không chạy checkpoint.
+`checkpoints/02` là bản tham khảo sau bài này. Tiếp tục sửa trong `work/`; cấu hình lại không ghi đè bài của bạn.
 
-### Bước 1 — Giữ camera thành dữ liệu riêng
+### Bước 1 — Đặt mắt vào thế giới, tách khỏi ngôi sao
 
-Camera3D và trường Scene::camera đã có từ Starter. Đây là khai báo cần đọc lại, không phải một struct mới cần dán thêm:
-
-```cpp title="include/lab.hpp — camera chưa có góc quay"
+```cpp title="include/lab.hpp — vị trí của người quan sát"
 struct Camera3D {
     Vec3 position{};
 };
 ```
 
-Scene có point và camera độc lập. Khi đổi camera.position, tuyệt đối không cộng/trừ trực tiếp vào scene.point; làm vậy mỗi frame sẽ khiến điểm trôi không ngừng.
+Một camera ở đây chỉ cần vị trí. Bắt đầu với mắt tại gốc. Sau đó ta cho nó tiến hoặc lùi dọc Z; X/Y của mắt vẫn bằng 0. Không cần tính lại danh sách sao để làm việc này.
 
-### Bước 2 — Đổi gốc đúng một lần
+### Bước 2 — Hỏi ngôi sao nằm đâu *so với mắt*
 
 {/* snippet include/lab.hpp#camera-origin */}
-```cpp title="include/lab.hpp — từ world sang camera"
+```cpp title="include/lab.hpp — đổi từ world sang camera"
 inline Vec3 worldToCamera(Vec3 worldPoint, const Camera3D& camera) {
     return {worldPoint.x - camera.position.x, worldPoint.y - camera.position.y, worldPoint.z - camera.position.z};
 }
 ```
 
-Từng thành phần trừ cùng thành phần vị trí camera. Camera đi +X làm cameraPoint.x giảm; dấu trừ này diễn tả cảnh trượt ngược chiều người quan sát.
+Tính `worldPoint - camera.position`, không làm ngược lại. Với sao `(1, 0.6, 4)`, khi đặt mắt tại `(0, 0, 2)` thì kết quả là `(1, 0.6, 2)`. Nếu camera đi qua sao, độ sâu sẽ đổi dấu. Số âm này là thông tin hữu ích; đừng lấy trị tuyệt đối để “sửa”.
 
-### Bước 3 — Viết phép đổi ngược và dùng camera point
-
-```cpp title="include/lab.hpp — từ camera trở lại world"
+```cpp title="include/lab.hpp — đổi về đúng điểm world"
 inline Vec3 cameraToWorld(Vec3 point, const Camera3D& camera) {
     return {point.x + camera.position.x, point.y + camera.position.y, point.z + camera.position.z};
 }
 ```
 
-Thêm worldToCamera và cameraToWorld vào namespace lab của lab.hpp. Sau đó thay renderScene bằng hàm dưới: đặt worldToCamera ngay trước previewPoint, không sau khi đã nhân pixel:
+Chiều ngược lại chỉ cần cộng vị trí mắt. Thử cộng `(0, 0, 2)` vào đáp số vừa tính: bạn phải nhận lại đúng dữ liệu đầu bài, không phải tọa độ của một ngôi sao mới.
 
-```cpp title="include/view.hpp — preview lấy tọa độ nhìn từ camera"
-inline void renderScene(Framebuffer& image, const Scene& scene) {
-    image.clear(kBackground);
-    const Viewport viewport = viewportFor(scene);
-    [[maybe_unused]] const Vec2 center{viewport.x + viewport.width * 0.5, viewport.y + viewport.height * 0.5};
-    // Bản xem trước song song chỉ để kiểm framebuffer/input ở hai bài đầu.
-    for (int offset = -280; offset <= 280; offset += 70) {
-        drawLine(image, 550 + offset, 120, 550 + offset, 680, kGrid);
-        drawLine(image, 30, 400 + offset, 1070, 400 + offset, kGrid);
-    }
-    Vec3 point = scene.point;
-    point = worldToCamera(scene.point, scene.camera);
-    const Vec2 preview = previewPoint(point);
-    drawPointMarker(image, {center.x + preview.x, center.y - preview.y}, 10, viewport, true);
-}
-```
-
-### Bước 4 — Nối phím điều khiển camera
-
-Trong nhánh SDL_EVENT_KEY_DOWN của main.cpp, đặt sáu nhánh dưới **sau phần R/F1–F6** đã có. Đầu nhánh key-down đã đặt dirty=true, vì thế camera đổi là ảnh được vẽ lại. Mỗi lần chỉnh camera cũng đặt paused=true, để quỹ đạo không chạy tiếp khi bạn đang đo tọa độ.
-
-```cpp title="src/main.cpp — camera đổi riêng, world point giữ nguyên"
-if (event.key.key == SDLK_J) {
-    scene.paused = true;
-    scene.camera.position.x = std::max(-2.0, scene.camera.position.x - 0.1);
-}
-if (event.key.key == SDLK_L) {
-    scene.paused = true;
-    scene.camera.position.x = std::min(2.0, scene.camera.position.x + 0.1);
-}
-if (event.key.key == SDLK_I) {
-    scene.paused = true;
-    scene.camera.position.y = std::min(2.0, scene.camera.position.y + 0.1);
-}
-if (event.key.key == SDLK_K) {
-    scene.paused = true;
-    scene.camera.position.y = std::max(-2.0, scene.camera.position.y - 0.1);
-}
-if (event.key.key == SDLK_U) {
-    scene.paused = true;
-    scene.camera.position.z = std::max(-2.0, scene.camera.position.z - 0.1);
-}
-if (event.key.key == SDLK_O) {
-    scene.paused = true;
-    scene.camera.position.z = std::min(2.0, scene.camera.position.z + 0.1);
-}
-```
-
-### Tự ghép trong `work/`
-
-Các đoạn trên giải thích phần mới. Khi viết, mở từng tệp dưới đây để thấy chỗ cần sửa trong **bản của bài trước**. Đoạn nào đã gõ rồi thì chỉ đối chiếu, không chèn thêm lần nữa.
-
-Viết phép đổi gốc và phép cộng ngược để về lại tọa độ ban đầu.
+Thêm hai chiều đổi gốc vào cùng tệp để chúng dùng đúng quy ước +Z.
 
 <CourseWorkFile project="11" step={2} path="include/lab.hpp" />
 
-Thay đầu vào của bản xem trước: dùng điểm so với camera, không sửa điểm trong cảnh.
+### Bước 3 — Dịch camera rồi quan sát hai hệ tọa độ
 
-<CourseWorkFile project="11" step={2} path="include/view.hpp" />
+{/* snippet include/scene.hpp#flight-camera */}
+```cpp title="include/scene.hpp — chọn vị trí trong hành trình"
+inline void setCameraDepth(Scene& scene, double depth) {
+    if (std::isfinite(depth)) {
+        scene.camera.position.z = std::clamp(depth, 0.0, flightLimit);
+    }
+}
+```
 
-Cho người dùng biết checkpoint này đã có phím dời camera.
+`setCameraDepth` chỉ thay Z của mắt. Hành trình bắt đầu ở 0 và kết thúc ở 12. Hai nhánh dưới đây dùng chung hàm ấy thay vì xử lý giới hạn hai lần:
 
-<CourseWorkFile project="11" step={2} path="include/presentation.hpp" />
+```cpp title="src/main.cpp — J lùi một nấc, L tiến một nấc"
+if (event.key.key == SDLK_J) {
+    scene.paused = true;
+    lab::setCameraDepth(scene, scene.camera.position.z - 0.1);
+}
+if (event.key.key == SDLK_L) {
+    scene.paused = true;
+    lab::setCameraDepth(scene, scene.camera.position.z + 0.1);
+}
+```
 
-Nối J/L với camera X. So dòng world trước và sau khi nhấn L.
+Điều khiển ở bước này đặt vị trí camera theo từng nấc; thao tác bay liên tục bằng W/S sẽ đến ở bài 06. Nối vị trí mới vào `worldToCamera` **trước** lúc lấy X/Y để vẽ. Trong bản xem thử, chỉ thay Z của mắt vẫn chưa làm chấm đổi pixel: ta vừa có đúng số liệu về khoảng cách, chưa hề dạy chương trình dùng khoảng cách đó.
+
+Các tệp dưới đây chỉ ra chỗ khai báo camera, chỗ nhận phím và chỗ lấy tọa độ của điểm thay vì sửa trực tiếp dữ liệu world.
+
+Đặt hai đầu hành trình và hàm thay đổi vị trí mắt trong trạng thái cảnh.
+
+<CourseWorkFile project="11" step={2} path="include/scene.hpp" />
+
+Nối J và L với `setCameraDepth`.
 
 <CourseWorkFile project="11" step={2} path="src/main.cpp" />
 
+Ở bản xem thử XY, dùng điểm sau khi đổi gốc thay vì sửa `scene.point`.
+
+<CourseWorkFile project="11" step={2} path="include/view.hpp" />
+
+Hiện vị trí của mắt cạnh tọa độ world, để thấy chúng là hai dữ liệu độc lập.
+
+<CourseWorkFile project="11" step={2} path="include/presentation.hpp" />
+
 ## Ghép các phần lại
 
-Build lại `project_11_work`, dùng J/L để dời camera X, I/K cho Y, U/O cho Z. Mỗi nấc là 0.1 world, camera bị giới hạn [-2,2] ở từng trục. WASD/QE vẫn điều khiển point. Trong Canvas có ba slider Camera.X/Y/Z tương ứng.
-
-Giữ point cố định và tăng Camera.X: marker đi trái. Tăng Camera.Z hiện chỉ đổi số đo Z vì preview vẫn chưa perspective. Đừng thêm phép chia cho đến bài kế tiếp; ở đây ta đang kiểm riêng việc đổi gốc.
+Giữ nguyên ngôi sao thử. Đưa camera từ Z=0 tới Z=2 rồi lùi lại. Trên Canvas, so `world point` với `camera point`; trong C++, xem giá trị của sao và camera ở đầu cửa sổ. Nếu chấm nằm yên mà các con số đúng, **đó là kết quả mong đợi** ở bài 02.
 
 ## Thử làm sai để hiểu đúng
 
-1. Thử cộng camera.position thay vì trừ. Camera đi phải làm cảnh đi phải cùng chiều. Dùng ví dụ số trong bài để thấy sai trước khi nhìn ảnh, rồi khôi phục.
-
-2. Cho worldPoint và camera cùng tăng 1 theo X. Camera point và ảnh preview phải không đổi. Nếu thay đổi, rất có thể một nơi đã đổi gốc hai lần.
+1. Đảo thứ tự phép trừ. Với mắt tại gốc, ngôi sao phía trước sẽ có độ sâu −4. Trả lại thứ tự đúng trước khi tiếp tục.
+2. Gán kết quả `worldToCamera` ngược vào chính `scene.point` rồi cập nhật vài lần. Tọa độ world cứ giảm dù mắt đã dừng. Hãy giữ kết quả trong biến cục bộ để mỗi khung hình đều bắt đầu từ cùng một ngôi sao.
 
 ## Tự kiểm tra kết quả
 
-- Ví dụ (3,2,8) − (1,-1,2) đúng (2,3,6).
-- cameraToWorld(worldToCamera(P,C),C) trả P trong sai số.
-- Camera đi phải làm cảnh đi trái, world point không đổi.
-- WASD/QE và camera controls không sửa nhầm dữ liệu của nhau.
+- Khi mắt ở Z=2, sao `(1, 0.6, 4)` vẫn giữ nguyên ba tọa độ world; độ sâu tính từ camera bằng 2.
+- Lùi camera về gốc phải phục hồi tọa độ camera ban đầu, không tích lũy sai số qua mỗi lần vẽ.
+- Giải thích được tại sao màn hình bài này vẫn chưa cho cảm giác đang bay.
 
 ## Bài tập mở rộng
 
-Viết test với camera có ba thành phần khác 0. Một test chỉ dùng camera tại origin sẽ không phát hiện lỗi quên trừ vị trí.
+Dự đoán độ sâu của ngôi sao khi mắt lần lượt ở Z=3, Z=4 và Z=5. Ở vị trí nào ta còn có thể đặt một màn hứng ảnh ở phía trước mắt để nhận tia đi tới ngôi sao?
 
-[Sang bài tiếp theo — Vì sao điểm ở xa tiến về tâm?](/projects/perspective-point/03-perspective-divide).
+[Bài tiếp: Vì sao các ngôi sao tỏa ra từ tâm ảnh?](/projects/perspective-point/03-perspective-divide).

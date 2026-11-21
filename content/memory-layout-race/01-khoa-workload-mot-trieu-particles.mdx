@@ -1,44 +1,40 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Nhìn thấy đài phun trước khi tối ưu
+# Dựng một vòi phun từ 256 hạt đứng yên
 
 ## Vấn đề cần giải quyết
 
-Trước khi hỏi AoS hay SoA nhanh hơn, hãy làm ra một đài phun có thể quan sát được. Hạt sinh ở vòi phun, bay lên, rơi xuống rồi được dùng lại. Khi sản phẩm ấy chạy đúng, ta mới đổi cách lưu dữ liệu và đo xem thay đổi đó có ích ở đâu.
+Một giọt vừa ra khỏi miệng vòi, một giọt khác đã gần đến độ cao lớn nhất. Nếu phải vẽ cả hai ngay ở khung hình đầu, làm sao biết đặt chúng ở đâu? Hãy bắt đầu với một vòi: biết vận tốc ban đầu và thời gian mỗi giọt đã bay là đủ để tìm ra vị trí của nó.
 
-Project này độc lập với N-body ở Project 31: không có lực hút giữa các hạt và cũng không cần cây không gian. Ta dùng gravity không đổi, cách tích phân đã gặp ở Project 23 và renderer CPU quen thuộc. Mục tiêu cuối là **một triệu hạt sống được cập nhật thật**, không phải một triệu chấm được cấp phát rồi để yên.
+Mục tiêu hôm nay là **khởi tạo 256 hạt**, chưa cho đồng hồ chạy. Dừng rồi xoay camera: vòi vẫn phải có chiều sâu. Nếu đã mở thử bản C++ cuối, bạn sẽ thấy đồng hồ chạy ngay; hãy nhấn R để quay về một khung đứng yên giống các ảnh đối chiếu. Đến bài sau ta sẽ cho đồng hồ chạy, phát hạt theo thời gian và thử chỉnh độ xòe của vòi.
 
-Bài đầu chỉ dựng trạng thái ban đầu. Khi kết thúc, bạn sẽ thấy một đài phun đứng yên gồm 256 hạt ở các độ tuổi khác nhau, xoay được camera và đọc đúng số lượng hạt. Chuyển động, emission và respawn được nối vào ở bài 02.
+## Hiểu ý tưởng trước khi viết code
 
-## Theo chân một particle
+Tưởng tượng bạn chụp ảnh ngay khi mở vòi. Nếu tất cả các giọt đều vừa ra đời, tấm ảnh chỉ có một chấm ở miệng vòi. Muốn thấy hình dáng của tia nước ngay lúc mở chương trình, ta gán cho mỗi hạt một tuổi ban đầu khác nhau. Hạt có tuổi `a` được đặt ở nơi nó có thể đã bay tới sau `a` giây. Cách khởi tạo này gọi là **warm start**, không có nghĩa chương trình đã chạy ngầm chừng ấy bước.
 
-Một hạt giữ vị trí, vận tốc và tuổi. Ở bài đầu ta chỉ tạo điều kiện ban đầu, chưa cho thời gian tiến; hình warm giúp thấy đài phun ngay khi mở. Thử xoay camera trong Canvas rồi dự đoán field nào được phép đổi.
-
-### Chạy bộ khung trước
-
-Tải ZIP của project và mở terminal tại thư mục có CMakeLists.txt. Gói này đã chứa starter, từng checkpoint, final và tests; không cần ghép source từ các project trước.
-
-Bộ khung cung cấp sẵn window/renderer SDL3, framebuffer, phép chiếu 3D, camera và hàm sinh một hạt. Starter vẽ tám hạt cố định để bạn kiểm tra môi trường. **Đừng tạo lại các struct hay hàm đã có trong starter.** Ta sẽ đọc phần nền cần dùng rồi thay đúng hai chỗ: hàm tạo mảng hạt và Simulation::reset.
-
-```bash title="Terminal — build starter rồi checkpoint 01"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --config Debug --target project_32_starter
-./build/Debug/project_32_starter.exe
-cmake --build build --config Debug --target project_32_checkpoint_1
-./build/Debug/project_32_checkpoint_1.exe
-```
-
-Các đường chạy trên dành cho Visual Studio ở Windows. Với Ninja/macOS/Linux, executable thường ở trực tiếp trong build, không có thư mục Debug; xem [Getting Started](/getting-started) nếu cần chọn compiler hoặc generator. Bạn có thể đối chiếu toàn bộ source checkpoint ở cuối trang, thay vì chép các đoạn dưới vào một file main mới.
+Theo chiều đứng, nếu biết độ cao ban đầu $y_0$, vận tốc ban đầu $v_0$ và gia tốc $g$, ta có $y=y_0+v_0 a+g a^2/2$. Thử lấy $y_0=0$, $v_0=8$ m/s, $g=-10$ m/s². Sau 0,5 s, giọt ở cao 2,75 m và vẫn đi lên với tốc độ 3 m/s. Đó là hai con số khác nhau: một số để vẽ, một số để tính bước tiếp theo.
 
 <InteractiveLab demo="memory-layout-race" mode="layout-scene" />
 
-## Bắt tay xây dựng
+## Viết code từng bước
 
-### Bước 1 — Đọc state của một hạt
+### Mở tám điểm có sẵn trong bộ khung
 
-AoS là viết tắt của Array of Structures: mỗi phần tử của vector chứa toàn bộ thông tin của một hạt. Đây là struct **đã có sẵn** trong include/particles.hpp:
+Tải [ZIP Project 32](/downloads/project-32-memory-layout-race.zip), giải nén rồi mở terminal ở thư mục có `CMakeLists.txt`. Hãy chạy bản khởi đầu trước khi sửa gì:
 
-```cpp title="include/particles.hpp — state của một hạt"
+```bash title="Terminal — tạo bản thực hành và mở cửa sổ SDL3"
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-work --config Release --target project_32_work --parallel 1
+.\build-work\Release\project_32_work.exe
+```
+
+Dòng cuối dành cho Visual Studio trên Windows. Với Ninja hoặc Make trên Linux/macOS, chạy `./build-work/project_32_work`. Lần cấu hình đầu tạo thư mục `work/` từ `starter/`. Từ đây đến hết học phần, chỉ viết vào `work/` và build target `project_32_work`; `checkpoints/` và `final/` là các bản để đối chiếu. Khung đã có cửa sổ SDL3, framebuffer, camera và tám hạt xếp dọc để thử phép chiếu.
+
+### Xem một hạt mang theo những gì
+
+{/* snippet include/particles.hpp#particle-aos */}
+```cpp title="include/particles.hpp — Một phần tử trong mảng hạt"
 struct ParticleAoS {
     std::uint32_t id{};
     std::uint32_t generation{};
@@ -54,19 +50,12 @@ struct ParticleAoS {
 };
 ```
 
-`positionX/Y/Z` là vị trí theo mét, `velocityX/Y/Z` là vận tốc theo m/s. `age` là thời gian đã sống, còn `lifetime` là tuổi thọ tối đa của **lần sinh hiện tại**, đều tính bằng giây. `hue` tạo một chút khác biệt màu; màu chính chuyển từ trắng sang xanh lam theo tỉ lệ age/lifetime.
+`id` là số của ô lưu trữ, không phải số thứ tự lần phun; `generation` sẽ đếm xem ô ấy đã được dùng cho bao nhiêu thế hệ hạt. `age` đếm thời gian kể từ lần sinh gần nhất; `lifetime` cho biết lần này hạt sống bao lâu. Hai số nguyên và chín `float` cho kích thước 44 byte trong chương trình này, được kiểm bằng `static_assert`. Vậy một triệu bản ghi chiếm **44 MB** (thập phân), chưa tính bản sao làm việc.
 
-`id` gắn với slot và không đổi trong suốt chương trình. Khi một hạt hết tuổi thọ, `generation` tăng thêm một: ta tái sử dụng chỗ cũ cho một lần sinh mới, không xóa phần tử khỏi vector. Hai con số này giúp kiểm tra state và tạo lại cùng dữ liệu ngẫu nhiên về sau.
+### Từ tuổi hạt suy ra vị trí trên tia
 
-Source kiểm bằng static_assert rằng struct này chiếm 44 byte: hai uint32 và chín float, mỗi field 4 byte. Một triệu record có payload 44.000.000 byte, tức 44 MB thập phân. Đó **chưa phải tổng RAM ứng dụng**: buffer dự phòng, container khác, framebuffer và SDL còn dùng bộ nhớ riêng. Ta cũng không được lấy 44 byte này làm kích thước một object JavaScript trong Canvas.
-
-### Bước 2 — Tạo điều kiện đầu có thể nhìn rõ
-
-FountainConfig trong bộ khung giữ seed, vị trí emitter, launchSpeed, spread, gravity, lifetime cơ sở và emissionRate. Mặc định vòi phun ở gốc, vận tốc phóng khoảng 9 m/s và gravity là −9,81 m/s². Hàm spawnParticle dùng seed/ID/generation để tạo vận tốc và lifetime cho từng lần sinh.
-
-Nếu khởi tạo mọi hạt ở tuổi 0, tất cả sẽ dồn ở vòi phun trong khung hình đầu. Để nhìn thấy ngay hình dạng đài phun, ta dùng warmParticle, cũng đã có trong starter:
-
-```cpp title="include/particles.hpp — khởi tạo warm, không phải vòng cập nhật"
+{/* snippet include/particles.hpp#warm-particle */}
+```cpp title="include/particles.hpp — Đặt hạt vào khung hình đầu"
 inline ParticleAoS warmParticle(std::uint32_t id, const FountainConfig& config) {
     ParticleAoS particle = spawnParticle(id, 0, config);
     particle.age = randomUnit(config.seed, particle.id, 0, 6) * particle.lifetime;
@@ -79,17 +68,12 @@ inline ParticleAoS warmParticle(std::uint32_t id, const FountainConfig& config) 
 }
 ```
 
-Hàm lấy một tuổi ban đầu trong khoảng từ 0 tới lifetime, rồi dùng công thức ném xiên để đặt vị trí và vận tốc tương ứng:
+`spawnParticle` cung cấp vị trí vòi, vận tốc và tuổi thọ. `warmParticle` chọn tuổi nhỏ hơn tuổi thọ rồi tính vị trí và vận tốc tại tuổi ấy. Số ngẫu nhiên gắn với seed và ID; chương trình không cần phun thử rồi chờ vài giây mới chụp được cùng khung hình.
 
-$$
-y = v_{y,0}a + \frac{1}{2}ga^2,\qquad v_y = v_{y,0} + ga.
-$$
+### Tự điền mảng rồi giao cho bộ vẽ
 
-Ở đây `a` là tuổi hạt lúc khởi tạo, **không phải gia tốc**. Công thức chỉ tạo điều kiện đầu một lần. Từ bài sau, mỗi bước mô phỏng sẽ cập nhật state bằng solver; không gọi lại warmParticle theo thời gian để giả làm chuyển động.
-
-Giờ thay phần thân makeParticlesAoS trong starter bằng phiên bản sau:
-
-```cpp title="include/particles.hpp — tạo các record AoS thật"
+{/* snippet include/particles.hpp#make-particles-aos */}
+```cpp title="include/particles.hpp — Tạo đúng số ô nhưng chỉ khởi tạo hạt sống khi cần"
 inline std::vector<ParticleAoS> makeParticlesAoS(std::size_t count, const FountainConfig& config, bool warm = true) {
     validateConfig(config);
     if (count < 1 || count > maximumParticles) {
@@ -106,66 +90,36 @@ inline std::vector<ParticleAoS> makeParticlesAoS(std::size_t count, const Founta
 }
 ```
 
-`count` là số slot cấp phát. Vòng lặp gán ID bằng index; nhánh warm tạo một trạng thái nhìn được ngay, còn nhánh không warm để slot chờ emitter. Giới hạn một triệu được kiểm **trước** cấp phát. Tùy chọn warm không làm thay đổi số slot và cũng không quyết định bao nhiêu slot đang sống; việc đó thuộc Simulation.
+Trong `work/include/particles.hpp`, thay cách điền tám điểm dọc trục bằng một vòng qua toàn bộ mảng. Nhánh `warm` quyết định khởi tạo ngay hay chỉ ghi ID cho ô trống.
 
-### Bước 3 — Nối mảng vào chương trình
+<CourseWorkFile project="32" step={1} path="include/particles.hpp" />
 
-Thay phương thức reset trong struct Simulation ở include/simulation.hpp:
+Tiếp đến, sửa `Simulation::reset` trong `work/include/simulation.hpp`: với chế độ warm, số hạt sống bằng số ô; với chế độ cold, chưa có hạt sống. Cả hai đều phải đặt thời gian và số hạt đã cập nhật về 0. Đừng thay vòng vẽ để ép nó hiện thêm điểm.
 
-```cpp title="include/simulation.hpp — đặt lại dữ liệu và các bộ đếm"
-void reset(std::size_t requested, bool coldStart = false) {
-    validateConfig(config);
-    aos = makeParticlesAoS(requested, config, !coldStart);
-    count = requested;
-    cold = coldStart;
-    active = count;
-    if (cold) {
-        active = 0;
-    }
-    layout = Layout::aos;
-    nextAoS.clear();
-    pending = PendingWork::none;
-    paused = true;
-    singleStep = false;
-    steps = 0;
-    time = emissionRemainder = 0;
-    updated = committedUpdated = born = respawned = cursor = 0;
-    copyMs = updateMs = conversionMs = wholeStepMs = 0;
-    if (cold) {
-        notice = "Cold start: emission adds stable slots";
-    } else {
-        notice = "Warm start: every allocated slot is alive";
-    }
-}
+<CourseWorkFile project="32" step={1} path="include/simulation.hpp" />
+
+## Ghép các phần lại
+
+```bash title="Terminal — biên dịch chương trình trong work/"
+cmake --build build-work --config Release --target project_32_work --parallel 1
+.\build-work\Release\project_32_work.exe
 ```
 
-`count` là số slot đã cấp phát; `active` là số slot sống ở đầu vector. Khởi đầu warm có active bằng count, còn coldStart có active bằng 0 để emitter phát dần từ bài sau. Reset đưa thời gian và các bộ đếm về 0, hủy tác vụ dở và luôn tạm dừng, để bạn có thể kiểm tra trước khi chạy.
+Kiểm ba con số ở khung đầu: `allocated = 256`, `alive = 256`, `updated = 0`. Bộ vẽ đọc vị trí đã có; **chưa có bước vật lý** nào hoàn tất. Vì vậy, dù nhìn thấy cả đoạn giọt đi lên lẫn đoạn chúng rơi xuống, hình vẫn đứng yên.
 
-## Chạy checkpoint và đọc kết quả
+## Thử làm sai để hiểu đúng
 
-runApplication trong include/application.hpp đã gọi `simulation.reset(256)` rồi truyền simulation cho drawFountain mỗi frame. drawFountain chỉ **đọc** các hạt để chiếu/vẽ; kéo camera không sửa vị trí thế giới. Trong checkpoint này chưa gọi solver, nên camera đổi góc nhưng state phải đứng yên.
-
-Canvas dùng cùng tên field và công thức float32 để giải thích mô hình. Các preset web tối đa 20.000 hạt; **không có preset web một triệu hạt giả**. Với preset lớn của bản C++, renderer chọn tối đa 40.000 hạt theo cách tái lập để vẽ, còn solver ở các bài sau vẫn cập nhật đủ mọi hạt sống.
-
-## Cố tình làm sai
-
-Trước khi chạy, dự đoán allocated/alive/updated. Checkpoint 01 cần 256/256/0: mọi slot sống nhưng chưa có bước vật lý hoàn tất.
-
-1. Tạm bỏ nhánh gọi warmParticle, chỉ giữ gán ID rồi build lại. Mảng vẫn đủ record nhưng các hạt dồn về vị trí mặc định; lỗi nằm ở điều kiện đầu, không phải camera. Khôi phục nhánh warm trước khi tiếp tục.
-2. Tạm gán active = 0 trong reset cho preset warm. Allocated vẫn là 256 nhưng viewport không còn hạt sống để vẽ. Khôi phục active theo cold/count và kiểm lại ba bộ đếm.
-
-Sau đó xoay/pan/zoom. Age, generation và position thế giới không được đổi chỉ vì camera đổi. Việc hình trên màn hình di chuyển chưa chứng minh solver hoạt động.
+1. Tạm cho mọi hạt cùng `age = 0` trong `warmParticle` rồi build lại. Nếu cả 256 hạt trở thành một chấm, nơi cần sửa là điều kiện đầu, không phải kích thước pixel. Trả lại tuổi đã lấy mẫu.
+2. Giữ nguyên mảng nhưng thử đặt số hạt sống bằng 0 khi reset ở chế độ warm. 256 ô vẫn còn, song bộ vẽ không được lấy hạt nào. Khôi phục số hạt sống và kiểm lại cả ba bộ đếm.
 
 ## Tự kiểm tra kết quả
 
-- Starter mở cửa sổ và cho thao tác camera; checkpoint 01 hiện đài phun đứng yên với allocated = alive = 256.
-- Cùng preset và seed cho cùng ID, position, velocity, age/lifetime và hue sau mỗi lần reset.
-- Updated bằng 0, thời gian mô phỏng bằng 0; không diễn giải hình warm thành các bước đã chạy.
-- Mọi field hữu hạn, age không âm và nhỏ hơn lifetime; quay camera không thay chúng.
-- Bạn phân biệt được slot cấp phát, hạt sống, hạt được cập nhật và hạt thực sự vẽ sau culling.
+- Chương trình do bạn build từ `work/` đi từ tám điểm thẳng hàng đến một vòi 256 hạt.
+- Đặt lại hai lần với cùng seed cho cùng một hình ở cùng góc nhìn.
+- Xoay camera chỉ đổi ảnh; thời gian, số hạt sống và số đã cập nhật không đổi.
 
 ## Bài tập mở rộng
 
-Đổi seed nhưng giữ cấu hình còn lại. So hai lần khởi tạo của cùng seed và hai seed khác nhau: điều gì phải lặp lại, điều gì có thể khác? Thử thay launchSpeed rồi reset; đừng sửa renderer để “kéo cao” đài phun.
+Nếu tăng gấp đôi vận tốc phóng, độ cao cực đại sẽ tăng gấp đôi hay gấp bốn (giữ nguyên trọng lực)? Dự đoán bằng trường hợp một hạt trước, rồi đổi thông số và reset. Đừng dùng hạt có tuổi thọ quá ngắn để kiểm độ cao cực đại: có thể nó chưa kịp lên đến đó.
 
-Bài tiếp theo: [Phát hạt, cho rơi và tái sử dụng slot](/projects/memory-layout-race/02-cap-nhat-particles-trong-aos).
+Học tiếp: [Từ miệng vòi đến màn giọt rơi](/projects/memory-layout-race/02-cap-nhat-particles-trong-aos).

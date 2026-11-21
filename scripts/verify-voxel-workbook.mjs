@@ -21,7 +21,7 @@ const option = workbookOption(id);
 const project = loadProjectCatalog().find((p) => p.id === id && option);
 if (!project || !sdlDirectory || !existsSync(path.join(sdlDirectory, "SDL3Config.cmake")))
   throw Error(
-    "Usage: node --experimental-strip-types scripts/verify-voxel-workbook.mjs <11|31|52..64> <installed SDL3 3.4.8 CMake directory>",
+    "Usage: node --experimental-strip-types scripts/verify-voxel-workbook.mjs <11|31|32|52..64> <installed SDL3 3.4.8 CMake directory>",
   );
 const sdl = realpathSync(sdlDirectory);
 const archive = path.join(workspace, "public", "downloads", project.sourceDirectory + ".zip");
@@ -150,6 +150,12 @@ try {
       "if (false)",
       "counting the target as its own source",
     ],
+    32: [
+      "include/particles.hpp",
+      "particle.generation + 1, config",
+      "particle.generation, config",
+      "reusing a slot without starting a new generation",
+    ],
     58: ["include/trail/surface.hpp", "face < 6", "face < 5", "five-sided cube"],
   }[id];
   if (mistake) {
@@ -171,6 +177,7 @@ try {
     assert.match(rejected, /0% tests passed/);
     if (id === "11") assert.match(rejected, /FAIL: independent analytic pixel/);
     if (id === "31") assert.match(rejected, /FAIL: skip exactly one target ID/);
+    if (id === "32") assert.match(rejected, /FAIL: inspected slot survives its next birth/);
     assert.equal(textAt(path.join(scratch, "final"), file), good.trimEnd().replaceAll("\r", ""));
     console.log(id + ": " + label + " in work/ rejected; bundled final/ unchanged.");
   }

@@ -35,52 +35,55 @@ export function ProjectionControls({
 }: ProjectionControlsProps) {
   return (
     <div className="lab-controls">
-      <label>
-        Preset
-        <select aria-label="Điểm mẫu" value="" onChange={(e) => reset(Number(e.target.value))}>
-          <option value="" disabled>
-            Chọn thí nghiệm
-          </option>
-          {["Mặc định", "Xa gấp đôi", "Trước near", "Sau camera", "Vượt far", "Ngoài khung"]
-            .slice(0, stage < 3 ? 2 : 6)
-            .map((name, i) => (
-              <option key={i} value={i}>
-                {name}
-              </option>
-            ))}
-        </select>
-      </label>
-      {(["x", "y", "z"] as const).map((axis) => (
-        <label key={axis}>
-          Point.{axis.toUpperCase()}
+      {stage >= 2 && (
+        <label>
+          Vị trí camera (Z)
           <input
             type="range"
-            aria-label={`Point.${axis.toUpperCase()}`}
-            min={axis === "z" ? -2 : -6}
-            max={axis === "z" ? 20 : 6}
+            aria-label="Camera.Z"
+            min="0"
+            max="12"
             step=".05"
-            value={scene.point[axis]}
-            onChange={(e) => editPoint(axis, Number(e.target.value))}
+            value={scene.camera.position.z}
+            onChange={(event) => editCamera("z", Number(event.target.value))}
           />
-          <output>{scene.point[axis].toFixed(3)}</output>
+          <output>{scene.camera.position.z.toFixed(2)}</output>
         </label>
-      ))}
-      {stage >= 2 &&
-        (["x", "y", "z"] as const).map((axis) => (
-          <label key={axis}>
-            Camera.{axis.toUpperCase()}
-            <input
-              type="range"
-              aria-label={`Camera.${axis.toUpperCase()}`}
-              min="-2"
-              max="2"
-              step=".1"
-              value={scene.camera.position[axis]}
-              onChange={(e) => editCamera(axis, Number(e.target.value))}
-            />
-            <output>{scene.camera.position[axis].toFixed(2)}</output>
+      )}
+      {(stage < 8 || scene.debug) && (
+        <>
+          <label>
+            Sao thử
+            <select aria-label="Điểm mẫu" value="" onChange={(e) => reset(Number(e.target.value))}>
+              <option value="" disabled>
+                Chọn thí nghiệm
+              </option>
+              {["Mặc định", "Xa gấp đôi", "Trước near", "Sau camera", "Vượt far", "Ngoài khung"]
+                .slice(0, stage < 3 ? 2 : 6)
+                .map((name, i) => (
+                  <option key={i} value={i}>
+                    {name}
+                  </option>
+                ))}
+            </select>
           </label>
-        ))}
+          {(["x", "y", "z"] as const).map((axis) => (
+            <label key={axis}>
+              Point.{axis.toUpperCase()}
+              <input
+                type="range"
+                aria-label={`Point.${axis.toUpperCase()}`}
+                min={axis === "z" ? -2 : -6}
+                max={axis === "z" ? 20 : 6}
+                step=".05"
+                value={scene.point[axis]}
+                onChange={(e) => editPoint(axis, Number(e.target.value))}
+              />
+              <output>{scene.point[axis].toFixed(3)}</output>
+            </label>
+          ))}
+        </>
+      )}
       {stage >= 4 && (
         <>
           <label>
@@ -113,6 +116,7 @@ export function ProjectionControls({
         </>
       )}
       {stage >= 5 &&
+        (stage < 8 || scene.debug) &&
         (["nearPlane", "farPlane"] as const).map((key) => (
           <label key={key}>
             {key === "nearPlane" ? "Near plane" : "Far plane"}
@@ -131,9 +135,12 @@ export function ProjectionControls({
       {stage >= 6 && (
         <>
           <button onClick={togglePause} disabled={reducedMotion}>
-            {scene.paused ? "Cho điểm bay" : "Tạm dừng"}
+            {scene.paused ? "Cho bay tự động" : "Tạm dừng"}
           </button>
-          <button disabled={!scene.paused} onClick={step}>
+          <button
+            disabled={!scene.paused || scene.forwardHeld || scene.backwardHeld}
+            onClick={step}
+          >
             Tiến 0.1 s
           </button>
         </>

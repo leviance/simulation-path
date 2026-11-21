@@ -1,62 +1,47 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Giải thích dữ liệu mà vòng lặp chạm tới
+# CPU phải đọc bao nhiêu để sửa một con số?
 
 ## Vấn đề cần giải quyết
 
-Hai layout đã cho cùng kết quả. Vậy vì sao một vòng lặp chỉ sửa velocityY có thể hưởng lợi từ SoA, trong khi toàn vòng đời chưa chắc như vậy?
+Hãy nhìn vào vòng cộng trọng lực: nó chỉ sửa một số thực, `velocityY`, cho mỗi giọt. Vậy nếu có 64 giọt, cả hai cách lưu đều sửa đúng 256 byte. Tại sao chúng vẫn có thể mất thời gian khác nhau?
 
-Ta sẽ vẽ đường đi qua **địa chỉ dữ liệu** trước khi giải thích timing. Bài này thêm một mô hình đếm cache line, không thêm solver và cũng không đọc bộ đếm phần cứng. Nó giúp đặt giả thuyết; benchmark Release ở bài 07 mới cho bằng chứng trên máy thật.
+Đặt hình đài phun sang một bên trong ít phút. Việc của bài này là đánh dấu **những vùng địa chỉ** chứa 64 con số ấy. Ta chưa đo tốc độ và cũng không đọc được bộ đếm cache miss của phần cứng từ phép tính này.
 
-## Đi qua thuật toán bằng một ví dụ nhỏ
+## Hiểu ý tưởng trước khi viết code
 
-### Giả định trước khi đếm
+Hãy kẻ các vạch tại byte 0, 64, 128, 192…; mỗi khoảng là một `cache line` của mô hình. Ta **giả sử** mảng bắt đầu đúng một vạch (aligned base). Với AoS, mỗi hạt chiếm 44 byte; trong struct này, `velocityY` ở byte 24. Với SoA, cột `velocityY` là một dãy `float` liền nhau bắt đầu từ byte 0.
 
-Mô hình chọn line 64 byte và giả sử base của từng mảng nằm đúng biên 64 byte. Đây là **giả định của phép tính**, không phải lời khẳng định mọi CPU có line như vậy hoặc std::vector luôn được cấp phát thẳng hàng 64 byte.
+| Hạt | Byte chứa `velocityY` ở AoS | Line AoS | Byte chứa `velocityY` ở SoA | Line SoA |
+| --- | ---: | ---: | ---: | ---: |
+| 0 | 24 | 0 | 0 | 0 |
+| 1 | 68 | 1 | 4 | 0 |
+| 2 | 112 | 1 | 8 | 0 |
+| 3 | 156 | 2 | 12 | 0 |
 
-Với struct đã kiểm sizeof = 44, velocityY nằm ở offset 24. Địa chỉ tương đối của field này trong hạt i là:
-
-$$
-A_{\text{AoS}}(i)=24+44i,\qquad A_{\text{SoA}}(i)=4i.
-$$
-
-Chia địa chỉ cho 64 rồi lấy phần nguyên sẽ cho số hiệu line trong mô hình. AoS có stride 44 byte giữa hai velocityY; SoA có stride 4 byte. Tất cả field vẫn tồn tại, chỉ các byte được kernel chạm tới khác nhau.
-
-Thử tính bằng tay trước khi bấm chạy:
-
-| i | AoS: byte offset / line | SoA: byte offset / line |
-| --- | --- | --- |
-| 0 | 24 / 0 | 0 / 0 |
-| 1 | 68 / 1 | 4 / 0 |
-| 2 | 112 / 1 | 8 / 0 |
-| 3 | 156 / 2 | 12 / 0 |
-
-Bốn phần tử đầu chưa đủ để kết luận speedup. Nhưng chúng cho thấy khác biệt về độ liền nhau khi chỉ cần một field.
+Hạt 1 và 2 ở AoS chung một line, nên đếm **mỗi hạt một line** sẽ sai. Hãy thử kéo dài bảng tới hạt 63: với SoA, cứ 16 vận tốc mới sang vạch tiếp theo. Bạn có cần xem hình đài phun hoặc chạy đồng hồ để trả lời câu hỏi về địa chỉ này không?
 
 <InteractiveLab demo="memory-layout-race" mode="cache-lines" />
 
-## Bắt tay xây dựng
+## Viết code từng bước
 
-### Bước 1 — Khai báo kết quả của mô hình
+### Chọn ba số cần trả về
 
-Trong include/benchmark.hpp, thêm TrafficModel sau BenchmarkJob:
-
-```cpp title="include/benchmark.hpp — số byte và line theo giả định"
+{/* snippet include/benchmark.hpp#traffic-fields */}
+```cpp title="include/benchmark.hpp — Ba đại lượng để đọc kết quả bằng đúng đơn vị"
 struct TrafficModel {
     std::size_t usefulBytes{}, uniqueLines{}, loadedBytes{};
     bool upperBound{};
 };
 ```
 
-`usefulBytes` đếm byte của các field khác nhau mà mô hình quan tâm; **không cộng riêng lần đọc và lần ghi**. `uniqueLines` đếm line khác nhau bao phủ chúng; `loadedBytes` bằng uniqueLines × 64.
+`usefulBytes` đếm các byte chứa trường cần dùng, `uniqueLines` đếm bao nhiêu khối địa chỉ khác nhau chứa chúng, còn `loadedBytes` là dung lượng **suy ra từ mô hình** bằng số line nhân 64. Tên `loadedBytes` không biến nó thành lượng dữ liệu thực tế đã đi qua RAM. Cờ `upperBound` sẽ nhắc ta khi nào chỉ có một cận trên.
 
-Tên loadedBytes không có nghĩa đó là số byte thật lấy từ RAM. Cache có nhiều tầng, line có thể đã ở cache, và ghi còn có write-allocate/writeback. Ta chưa đo các chi phí ấy. `upperBound` nhắc rằng ở workload đầy đủ, phép đếm mọi field chỉ là một cận trên.
+### Dùng kích thước và độ dời của chính kiểu C++
 
-### Bước 2 — Tính một field, rồi nhìn toàn vòng đời
-
-Thêm modelTraffic:
-
-```cpp title="include/benchmark.hpp — đếm địa chỉ, không giả làm cache profiler"
+{/* snippet include/benchmark.hpp#model-traffic */}
+```cpp title="include/benchmark.hpp — Lần theo địa chỉ chứ không đếm cache miss"
 inline TrafficModel modelTraffic(std::size_t count, Layout layout, MemoryWorkload workload) {
     if (count > maximumParticles)
         throw std::invalid_argument("Traffic model budget");
@@ -86,65 +71,49 @@ inline TrafficModel modelTraffic(std::size_t count, Layout layout, MemoryWorkloa
 }
 ```
 
-Nhánh gravityOnly có usefulBytes = 4 × N. Trong AoS, stride 44 nhỏ hơn line 64 nên dãy địa chỉ đi qua các line liên tiếp từ line đầu tới line cuối; công thức dùng offsetof thay vì ghi cứng offset trong code. Trong SoA, một mảng float liên tục cần làm tròn lên N × 4 / 64 line.
+`offsetof(ParticleAoS, velocityY)` lấy độ dời từ kiểu thực tế thay vì viết cứng 24. Trong AoS, hai địa chỉ liên tiếp cách 44 byte, nhỏ hơn một line; vì thế từ line đầu đến line cuối không có line trống bị nhảy qua. Ở SoA, tính số line cho $4N$ byte liên tiếp bằng phép chia làm tròn lên. Trường hợp $N=0$ phải trả 0 trước khi dùng $N-1$.
 
-Ví dụ N = 64: AoS trải 44 line, SoA trải 4 line cho velocityY; usefulBytes của cả hai là 256 byte. **44/4 không phải speedup 11 lần.** Phép đếm không biết compiler vectorize thế nào, data đang ở đâu trong cache, chi phí nhánh hay đồng hồ.
+Còn khi tiến trọn vòng đời, hạt đang bay không phải lúc nào cũng cần đọc ID, thế hệ hay màu. Đếm đủ mười một trường là **cận trên** của số line trong mô hình giả định, không phải lời hứa rằng CPU sẽ đọc đủ số byte ấy từ RAM.
 
-Nhánh fullLifecycle giả sử chạm đủ mười một field. AoS trải vùng 44 × N byte; SoA có mười một mảng, mỗi mảng làm tròn line riêng. Với N nhỏ, phần line chưa đầy ở cuối từng mảng có thể làm SoA đếm nhiều line hơn.
+<CourseWorkFile project="32" step={6} path="include/benchmark.hpp" />
 
-Quan trọng hơn, kernel thật không đọc/ghi ID, generation và hue ở mọi hạt trong mọi bước. Chúng chủ yếu liên quan nhánh sinh lại. Vì vậy nhánh này đặt upperBound = true: không được đem nó làm một phép đếm chính xác cache miss của cả vòng đời.
+### Đối chiếu với bài tính tay
 
-### Bước 3 — Nối mô hình vào báo cáo
-
-Trong vòng render ở include/application.hpp, sau phần số liệu benchmark, thêm:
-
-```cpp title="include/application.hpp — hiện giả định cùng số liệu"
-if (showReports) {
-    const auto traffic = lab::modelTraffic(simulation.count, simulation.layout, workload);
-    const char* trafficScope = "gravity-only";
-    if (traffic.upperBound) {
-        trafficScope = "ALL-FIELD UPPER BOUND";
-    }
-    SDL_RenderDebugTextFormat(renderer, 12, 155, "64B aligned-base model: useful=%zu B uniqueLines=%zu loaded=%zu B %s; NOT measured cache misses", traffic.usefulBytes, traffic.uniqueLines, traffic.loadedBytes, trafficScope);
-}
+{/* snippet tests/tests.cpp#traffic-64 */}
+```cpp title="tests/tests.cpp — Một ca có thể kiểm bằng bút và giấy"
+const auto aos = lab::modelTraffic(64, lab::Layout::aos, lab::MemoryWorkload::gravityOnly);
+const auto soa = lab::modelTraffic(64, lab::Layout::soa, lab::MemoryWorkload::gravityOnly);
+check(aos.usefulBytes == 256 && aos.uniqueLines == 44 && soa.uniqueLines == 4, "hand-counted 64B aligned-base model");
 ```
 
-`trafficScope` chọn nhãn từ kết quả mô hình: chỉ khi `upperBound` bật mới hiện “ALL-FIELD UPPER BOUND”. Biến này không tham gia công thức đếm line; nó giúp luôn đưa giả định của phép đếm lên màn hình cùng số liệu.
+Trước khi xem kết quả trên cửa sổ, tự làm phép chia cuối: byte $24+63\cdot44=2796$ nằm ở line 43. Tính cả line số 0, AoS chạm **44 line**; SoA chạm **4 line**. Cả hai đều dùng đúng 256 byte hữu ích. Fixture này có sẵn trong gói để kiểm bản hoàn thiện, không phải đoạn dán vào vòng lặp C++.
 
-Phím T đổi workload dành cho phép đo; F hiện/ẩn reports. Chọn layout chỉ đổi cách modelTraffic tính địa chỉ. Phần này không sửa state, không đổi số hạt được mô phỏng và không khởi chạy benchmark ngầm.
+Trong `work/include/application.hpp`, đưa kết quả `modelTraffic` vào phần báo cáo, đặt giả định “64 B, aligned base” cạnh số liệu. Không ghi nhãn `cache misses` cho `uniqueLines`.
 
-Đài phun vẫn là viewport chính. Bảng địa chỉ và số line là phần giải thích bổ trợ, không thay ứng dụng bằng một dải ô bộ nhớ.
+<CourseWorkFile project="32" step={6} path="include/application.hpp" />
 
-Trong Canvas, xem bảng field của slot đang chọn rồi đổi AoS/SoA. Cột địa chỉ tương đối cho biết field nằm trong record hay mảng riêng. Chọn gravity-only và tính tay lại số line ở N đang dùng. Đây là mô hình **C++**; object JavaScript không được tuyên bố có record 44 byte.
+## Ghép các phần lại
 
-## Chạy checkpoint và đọc kết quả
-
-```bash title="Terminal — checkpoint 06"
-cmake --build build --config Debug --target project_32_checkpoint_6
-./build/Debug/project_32_checkpoint_6.exe
+```bash title="Terminal — biên dịch chương trình trong work/"
+cmake --build build-work --config Release --target project_32_work --parallel 1
+.\build-work\Release\project_32_work.exe
 ```
 
-## Cố tình làm sai
+Trong Canvas, so hai cách lưu ở cùng N và `gravity-only`. Trong C++, mở phần báo cáo bằng **F**, dùng **T** để đổi workload. Hình nước không đổi: ta mới gắn thêm cách giải thích phép đo, chưa đổi thuật toán mô phỏng.
 
-Trước khi đổi sang full lifecycle, dự đoán lợi thế ít byte thừa có còn rõ như chỉ sửa một field không. Chưa gán tỉ số tốc độ.
+## Thử làm sai để hiểu đúng
 
-1. Tạm bỏ nhãn upper bound và diễn giải loadedBytes là số byte thật lấy từ RAM. Đối chiếu các field mà nhánh respawn chạm tới; bạn không có hardware counter để chứng minh câu đó. Khôi phục nhãn và phạm vi mô hình.
-2. Tạm coi tỉ số 44/4 line của ví dụ N = 64 là speedup 11 lần. Kiểm bằng timing ở bài sau; kết quả không bị buộc phải bằng 11 vì mô hình chưa chứa compiler, cache state và chi phí lệnh. Bỏ kết luận tốc độ khỏi phép đếm địa chỉ.
-
-Nếu thử alignment lệch, hãy xây mô hình có offset base riêng; không giữ công thức aligned rồi coi nó chính xác.
+1. Thay khoảng cách giữa hai `velocityY` ở AoS bằng `sizeof(float)`. Ca 64 hạt bỗng báo 4 line ở cả hai bên. Vẽ lại địa chỉ hạt số 1 trên bảng để tìm sai lầm, rồi trả stride về `sizeof(ParticleAoS)`.
+2. Trên giấy, dịch điểm bắt đầu của cột SoA sang byte 32. 64 số thực liên tiếp giờ trải từ byte 32 tới 287, chạm **5** line. Công thức ban đầu không bỗng sai; bạn vừa thay giả định căn hàng. Đừng sửa fixture cũ thành 5.
 
 ## Tự kiểm tra kết quả
 
-- N = 64 và gravity-only cho usefulBytes = 256, AoS 44 line, SoA 4 line theo giả định.
-- Source dùng sizeof/offsetof, không rút ParticleAoS về sáu float để ra con số cũ.
-- Báo cáo ghi line 64 B và aligned base, không gọi đó là cache miss đã đo.
-- Full lifecycle được đánh dấu cận trên; bạn giải thích được nhánh respawn khác truy cập thông thường.
-- LoadedBytes không bị hiểu thành lưu lượng RAM thực tế hoặc tổng đọc + ghi.
-- Thao tác model/report không làm time, state hoặc updated thay đổi.
-- Không suy speedup trực tiếp từ tỉ số line.
+- Tính lại được trường hợp 64 hạt bằng địa chỉ và giải thích vì sao 44/4 **không** phải dự đoán SoA nhanh gấp 11 lần.
+- Với N bằng 0, không có line nào được tính; với full lifecycle, báo cáo ghi rõ đây là cận trên.
+- Nhận biết giới hạn: cache line có thể đã nằm trong cache, allocator có thể đặt mảng lệch biên, compiler có thể tối ưu hai vòng lặp khác nhau.
 
 ## Bài tập mở rộng
 
-Tính số line cho SoA ở N = 1 và N = 16 khi mô hình chạm đủ mọi field. So với AoS và giải thích phần làm tròn cuối từng mảng. Sau đó dự đoán một ca full lifecycle có thể không nhanh hơn ở SoA, để kiểm bằng bài tiếp theo.
+Tính số line cho cột `velocityY` khi N tăng từ 16 lên 17. Dự đoán cách tăng của SoA và của AoS trên cùng đồ thị. Sang bài sau ta sẽ đặt kết quả đo Release cạnh giả thuyết này; đừng sửa giả thuyết sau khi đã thấy số đo.
 
-Bài tiếp theo: [Đo Release và giữ cả kết quả không nhanh hơn](/projects/memory-layout-race/07-benchmark-va-scaling-release).
+Học tiếp: [Đo cả những lần SoA chậm hơn](/projects/memory-layout-race/07-benchmark-va-scaling-release).

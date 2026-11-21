@@ -1,6 +1,9 @@
 #pragma once
 #include "framebuffer.hpp"
 #include "scene.hpp"
+#if LAB_CHECKPOINT >= 5
+#include "starfield.hpp"
+#endif
 
 namespace lab {
 inline bool clipScreen(Vec2& start, Vec2& end, const Viewport& viewport) {
@@ -35,7 +38,6 @@ inline bool clipScreen(Vec2& start, Vec2& end, const Viewport& viewport) {
 }
 
 #if LAB_CHECKPOINT >= 5
-constexpr double kRunwayFloor = -1.5;
 
 inline void drawScreenSegment(Framebuffer& image, Vec2 from, Vec2 to, const Viewport& viewport, std::uint32_t color) {
     if (!clipScreen(from, to, viewport)) {
@@ -73,55 +75,10 @@ inline void line3D(Framebuffer& image, Vec3 start, Vec3 end, const Scene& scene,
     drawScreenSegment(image, *a.screen, *b.screen, viewport, color);
 }
 
-inline void drawDepthScene(Framebuffer& image, const Scene& scene) {
-    constexpr std::uint32_t rail = 0x426474FFu;
-    constexpr std::uint32_t reflector = 0x75C9D1FFu;
-
-    // Mỗi ô sàn rộng một đơn vị. Cả vạch giữa lẫn hai mép đường đều nằm trên sàn.
-    for (int x = -4; x <= 4; ++x) {
-        const double position = static_cast<double>(x);
-        line3D(image, {position, kRunwayFloor, 1.0}, {position, kRunwayFloor, 16.0}, scene, kGrid);
-    }
-    for (int z = 1; z <= 16; ++z) {
-        const double depth = static_cast<double>(z);
-        line3D(image, {-4.0, kRunwayFloor, depth}, {4.0, kRunwayFloor, depth}, scene, kGrid);
-        if (z < 16) {
-            line3D(image, {0.0, kRunwayFloor, depth}, {0.0, kRunwayFloor, depth + 0.45}, scene, kGhost);
-        }
-    }
-    for (double side : {-1.0, 1.0}) {
-        const double edge = side * 1.90;
-        line3D(image, {edge, kRunwayFloor, 1.0}, {edge, kRunwayFloor, 16.0}, scene, rail);
-    }
-
-    // Dựng cùng một cổng bốn lần: chỉ thay Z, không tự thu nhỏ cổng ở xa.
-    for (double z : {2.0, 4.0, 8.0, 12.0}) {
-        line3D(image, {-1.55, 1.10, z}, {1.55, 1.10, z}, scene, kGhost);
-        for (double side : {-1.0, 1.0}) {
-            const double post = side * 1.90;
-            const double shoulder = side * 1.55;
-            line3D(image, {post, kRunwayFloor, z}, {post, 0.75, z}, scene, kGhost);
-            line3D(image, {post, 0.75, z}, {shoulder, 1.10, z}, scene, reflector);
-            line3D(image, {post, kRunwayFloor, z}, {side * 1.63, kRunwayFloor, z}, scene, reflector);
-        }
-    }
-
-    // Đặt bộ trục ở chân cổng thứ hai: nhìn được cả trục Z vì nó lệch trục nhìn.
-    if (scene.debug) {
-        const Vec3 foot{-1.90, kRunwayFloor, 4.0};
-        line3D(image, foot, {-1.35, kRunwayFloor, 4.0}, scene, kAxisX);
-        line3D(image, foot, {-1.90, kRunwayFloor + 0.55, 4.0}, scene, kAxisY);
-        line3D(image, foot, {-1.90, kRunwayFloor, 4.55}, scene, kAxisZ);
-    }
-}
-
-inline void drawPlumbLine(Framebuffer& image, const Scene& scene) {
-    // Chân đường dóng giữ nguyên X và Z của đèn; chỉ thay Y bằng cao độ mặt sàn.
-    const Vec3 foot{scene.point.x, kRunwayFloor, scene.point.z};
-    constexpr std::uint32_t guide = 0x967B55FFu;
-    line3D(image, scene.point, foot, scene, guide);
-    line3D(image, {foot.x - 0.10, foot.y, foot.z}, {foot.x + 0.10, foot.y, foot.z}, scene, guide);
-    line3D(image, {foot.x, foot.y, foot.z - 0.10}, {foot.x, foot.y, foot.z + 0.10}, scene, guide);
+inline void drawProbeRadius(Framebuffer& image, const Scene& scene) {
+    // Đo từ trục nhìn tới sao, trong mặt phẳng có cùng Z với sao.
+    const Vec3 axis{scene.camera.position.x, scene.camera.position.y, scene.point.z};
+    line3D(image, axis, scene.point, scene, 0x55778FFFu);
 }
 #endif
 #if LAB_CHECKPOINT >= 8
@@ -181,13 +138,16 @@ inline void renderScene(Framebuffer& image, const Scene& scene) {
     [[maybe_unused]] const Vec2 center{viewport.x + viewport.width * 0.5, viewport.y + viewport.height * 0.5};
 #if LAB_CHECKPOINT >= 3
 #if LAB_CHECKPOINT >= 5
-    drawDepthScene(image, scene);
+    drawStarfield(image, scene, viewport);
+#if LAB_CHECKPOINT >= 8
+    if (!scene.debug) return;
+#endif
 #endif
     const auto projected = projectPerspective(scene.point, scene.camera, scene.lens, viewport);
     if (projected.status == ProjectionStatus::Visible && projected.screen) {
 #if LAB_CHECKPOINT >= 5
         if (scene.debug) {
-            drawPlumbLine(image, scene);
+            drawProbeRadius(image, scene);
         }
 #endif
         // Bán kính world 0.12, vị trí cũng được chiếu perspective; không giả depth bằng size.

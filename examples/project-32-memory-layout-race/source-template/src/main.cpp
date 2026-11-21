@@ -6,7 +6,8 @@ namespace {
 #if LAB_CHECKPOINT >= 3
 int runBenchmark() {
     lab::BenchmarkJob job{};
-    job.start({}, {10'000, 100'000, 1'000'000}, {lab::MemoryWorkload::gravityOnly, lab::MemoryWorkload::fullLifecycle});
+    lab::FountainConfig config{};
+    job.start(config, {10'000, 100'000, 1'000'000}, {lab::MemoryWorkload::gravityOnly, lab::MemoryWorkload::fullLifecycle});
     while (job.active)
         job.tick();
     if (job.timedOut) {
@@ -46,6 +47,9 @@ int main(int argc, char** argv) {
     bool smoke = false;
     bool workflow = false;
     bool benchmark = false;
+    float initialSpread = 2.0F;
+    const char* capturePath = nullptr;
+    int station = 1;
     for (int index = 1; index < argc; ++index) {
         if (std::strcmp(argv[index], "--smoke") == 0)
             smoke = true;
@@ -54,7 +58,18 @@ int main(int argc, char** argv) {
             workflow = true;
         } else if (std::strcmp(argv[index], "--benchmark") == 0)
             benchmark = true;
-        else {
+        else if (std::strcmp(argv[index], "--narrow") == 0) initialSpread = 0;
+        else if (std::strcmp(argv[index], "--capture") == 0 && index + 1 < argc) capturePath = argv[++index];
+        else if (std::strcmp(argv[index], "--view") == 0 && index + 1 < argc) {
+            const char* view = argv[++index];
+            if (std::strcmp(view, "oblique") == 0) station = 1;
+            else if (std::strcmp(view, "plan") == 0) station = 2;
+            else if (std::strcmp(view, "profile") == 0) station = 3;
+            else {
+                std::cerr << "Use --view oblique, plan or profile\n";
+                return EXIT_FAILURE;
+            }
+        } else {
             std::cerr << "Unknown argument: " << argv[index] << '\n';
             return EXIT_FAILURE;
         }
@@ -78,7 +93,9 @@ int main(int argc, char** argv) {
         std::cerr << SDL_GetError() << '\n';
         return EXIT_FAILURE;
     }
-    SDL_Window* window = SDL_CreateWindow("Project 32 | CPU fountain: AoS / SoA", 1120, 820, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    if (capturePath || smoke) flags |= SDL_WINDOW_HIDDEN;
+    SDL_Window* window = SDL_CreateWindow("Project 32 | CPU fountain: AoS / SoA", 1120, 820, flags);
     if (!window) {
         std::cerr << SDL_GetError() << '\n';
         SDL_Quit();
@@ -91,7 +108,7 @@ int main(int argc, char** argv) {
         SDL_Quit();
         return EXIT_FAILURE;
     }
-    SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, 1120, 570);
+    SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, 1120, lab::Framebuffer::viewHeight);
     if (!texture) {
         std::cerr << SDL_GetError() << '\n';
         SDL_DestroyRenderer(renderer);
@@ -105,7 +122,7 @@ int main(int argc, char** argv) {
         result = EXIT_FAILURE;
     } else {
         try {
-            result = project32::runApplication(window, renderer, texture, smoke, workflow);
+            result = project32::runApplication(window, renderer, texture, smoke, workflow, capturePath, station, initialSpread);
         } catch (const std::exception& error) {
             std::cerr << error.what() << '\n';
             result = EXIT_FAILURE;

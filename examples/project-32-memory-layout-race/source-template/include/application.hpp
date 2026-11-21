@@ -2,6 +2,7 @@
 #include "benchmark.hpp"
 #include "render.hpp"
 #include "render_panel.hpp"
+#include "showcase.hpp"
 #include <SDL3/SDL.h>
 #include <iostream>
 
@@ -25,10 +26,13 @@ inline void advanceSimulation(lab::Simulation& simulation, bool measuring, bool 
 }
 #endif
 
-inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* texture, bool smoke, bool workflow) {
+inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* texture, bool smoke, bool workflow, const char* capturePath, int station, float initialSpread) {
     lab::Simulation simulation{};
+    simulation.config.spread = initialSpread;
 #if LAB_CHECKPOINT >= 8
     simulation.reset(1'000'000);
+    // Chạy ngay khi mở ứng dụng. Ảnh chụp thì phải giữ cùng thời điểm t = 0.
+    simulation.paused = smoke || capturePath != nullptr;
 #elif LAB_CHECKPOINT >= 3
     simulation.reset(10'000);
 #elif LAB_CHECKPOINT >= 2
@@ -39,7 +43,14 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
     if (workflow)
         simulation.reset(simulation.count, false);
     lab::Framebuffer image{};
-    lab::Camera camera{}, beforeDrag{};
+    lab::FountainFrame frame{};
+    lab::Camera camera = lab::cameraStation(station), beforeDrag{};
+#if LAB_CHECKPOINT >= 8
+    bool inspecting = false;
+    float pressX = 0, pressY = 0;
+    bool moved = false;
+    std::size_t selectedSlot = 0;
+#endif
     bool running = true, dragging = false, jobsPaused = false, showReports = false;
     SDL_MouseID mouse{};
     Uint8 button{};
@@ -66,9 +77,9 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
         const double dx = x - previousX, dy = y - previousY;
         if (button == SDL_BUTTON_LEFT) {
             camera.yaw += dx * 0.006;
-            camera.pitch = std::clamp(camera.pitch + dy * 0.006, -1.1, 1.1);
+            camera.pitch = std::clamp(camera.pitch + dy * 0.006, -1.57079632679, 1.1);
         } else {
-            lab::panCamera(camera, dx, dy, 570);
+            lab::panCamera(camera, dx, dy, image.height);
         }
         previousX = x;
         previousY = y;
@@ -88,17 +99,35 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
                 }
             } else if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)
                 release();
-            else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && !dragging && event.button.x >= 0 && event.button.x < 1120 && event.button.y >= 0 && event.button.y < 570 && (event.button.button == SDL_BUTTON_LEFT || event.button.button == SDL_BUTTON_RIGHT)) {
+            else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && !dragging && event.button.x >= 0 && event.button.x < 1120 && event.button.y >= 0 && event.button.y < image.height && (event.button.button == SDL_BUTTON_LEFT || event.button.button == SDL_BUTTON_RIGHT)) {
                 mouse = event.button.which;
                 button = event.button.button;
                 previousX = event.button.x;
                 previousY = event.button.y;
                 beforeDrag = camera;
+#if LAB_CHECKPOINT >= 8
+                pressX = previousX;
+                pressY = previousY;
+                moved = false;
+#endif
                 dragging = SDL_CaptureMouse(true);
-            } else if (event.type == SDL_EVENT_MOUSE_MOTION && dragging && event.motion.which == mouse)
+            } else if (event.type == SDL_EVENT_MOUSE_MOTION && dragging && event.motion.which == mouse) {
+#if LAB_CHECKPOINT >= 8
+                if (std::hypot(event.motion.x - pressX, event.motion.y - pressY) > 4) moved = true;
+#endif
                 moveCamera(event.motion.x, event.motion.y);
-            else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && dragging && event.button.which == mouse && event.button.button == button) {
+            } else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && dragging && event.button.which == mouse && event.button.button == button) {
                 moveCamera(event.button.x, event.button.y);
+#if LAB_CHECKPOINT >= 8
+                if (!moved && button == SDL_BUTTON_LEFT && std::hypot(event.button.x - pressX, event.button.y - pressY) <= 4) {
+                    camera = beforeDrag;
+                    const auto picked = lab::pickDrop(simulation, image, camera, event.button.x, event.button.y);
+                    if (picked) {
+                        selectedSlot = *picked;
+                        inspecting = true;
+                    }
+                }
+#endif
                 release();
             } else if (event.type == SDL_EVENT_MOUSE_WHEEL)
                 camera.distance = std::clamp(camera.distance * std::exp(-event.wheel.y * 0.08), 4.0, 40.0);
@@ -118,8 +147,19 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
                         running = false;
                 } else if (key == SDLK_X)
                     cancel();
-                else if (key == SDLK_HOME)
-                    camera = {};
+                else if (key == SDLK_HOME || key == SDLK_F1) camera = lab::cameraStation(1);
+                else if (key == SDLK_F2) camera = lab::cameraStation(2);
+                else if (key == SDLK_F3) camera = lab::cameraStation(3);
+#if LAB_CHECKPOINT >= 8
+                else if (key == SDLK_I) inspecting = !inspecting;
+                else if (key == SDLK_U) {
+                    selectedSlot = lab::findExpiringSlot(simulation);
+                    inspecting = true;
+                } else if (key == SDLK_TAB && simulation.active > 0) {
+                    selectedSlot = (selectedSlot + 1) % simulation.active;
+                    inspecting = true;
+                }
+#endif
                 else if (key == SDLK_F)
                     showReports = !showReports;
                 else if (key == SDLK_LEFT || key == SDLK_RIGHT) {
@@ -133,7 +173,7 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
                     if (key == SDLK_UP) {
                         pitchChange = -0.08;
                     }
-                    camera.pitch = std::clamp(camera.pitch + pitchChange, -1.1, 1.1);
+                    camera.pitch = std::clamp(camera.pitch + pitchChange, -1.57079632679, 1.1);
                 } else if (key == SDLK_R || key == SDLK_1 || key == SDLK_2 || key == SDLK_3) {
                     cancel();
                     std::size_t count = simulation.count;
@@ -158,6 +198,9 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
                     if (key != SDLK_R)
                         simulation.config.emissionRate = float(count) * 0.5F;
                     simulation.reset(count, cold);
+#if LAB_CHECKPOINT >= 8
+                    if (selectedSlot >= count) selectedSlot = 0;
+#endif
                 }
 #if LAB_CHECKPOINT >= 2
                 else if (key == SDLK_SPACE) {
@@ -173,7 +216,7 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
                     cancel();
                     simulation.singleStep = true;
                     simulation.beginStep();
-                } else if (key == SDLK_A || key == SDLK_D || key == SDLK_W || key == SDLK_S || key == SDLK_G || key == SDLK_H || key == SDLK_LEFTBRACKET || key == SDLK_RIGHTBRACKET || key == SDLK_MINUS || key == SDLK_EQUALS) {
+                } else if (key == SDLK_A || key == SDLK_D || key == SDLK_W || key == SDLK_S || key == SDLK_G || key == SDLK_H || key == SDLK_LEFTBRACKET || key == SDLK_RIGHTBRACKET || key == SDLK_MINUS || key == SDLK_EQUALS || key == SDLK_COMMA || key == SDLK_PERIOD) {
                     cancel();
                     if (key == SDLK_A)
                         simulation.config.emitterX = std::max(-5.0F, simulation.config.emitterX - 0.25F);
@@ -191,11 +234,13 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
                         simulation.config.lifetime = std::max(0.5F, simulation.config.lifetime - 0.25F);
                     if (key == SDLK_RIGHTBRACKET)
                         simulation.config.lifetime = std::min(8.0F, simulation.config.lifetime + 0.25F);
+                    if (key == SDLK_COMMA) simulation.config.spread = std::max(0.0F, simulation.config.spread - 0.5F);
+                    if (key == SDLK_PERIOD) simulation.config.spread = std::min(5.0F, simulation.config.spread + 0.5F);
                     if (key == SDLK_MINUS)
                         simulation.config.emissionRate = std::max(1.0F, simulation.config.emissionRate * 0.5F);
                     if (key == SDLK_EQUALS)
                         simulation.config.emissionRate = std::min(2'000'000.0F, simulation.config.emissionRate * 2.0F);
-                    simulation.notice = "Gravity applies next step; emitter/lifetime affect future births. R recreates all slots.";
+                    simulation.notice = "Gravity applies next step. Launch, spread and lifetime apply at birth. R rebuilds the same seed.";
                 }
 #endif
 #if LAB_CHECKPOINT >= 4
@@ -245,22 +290,28 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
         advanceSimulation(simulation, measuring, workflow);
 #endif
         const auto renderStarted = lab::Clock::now();
-        const lab::RenderStats drawn = lab::drawFountain(image, simulation, camera, 40'000, showReports);
-        if (!SDL_UpdateTexture(texture, nullptr, image.pixels.data(), image.width * int(sizeof(std::uint32_t))))
+        const bool changed = frame.refresh(image, simulation, camera, showReports);
+        const auto& drawn = frame.drawn;
+        if (changed && !SDL_UpdateTexture(texture, nullptr, image.pixels.data(), image.width * int(sizeof(std::uint32_t))))
             throw std::runtime_error(SDL_GetError());
         SDL_SetRenderDrawColor(renderer, 11, 16, 32, 255);
         SDL_RenderClear(renderer);
-        const SDL_FRect viewport{0, 0, 1120, 570};
+        const SDL_FRect viewport{0, 0, float(image.width), float(image.height)};
         SDL_RenderTexture(renderer, texture, nullptr, &viewport);
-        renderMs = lab::milliseconds(renderStarted);
-        drawFountainPanel(renderer, simulation, drawn, renderMs, frameMs);
+        // Giữ thời gian lần vẽ gần nhất, không thay nó bằng chi phí đọc cache.
+        if (changed) renderMs = lab::milliseconds(renderStarted);
+        if (showReports) drawFountainPanel(renderer, simulation, drawn, renderMs, frameMs);
+        else drawShowcase(renderer, simulation, drawn, renderMs);
+#if LAB_CHECKPOINT >= 8
+        if (inspecting && !showReports) drawInspection(renderer, simulation, camera, image, selectedSlot);
+#endif
 #if LAB_CHECKPOINT >= 3
         const char* workloadName = "full lifecycle";
         if (workload == lab::MemoryWorkload::gravityOnly) {
             workloadName = "gravity-only";
         }
-        SDL_RenderDebugTextFormat(renderer, 12, 770, "Benchmark: %s | %s | case %zu target %zu; state/seed captured, physics frozen", workloadName, benchmark.notice.c_str(), benchmark.caseIndex, benchmark.target);
         if (showReports) {
+            SDL_RenderDebugTextFormat(renderer, 12, 770, "Benchmark: %s | %s | case %zu target %zu; state/seed captured, physics frozen", workloadName, benchmark.notice.c_str(), benchmark.caseIndex, benchmark.target);
             SDL_SetRenderDrawColor(renderer, 9, 18, 30, 245);
             const SDL_FRect reportPanel{6, 6, 1108, 173};
             SDL_RenderFillRect(renderer, &reportPanel);
@@ -290,15 +341,30 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
             SDL_RenderDebugTextFormat(renderer, 12, 155, "64B aligned-base model: useful=%zu B uniqueLines=%zu loaded=%zu B %s; NOT measured cache misses", traffic.usefulBytes, traffic.uniqueLines, traffic.loadedBytes, trafficScope);
         }
 #endif
+        if (capturePath) {
+            SDL_Surface* surface = SDL_RenderReadPixels(renderer, nullptr);
+            if (!surface) throw std::runtime_error(SDL_GetError());
+            const bool saved = SDL_SavePNG(surface, capturePath);
+            SDL_DestroySurface(surface);
+            if (!saved) throw std::runtime_error(SDL_GetError());
+            std::cout << "Native snapshot: alive=" << simulation.active << " sampled=" << drawn.sampled << " visible=" << drawn.rendered << " step=" << simulation.steps << " view=" << station << '\n';
+            break;
+        }
         SDL_RenderPresent(renderer);
         frameMs = lab::milliseconds(frameStarted);
-        SDL_Delay(1);
+        Uint32 idleDelay = 1;
+        if (!changed && simulation.paused && simulation.pending == lab::PendingWork::none) idleDelay = 12;
+#if LAB_CHECKPOINT >= 3
+        if (benchmark.active && !jobsPaused) idleDelay = 1;
+#endif
+        SDL_Delay(idleDelay);
         ++frames;
         if ((smoke && !workflow && frames >= 4) || (workflow && simulation.steps >= 1)) {
             if (workflow) {
 #if LAB_CHECKPOINT >= 2
                 if (simulation.active != simulation.count || simulation.committedUpdated != simulation.count)
                     throw std::runtime_error("Workflow did not update every live slot");
+                // [snippet verify-slots]
                 for (std::size_t index = 0; index < simulation.count; ++index) {
                     const auto& old = simulation.nextAoS[index];
                     const auto& next = simulation.aos[index];
@@ -313,9 +379,10 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
                     if (next.id != index || next.generation != old.generation + std::uint32_t(expired) || std::abs(next.age - expectedAge) > 1e-6F || !lab::finiteParticle(next))
                         throw std::runtime_error("Untouched/invalid slot in full-N workflow");
                 }
+                // [/snippet verify-slots]
 #endif
             }
-            std::cout << "P32 allocated=" << simulation.count << " alive=" << simulation.active << " updated=" << simulation.committedUpdated << " sampled=" << drawn.sampled << " rendered=" << drawn.rendered << " bytes=" << simulation.aosBytes() + simulation.soaBytes() << '\n';
+            std::cout << "SDL smoke PASS: P32 allocated=" << simulation.count << " alive=" << simulation.active << " updated=" << simulation.committedUpdated << " sampled=" << drawn.sampled << " rendered=" << drawn.rendered << " bytes=" << simulation.aosBytes() + simulation.soaBytes() << '\n';
             break;
         }
         if ((smoke || workflow) && SDL_GetTicks() - started > 10000)

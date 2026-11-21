@@ -2,6 +2,7 @@
 import type { FountainScene } from "@/lib/labs/fountain/scene";
 import type { MemoryWorkload } from "@/lib/labs/fountain/state";
 import type { BenchmarkProgress } from "@/lib/labs/fountain/worker-protocol";
+import styles from "./observation.module.css";
 
 export type FountainAction =
   | "run"
@@ -20,29 +21,19 @@ export type FountainAction =
   | "lifetime"
   | "emissionRate"
   | "selected"
+  | "expiry"
+  | "inspect"
+  | "spread"
   | "camera"
   | "debug";
 interface Props {
   scene: FountainScene;
   result: BenchmarkProgress | null;
   workload: MemoryWorkload;
-  reduced: boolean;
   debug: boolean;
   action: (action: FountainAction, value?: number) => void;
 }
-export default function FountainControls({
-  scene,
-  result,
-  workload,
-  reduced,
-  debug,
-  action,
-}: Props) {
-  const running = result?.active
-    ? !result.paused
-    : scene.pending?.kind === "conversion"
-      ? !scene.jobPaused
-      : !scene.paused;
+export default function FountainControls({ scene, result, workload, debug, action }: Props) {
   return (
     <div className="lab-controls">
       <label>
@@ -59,24 +50,6 @@ export default function FountainControls({
           <option value={2}>20.000 hạt sống — giới hạn Canvas</option>
         </select>
       </label>
-      <button
-        type="button"
-        onClick={() => action("run")}
-        disabled={scene.stage < 2 || (reduced && !result?.active && !scene.pending)}
-      >
-        {" "}
-        {running ? "Tạm dừng" : "Tiếp tục"}
-      </button>
-      <button
-        type="button"
-        onClick={() => action("step")}
-        disabled={scene.stage < 2 || Boolean(result?.active)}
-      >
-        Tiến một bước
-      </button>
-      <button type="button" onClick={() => action("reset")}>
-        Đặt lại cùng preset/seed
-      </button>
       {scene.stage >= 4 && (
         <button type="button" onClick={() => action("layout")} disabled={Boolean(result?.active)}>
           Đổi sang {scene.layout === "aos" ? "SoA" : "AoS"}
@@ -101,82 +74,72 @@ export default function FountainControls({
         </select>
       </label>
       {scene.stage >= 2 && (
-        <>
-          <label>
-            Emitter X (m): {scene.config.emitterX.toFixed(1)}
-            <input
-              type="range"
-              min={-3}
-              max={3}
-              step={0.1}
-              value={scene.config.emitterX}
-              onChange={(event) => action("emitterX", Number(event.target.value))}
-            />
-          </label>
-          <label>
-            Vận tốc phóng (m/s): {scene.config.launchSpeed.toFixed(1)}
-            <input
-              type="range"
-              min={1}
-              max={20}
-              step={0.5}
-              value={scene.config.launchSpeed}
-              onChange={(event) => action("launchSpeed", Number(event.target.value))}
-            />
-          </label>
-          <label>
-            Gravity (m/s²): {scene.config.gravity.toFixed(2)}
-            <input
-              type="range"
-              min={-20}
-              max={0}
-              step={0.1}
-              value={scene.config.gravity}
-              onChange={(event) => action("gravity", Number(event.target.value))}
-            />
-          </label>
-          <label>
-            Lifetime cơ sở (s): {scene.config.lifetime.toFixed(1)}
-            <input
-              type="range"
-              min={0.5}
-              max={8}
-              step={0.1}
-              value={scene.config.lifetime}
-              onChange={(event) => action("lifetime", Number(event.target.value))}
-            />
-          </label>
-          <label>
-            Tốc độ kích hoạt slot mới (hạt/s): {scene.config.emissionRate.toFixed(0)}
-            <input
-              type="range"
-              min={0}
-              max={Math.max(256, scene.count)}
-              step={1}
-              value={scene.config.emissionRate}
-              onChange={(event) => action("emissionRate", Number(event.target.value))}
-            />
-          </label>
-          <p>
-            Tham số này chỉ có tác dụng khi còn slot chưa được phát, như ở preset 256 slot trống.
-            Khi pool đã đầy, mỗi hạt hết tuổi thọ sẽ được sinh lại ngay trong slot cũ; đặt tốc độ về
-            0 không tắt các hạt đang sống. Chọn preset trống để thử phát lại từ đầu.
-          </p>
-        </>
+        <details className={styles.tuning}>
+          <summary>Thông số vòi phun và trọng lực</summary>
+          <div className={styles.tuningFields}>
+            <label>
+              Emitter X (m): {scene.config.emitterX.toFixed(1)}
+              <input
+                type="range"
+                min={-3}
+                max={3}
+                step={0.1}
+                value={scene.config.emitterX}
+                onChange={(event) => action("emitterX", Number(event.target.value))}
+              />
+            </label>
+            <label>
+              Vận tốc phóng (m/s): {scene.config.launchSpeed.toFixed(1)}
+              <input
+                type="range"
+                min={1}
+                max={20}
+                step={0.5}
+                value={scene.config.launchSpeed}
+                onChange={(event) => action("launchSpeed", Number(event.target.value))}
+              />
+            </label>
+            <label>
+              Gravity (m/s²): {scene.config.gravity.toFixed(2)}
+              <input
+                type="range"
+                min={-20}
+                max={0}
+                step={0.1}
+                value={scene.config.gravity}
+                onChange={(event) => action("gravity", Number(event.target.value))}
+              />
+            </label>
+            <label>
+              Lifetime cơ sở (s): {scene.config.lifetime.toFixed(1)}
+              <input
+                type="range"
+                min={0.5}
+                max={8}
+                step={0.1}
+                value={scene.config.lifetime}
+                onChange={(event) => action("lifetime", Number(event.target.value))}
+              />
+            </label>
+            <label>
+              Tốc độ kích hoạt slot mới (hạt/s): {scene.config.emissionRate.toFixed(0)}
+              <input
+                type="range"
+                min={0}
+                max={Math.max(256, scene.count)}
+                step={1}
+                value={scene.config.emissionRate}
+                onChange={(event) => action("emissionRate", Number(event.target.value))}
+              />
+            </label>
+            <p>
+              Tham số này chỉ có tác dụng khi còn slot chưa được phát, như ở preset 256 slot trống.
+              Khi pool đã đầy, mỗi hạt hết tuổi thọ sẽ được sinh lại ngay trong slot cũ; đặt tốc độ
+              về 0 không tắt các hạt đang sống. Chọn preset trống để thử phát lại từ đầu.
+            </p>
+          </div>
+        </details>
       )}
-      <label>
-        Slot cần xem
-        <input
-          type="number"
-          min={0}
-          max={scene.count - 1}
-          value={scene.selected}
-          onChange={(event) => action("selected", Number(event.target.value))}
-        />
-      </label>
-      <button type="button" onClick={() => action("camera")}>
-        Đặt lại camera
-      </button>
       <button type="button" aria-pressed={debug} onClick={() => action("debug")}>
         {debug ? "Ẩn thông số chi tiết" : "Hiện thông số chi tiết"}
       </button>

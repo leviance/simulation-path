@@ -1,5 +1,6 @@
 #include "benchmark.hpp"
 #include "render.hpp"
+#include "inspection.hpp"
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
@@ -50,6 +51,60 @@ void testEmissionAndGravity() {
     auto expected = repeat;
     lab::integrateParticle(expected, 1.0F / 64, config.gravity);
     check(lab::particleErrorRatio(particle, expected) <= 1, "respawn consumes the correct fractional interval within field-specific units");
+}
+
+void testJetAndInspector() {
+    lab::FountainConfig config{};
+    config.emitterX = 0.75F;
+    config.emitterZ = -0.25F;
+    lab::FountainConfig narrow = config;
+    narrow.spread = 0;
+    bool seenOffAxis = false;
+    for (std::uint32_t id = 0; id < 256; ++id) {
+        const auto p = lab::spawnParticle(id, 0, config);
+        const auto q = lab::spawnParticle(id, 0, narrow);
+        check(p.positionX == config.emitterX && p.positionZ == config.emitterZ && p.positionY == 0, "all drops leave a single outlet");
+        check(std::abs(q.velocityX - 0.32F * q.velocityY) < 1e-6F && q.velocityZ == 0, "zero spread leaves the nozzle along its axis");
+        const double transverse = std::hypot(p.velocityX - q.velocityX, p.velocityZ);
+        check(transverse <= config.spread + 1e-5 && p.velocityY == q.velocityY, "spread changes only the transverse part of launch");
+        if (transverse > config.spread / 2) seenOffAxis = true;
+    }
+    check(seenOffAxis, "the free jet includes drops outside its dense core");
+
+    lab::Simulation sim{};
+    sim.config = config;
+    sim.reset(10'000);
+    const auto slot = lab::findExpiringSlot(sim);
+    const auto before = *lab::readSlot(sim, slot);
+    check(slot < 4096 && before.lifetime - before.age < lab::fixedDt, "bounded inspection finds a drop expiring next step");
+    check(!lab::readSlot(sim, sim.active), "inactive slot is never dereferenced");
+    sim.singleStep = true;
+    sim.beginStep();
+    while (sim.pending != lab::PendingWork::none) sim.tickStep(0);
+    const auto after = *lab::readSlot(sim, slot);
+    check(after.id == before.id && after.generation == before.generation + 1 && after.age < lab::fixedDt, "inspected slot survives its next birth");
+    sim.beginConversion();
+    while (sim.pending != lab::PendingWork::none) sim.tickConversion(0);
+    check(lab::particleDifference(after, *lab::readSlot(sim, slot)) == 0, "read the same drop after converting to SoA");
+
+    lab::Framebuffer frame{};
+    frame.width = 270;
+    frame.height = 152;
+    lab::drawFountain(frame, sim, lab::cameraStation(1), 640);
+    const auto oblique = frame.pixels;
+    lab::drawFountain(frame, sim, lab::cameraStation(2), 640);
+    const auto plan = frame.pixels;
+    lab::drawFountain(frame, sim, lab::cameraStation(3), 640);
+    check(plan != oblique && plan != frame.pixels && oblique != frame.pixels && sim.steps == 1, "three viewpoints, one committed fountain");
+
+    sim.reset(1);
+    sim.aos[0] = lab::spawnParticle(0, 0, config);
+    sim.aos[0].positionY = 1;
+    const auto camera = lab::cameraStation(1);
+    const auto p = lab::projectPoint({sim.aos[0].positionX, 1, sim.aos[0].positionZ}, camera, frame.width, frame.height);
+    check(p.visible && lab::pickDrop(sim, frame, camera, p.x, p.y) == 0, "click a visible drop at its projected pixel");
+    sim.aos[0].positionY = -1;
+    check(!lab::pickDrop(sim, frame, camera, p.x, p.y), "picking cannot select a drop below the grid");
 }
 
 void testLayoutsAndKernels() {
@@ -189,9 +244,11 @@ void testBenchmarkAndBounds() {
     job.start({}, {257}, {lab::MemoryWorkload::fullLifecycle});
     job.cancel();
     check(!job.active, "cancel stops a running benchmark");
+    // [snippet traffic-64]
     const auto aos = lab::modelTraffic(64, lab::Layout::aos, lab::MemoryWorkload::gravityOnly);
     const auto soa = lab::modelTraffic(64, lab::Layout::soa, lab::MemoryWorkload::gravityOnly);
     check(aos.usefulBytes == 256 && aos.uniqueLines == 44 && soa.uniqueLines == 4, "hand-counted 64B aligned-base model");
+    // [/snippet traffic-64]
     check(lab::modelTraffic(64, lab::Layout::soa, lab::MemoryWorkload::fullLifecycle).upperBound, "all-field traffic is labeled upper bound");
     const auto allocateBeyondBudget = [] {
         lab::makeParticlesAoS(1'000'001, {});
@@ -241,6 +298,11 @@ void testPresentation() {
     image.height = 180;
     image.pixels.resize(320 * 180);
     const auto particles = simulation.aos;
+    lab::FountainFrame cached{};
+    check(cached.refresh(image, simulation, framedCamera, false), "initial frame must reach the GPU-free display texture");
+    check(!cached.refresh(image, simulation, framedCamera, false), "pausing or changing only the HUD does not rasterize the same 40k samples again");
+    simulation.reset(simulation.count);
+    check(cached.refresh(image, simulation, framedCamera, false), "reset at the same step invalidates the old frame");
     const auto first = lab::drawFountain(image, simulation, framedCamera, 128);
     const auto pixels = image.pixels;
     check(first.sampled == 128 && first.rendered > 0 && first.rendered <= 128, "framed fountain has visible water with finite display sampling");
@@ -274,6 +336,7 @@ void testPresentation() {
 } // namespace
 
 int main() {
+    testJetAndInspector();
     testEmissionAndGravity();
     testLayoutsAndKernels();
     testAtomicStateAndConversion();

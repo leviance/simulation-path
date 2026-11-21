@@ -1,5 +1,6 @@
 import { fountainFocalScale, fountainViewBasis } from "./camera.ts";
 import type { Camera } from "./scene.ts";
+import { SprayLight } from "./spray.ts";
 
 export interface Vec3 {
   x: number;
@@ -18,6 +19,7 @@ export interface FountainFrame {
   pixels: Uint32Array;
   surface: Uint32Array;
   depth: Float32Array;
+  spray: SprayLight;
   key: string;
 }
 export function createFountainFrame(width: number, height: number): FountainFrame {
@@ -36,6 +38,7 @@ export function createFountainFrame(width: number, height: number): FountainFram
     pixels: new Uint32Array(width * height),
     surface: new Uint32Array(width * height),
     depth: new Float32Array(width * height),
+    spray: new SprayLight(width, height),
     key: "",
   };
 }
@@ -83,6 +86,32 @@ export function addWaterLight(
     (previous & 255) + (color & 255) * opacity,
     ((previous >>> 8) & 255) + ((color >>> 8) & 255) * opacity,
     ((previous >>> 16) & 255) + ((color >>> 16) & 255) * opacity,
+  );
+  return true;
+}
+
+// Water layers approach the droplet colour; overlapping samples never "burn"
+// white as an additive light source would. The faint floor light stays additive.
+export function layWater(
+  frame: FountainFrame,
+  x: number,
+  y: number,
+  depth: number,
+  color: number,
+  coverage: number,
+) {
+  if (x < 0 || y < 0 || x >= frame.width || y >= frame.height) return false;
+  const index = y * frame.width + x;
+  if (depth > frame.depth[index] + 0.001) return false;
+  const previous = frame.pixels[index];
+  const alpha = Math.max(0, Math.min(1, coverage));
+  const oldR = previous & 255,
+    oldG = (previous >>> 8) & 255,
+    oldB = (previous >>> 16) & 255;
+  frame.pixels[index] = renderColor(
+    oldR + alpha * ((color & 255) - oldR),
+    oldG + alpha * (((color >>> 8) & 255) - oldG),
+    oldB + alpha * (((color >>> 16) & 255) - oldB),
   );
   return true;
 }

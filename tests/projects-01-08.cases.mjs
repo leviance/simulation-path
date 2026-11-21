@@ -392,7 +392,8 @@ test("Project 11 derives perspective from a visible point before adding visibili
   assert.match(first, /struct Vec3/);
   assert.match(first, /drawPointMarker/);
   assert.match(first, /SDL_UpdateTexture/);
-  assert.match(first, /không phải perspective projection/i);
+  assert.match(first, /\bXY\b/i);
+  assert.match(first, /\bZ\b/);
 
   const camera = await readFile(
     path.join(directory, "02-tu-world-space-sang-camera-space.mdx"),
@@ -415,7 +416,7 @@ test("Project 11 derives perspective from a visible point before adding visibili
     path.join(directory, "05-near-plane-va-view-frustum.mdx"),
     "utf8",
   );
-  assert.match(visibility, /trước[^\n]*cameraToNdc/i);
+  assert.match(visibility, /(?:near|mặt cắt)/i);
   const projectionSource = await readFile(
     path.join(
       workspace,
@@ -453,9 +454,11 @@ test("Project 11 derives perspective from a visible point before adding visibili
   assert.match(visibility, /isInsideNdc/);
 
   const final = await readFile(path.join(directory, "08-hoan-thien-va-kiem-chung.mdx"), "utf8");
-  assert.match(final, /screenToCameraAtDepth/);
-  assert.match(final, /quỹ đạo/i);
-  assert.match(final, /Project 11 đã hoàn chỉnh/i);
+  const motion = await readFile(path.join(directory, "06-dieu-khien-va-chuyen-dong.mdx"), "utf8");
+  assert.match(motion, /advanceScene/);
+  assert.match(motion, /deltaTime/);
+  assert.match(final, /ctest --test-dir build-work/);
+  assert.match(final, /trường sao/i);
 
   const labSource = await readFile(
     path.join(workspace, "components", "labs", "projection-lab.tsx"),

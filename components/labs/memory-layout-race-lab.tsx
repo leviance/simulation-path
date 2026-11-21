@@ -19,7 +19,8 @@ import {
   type Camera,
 } from "@/lib/labs/fountain/scene";
 import { validateConfig, type MemoryWorkload } from "@/lib/labs/fountain/state";
-import { panFountainCamera } from "@/lib/labs/fountain/camera";
+import { fountainCamera, fountainViews, panFountainCamera } from "@/lib/labs/fountain/camera";
+import { nextExpirySlot, pickFountainDrop } from "@/lib/labs/fountain/inspection";
 import {
   LabReadout,
   canvasPoint,
@@ -29,6 +30,7 @@ import {
   useReducedMotion,
 } from "./lab-shared";
 import { drawFountain, type DrawStats } from "./fountain/view";
+import { FountainObservation } from "./fountain/observation";
 import { useFountainBenchmark } from "./fountain/use-benchmark";
 import type { FountainAction } from "./fountain/controls";
 import type { InteractiveLabMode } from "./types";
@@ -46,6 +48,8 @@ function Fountain({ mode }: { mode?: string }) {
   const model = useRef(scene);
   const [workload, setWorkload] = useState<MemoryWorkload>("gravity-only");
   const [debug, setDebug] = useState(false);
+  const [inspecting, setInspecting] = useState(false);
+  const [paintRequest, setPaintRequest] = useState(0);
   const [stats, setStats] = useState<DrawStats & { frameMs: number }>({
     sampled: 0,
     rendered: 0,
@@ -60,9 +64,13 @@ function Fountain({ mode }: { mode?: string }) {
     x: number;
     y: number;
     before: Camera;
+    moved: boolean;
   } | null>(null);
   const { result, start, pause, cancel, clear } = useFountainBenchmark();
-  const publish = useCallback(() => setScene({ ...model.current }), []);
+  const publish = useCallback(() => {
+    setScene({ ...model.current });
+    setPaintRequest((request) => request + 1);
+  }, []);
   const release = useCallback((rollback = false) => {
     const active = gesture.current;
     gesture.current = null;
@@ -102,14 +110,29 @@ function Fountain({ mode }: { mode?: string }) {
         return;
       }
       if (kind === "camera") {
-        current.camera = { yaw: 0.45, pitch: -0.38, distance: 14, x: 0, y: 1.9, z: 0 };
+        current.camera = fountainCamera(fountainViews[value] ?? "oblique");
         release();
         publish();
         return;
       }
+      if (kind === "inspect") {
+        setInspecting((visible) => !visible);
+        return;
+      }
+      if (kind === "expiry") {
+        if (stage < 2) return;
+        const slot = nextExpirySlot(current);
+        if (slot < 0) return;
+        current.selected = slot;
+        setInspecting(true);
+        publish();
+        return;
+      }
       if (kind === "selected") {
-        if (Number.isFinite(value))
+        if (Number.isFinite(value)) {
           current.selected = Math.max(0, Math.min(current.count - 1, Math.trunc(value)));
+          setInspecting(true);
+        }
         publish();
         return;
       }
@@ -161,13 +184,22 @@ function Fountain({ mode }: { mode?: string }) {
         if (kind === "seed") config.seed = value;
         if (kind === "preset") config.emissionRate = [256, 2000, 20000, 256][preset] * 0.5;
         const next = createFountain(stage, preset, config);
+        if (kind === "reset") {
+          next.camera = current.camera;
+          next.selected = current.selected;
+          next.notice =
+            "Đã đặt lại cùng số slot và seed, dùng độ xòe hiện tại; thời gian trở về 0.";
+        }
         next.revision = current.revision + 1;
         model.current = next;
         publish();
         return;
       }
       if (
-        ["emitterX", "launchSpeed", "gravity", "lifetime", "emissionRate"].includes(kind) &&
+        ["emitterX", "launchSpeed", "gravity", "lifetime", "emissionRate", "spread"].includes(
+          kind,
+        ) &&
+        stage >= 2 &&
         Number.isFinite(value)
       ) {
         const next = { ...current.config, [kind]: Math.fround(value) };
@@ -176,7 +208,9 @@ function Fountain({ mode }: { mode?: string }) {
           cancelPending(current);
           current.config = next;
           current.notice =
-            "Đã đổi cấu hình và dừng bước dở. Gravity áp dụng ở bước sau; thông số sinh hạt áp dụng cho lần sinh kế tiếp.";
+            kind === "spread"
+              ? "Đã chỉnh độ xòe. Giọt đang bay giữ nguyên vận tốc ngang; nhấn Đặt lại để thấy cả tia nước đổi ngay."
+              : "Đã đổi cấu hình và dừng bước dở. Gravity áp dụng ở bước sau; thông số sinh hạt áp dụng cho lần sinh kế tiếp.";
         } catch {
           current.notice = "Giá trị nằm ngoài ngân sách cho phép; giữ nguyên cấu hình.";
         }
@@ -197,15 +231,21 @@ function Fountain({ mode }: { mode?: string }) {
     const paint = (now: number) => {
       setupCanvas(context, size);
       latest = {
-        ...drawFountain(context, model.current, size.width, size.height, debug),
+        ...drawFountain(context, model.current, size.width, size.height, debug, inspecting),
         frameMs: now - lastFrame,
       };
       lastFrame = now;
     };
     paint(lastFrame);
     setStats({ ...latest!, frameMs: frameInterval.current });
+    const needsFrame = (current: typeof model.current) => {
+      if (!current.pending) return !current.paused;
+      if (current.jobPaused) return false;
+      return current.pending.kind === "conversion" || !current.paused || current.singleStep;
+    };
     const animate = (now: number) => {
       const current = model.current;
+      const revision = current.revision;
       try {
         if (!current.pending && !current.paused) beginPhysics(current);
         if (current.pending) tickPending(current);
@@ -214,19 +254,22 @@ function Fountain({ mode }: { mode?: string }) {
         current.notice =
           "Đã dừng an toàn: " + (error instanceof Error ? error.message : "lỗi cập nhật");
       }
-      paint(now);
-      frameInterval.current = latest.frameMs;
-      const active = Boolean(current.pending) || !current.paused;
+      // A half-written batch is not a new image. Keep the last frame until all slots commit.
+      const interval = now - lastFrame;
+      if (current.revision !== revision) paint(now);
+      lastFrame = now;
+      frameInterval.current = interval;
+      const active = needsFrame(current);
       if (now - lastReport >= 120 || !active) {
         lastReport = now;
-        setStats(latest);
-        publish();
+        setStats({ ...latest, frameMs: interval });
+        setScene({ ...current });
       }
       if (active) frame = requestAnimationFrame(animate);
     };
-    if (model.current.pending || !model.current.paused) frame = requestAnimationFrame(animate);
+    if (needsFrame(model.current)) frame = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(frame);
-  }, [scene, size, debug, publish]);
+  }, [paintRequest, size, debug, inspecting]);
 
   useEffect(() => {
     const hidden = () => {
@@ -266,10 +309,12 @@ function Fountain({ mode }: { mode?: string }) {
     const point = canvasPoint(event, event.currentTarget);
     const dx = point.x - active.x,
       dy = point.y - active.y;
+    if (!active.moved && Math.hypot(dx, dy) < 4) return;
+    active.moved = true;
     let camera = { ...active.before };
     if (active.button === 0) {
       camera.yaw += dx * 0.008;
-      camera.pitch = Math.max(-1.1, Math.min(1.1, camera.pitch + dy * 0.006));
+      camera.pitch = Math.max(-Math.PI / 2, Math.min(1.1, camera.pitch + dy * 0.006));
     } else {
       camera = panFountainCamera(camera, dx, dy, size.height);
     }
@@ -288,6 +333,7 @@ function Fountain({ mode }: { mode?: string }) {
       x: point.x,
       y: point.y,
       before: { ...model.current.camera },
+      moved: false,
     };
   };
   const keyDown = (event: KeyboardEvent<HTMLCanvasElement>) => {
@@ -302,8 +348,22 @@ function Fountain({ mode }: { mode?: string }) {
       b: "benchmark",
       c: "scaling",
       f: "debug",
+      i: "inspect",
+      u: "expiry",
       home: "camera",
     };
+    if (key === "f1" || key === "f2" || key === "f3") {
+      event.preventDefault();
+      if (event.repeat) return;
+      action("camera", Number(key.slice(1)) - 1);
+      return;
+    }
+    if ((key === "," || key === ".") && stage >= 2) {
+      event.preventDefault();
+      const delta = key === "," ? -0.5 : 0.5;
+      action("spread", Math.max(0, Math.min(5, model.current.config.spread + delta)));
+      return;
+    }
     if (key === "escape") {
       event.preventDefault();
       release(true);
@@ -325,7 +385,7 @@ function Fountain({ mode }: { mode?: string }) {
       const camera = model.current.camera;
       if (key === "arrowleft") camera.yaw -= 0.08;
       if (key === "arrowright") camera.yaw += 0.08;
-      if (key === "arrowup") camera.pitch = Math.max(-1.1, camera.pitch - 0.05);
+      if (key === "arrowup") camera.pitch = Math.max(-Math.PI / 2, camera.pitch - 0.05);
       if (key === "arrowdown") camera.pitch = Math.min(1.1, camera.pitch + 0.05);
       publish();
       return;
@@ -342,7 +402,7 @@ function Fountain({ mode }: { mode?: string }) {
         ref={canvas}
         className="lab-canvas"
         role="img"
-        style={{ touchAction: "none", height: "clamp(340px, 42vw, 460px)" }}
+        style={{ touchAction: "none", height: "clamp(270px, 42vw, 480px)" }}
         tabIndex={0}
         aria-label="Đài phun hạt CPU — Canvas minh họa ba chiều, màu theo tuổi hạt"
         aria-describedby={helpId}
@@ -352,6 +412,18 @@ function Fountain({ mode }: { mode?: string }) {
         onPointerUp={(event) => {
           if (gesture.current?.id === event.pointerId) {
             move(event);
+            const active = gesture.current;
+            if (active && !active.moved && active.button === 0) {
+              const point = canvasPoint(event, event.currentTarget);
+              const selected = pickFountainDrop(
+                model.current,
+                point.x,
+                point.y,
+                size.width,
+                size.height,
+              );
+              if (selected >= 0) action("selected", selected);
+            }
             release();
             publish();
           }
@@ -371,23 +443,25 @@ function Fountain({ mode }: { mode?: string }) {
         onContextMenu={(event) => event.preventDefault()}
         onBlur={stop}
       />
+      <FountainObservation
+        scene={scene}
+        inspect={inspecting}
+        result={result}
+        reduced={reduced}
+        action={action}
+      />
       <p id={helpId}>
         Canvas minh họa tối đa 20.000 hạt; preset một triệu hạt thật nằm trong bản C++ tải về. Kéo
         trái để xoay camera, kéo phải để pan, cuộn để zoom; các thao tác này không làm đổi state vật
-        lý. Phím mũi tên xoay camera; Home đặt lại. Space tạm dừng/tiếp tục, N tiến một bước, R đặt
-        lại, L đổi layout, B đo, C đo nhiều N, X hủy, F hiện/ẩn dữ liệu, [ / ] đổi slot. Tab rời
-        Canvas, Escape hủy thao tác kéo và tác vụ.{" "}
+        lý. Mũi tên xoay camera; F1/F2/F3 chọn góc nghiêng, từ trên hoặc ngang. Nhấp một giọt để
+        soi, I bật/tắt theo dõi, U tìm giọt sắp tái sinh và [ / ] đổi slot. Dấu phẩy và dấu chấm
+        giảm hoặc tăng độ xòe cho lần phát tới. Space tạm dừng/tiếp tục, N tiến một bước, R đặt lại,
+        L đổi layout, B đo, C đo nhiều N, X hủy, F hiện/ẩn dữ liệu. Tab rời Canvas, Escape hủy thao
+        tác kéo và tác vụ.{" "}
         {reduced && "Reduced motion đang bật: dùng N để tiến từng bước; không tự chạy hoạt ảnh."}
       </p>
       <Suspense fallback={<p>Đang tải bảng điều khiển…</p>}>
-        <Controls
-          scene={scene}
-          result={result}
-          workload={workload}
-          reduced={reduced}
-          debug={debug}
-          action={action}
-        />
+        <Controls scene={scene} result={result} workload={workload} debug={debug} action={action} />
       </Suspense>
       <LabReadout
         items={[

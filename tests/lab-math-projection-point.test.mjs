@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import * as math from "../lib/labs/projection-point.ts";
+import { drawStarfield, starCatalog } from "../lib/labs/starfield.ts";
 import * as model from "../lib/labs/projection-scene.ts";
 import { componentCallback, componentEffect } from "./lab-handler-support.mjs";
 const near = (a, b, e = 1e-9) =>
@@ -180,7 +181,7 @@ test("P11 clipping rejects invalid depth planes, viewport and overflowing arithm
 test("P11 model bounds nonfinite input and presets; same simulation elapsed produces same flight", () => {
   const s = model.initialPointScene();
   assert.equal(model.movePoint(s, { x: NaN, y: 1, z: 0 }), s);
-  assert.equal(model.changePointCamera(s, "x", Infinity), s);
+  assert.equal(model.changePointCamera(s, "z", Infinity), s);
   assert.equal(model.changePointLens(s, "nearPlane", NaN), s);
   assert.equal(model.movePoint(s, { x: 0, y: 0, z: 99 }).point.z, 20);
   assert.equal(model.changePointLens(s, "nearPlane", 99).lens.nearPlane, 2);
@@ -192,14 +193,108 @@ test("P11 model bounds nonfinite input and presets; same simulation elapsed prod
     b = s;
   for (let i = 0; i < 60; i++) a = model.advancePoint(a, 1 / 60);
   for (let i = 0; i < 20; i++) b = model.advancePoint(b, 0.05);
-  vectorNear(a.point, b.point);
+  vectorNear(a.point, s.point);
+  vectorNear(b.point, s.point);
+  vectorNear(a.camera.position, b.camera.position);
+  near(a.camera.position.z, 2);
   near(a.elapsed, 1);
   for (const dt of [0, -1, NaN, Infinity]) assert.equal(model.advancePoint(s, dt), s);
   near(model.advancePoint(s, 9).elapsed, 0.1);
-  vectorNear(model.flightPoint(0), { x: 0, y: 1.3, z: 6 });
+  const end = model.changePointCamera(s, "z", 99);
+  near(end.camera.position.z, 12);
+  near(model.advancePoint(end, 0.1).camera.position.z, 12);
+  near(model.advancePoint(end, 0.1, -1).camera.position.z, 11.8);
+  near(model.advancePoint(s, 0.1, -1).camera.position.z, 0);
   assert.equal(model.pointDisplay(s, 1).screen.x, 620);
   near(model.pointDisplay(s, 3).ndc.x, 1 / 4 / (1040 / 585)); // focal scale 1 until lesson 4
 });
+test("P11 dolly is not a FOV change: nearby stars spread faster, stars on-axis do not move", () => {
+  const start = model.initialPointScene();
+  const viewport = { x: 0, y: 0, width: 800, height: 800 };
+  const lens = { ...start.lens, verticalFovRadians: Math.PI / 2 };
+  const before = structuredClone(starCatalog);
+  assert.equal(starCatalog.length, 96);
+  assert.deepEqual(starCatalog[0], { x: 1, y: 0.6, z: 4 });
+  assert.deepEqual(starCatalog[1], { x: 0, y: 0, z: 10 });
+  const camera = model.changePointCamera(start, "z", 2).camera;
+  const project = (star, pose, optic = lens) =>
+    math.projectPerspective(star, pose, optic, viewport);
+  const match = (result, x, y) => {
+    assert.equal(result.status, "visible");
+    near(result.screen.x, x);
+    near(result.screen.y, y);
+  };
+  match(project(starCatalog[0], start.camera), 500, 340);
+  match(project(starCatalog[0], camera), 600, 280);
+  match(project(starCatalog[1], camera), 400, 400);
+  const distant = { x: 2, y: 1.2, z: 8 };
+  match(project(distant, start.camera), 500, 340);
+  match(project(distant, camera), 400 + 400 / 3, 320);
+  const zoom = { ...lens, verticalFovRadians: 2 * Math.atan(0.5) };
+  match(project(starCatalog[0], start.camera, zoom), 600, 280);
+  match(project(distant, start.camera, zoom), 600, 280);
+  const reach = model.changePointCamera(start, "z", 4).camera;
+  assert.equal(project(starCatalog[0], reach).screen, null);
+  assert.deepEqual(starCatalog, before, "moving or zooming the camera cannot regenerate the field");
+});
+
+test("P11 a fixed distribution fills every reachable view and the renderer draws real projected stars", () => {
+  const s = model.initialPointScene();
+  const v = model.viewportFor(s);
+  const circles = [];
+  const noop = () => {};
+  const ctx = {
+    save: noop,
+    restore: noop,
+    beginPath: noop,
+    closePath: noop,
+    rect: noop,
+    clip: noop,
+    fillRect: noop,
+    fill: noop,
+    arc: (x, y, radius) => circles.push([x, y, radius]),
+    createRadialGradient: () => ({ addColorStop: noop }),
+  };
+  const expectedVisible = () =>
+    starCatalog
+      .map((star) => math.projectPerspective(star, s.camera, s.lens, v))
+      .filter((p) => p.status === "visible");
+  function paint() {
+    circles.length = 0;
+    drawStarfield(ctx, s, v);
+    const visible = expectedVisible();
+    assert.ok(visible.length >= 16, "the flight must not end in an empty viewport");
+    for (const hit of visible) {
+      assert.ok(
+        circles.some(
+          ([x, y, r]) =>
+            Math.abs(x - hit.screen.x) < 1e-6 && Math.abs(y - hit.screen.y) < 1e-6 && r > 0,
+        ),
+        "a visible star was not drawn at its geometric projection",
+      );
+    }
+    for (const [x, y, radius] of circles) {
+      assert.ok(Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(radius));
+      assert.ok(
+        visible.some((p) => Math.abs(x - p.screen.x) < 1e-6 && Math.abs(y - p.screen.y) < 1e-6),
+        "unexpected dot: screen-space backdrop or star behind the camera",
+      );
+    }
+    return structuredClone(circles);
+  }
+  const atStart = paint();
+  s.camera.position.z = 6;
+  assert.notDeepEqual(paint(), atStart);
+  s.camera.position.z = 12;
+  paint();
+  s.camera.position.z = 0;
+  assert.deepEqual(
+    paint(),
+    atStart,
+    "returning to the same pose must recover exactly the same frame",
+  );
+});
+
 const layout = (size) => {
   const scale = Math.min(size.width / 1100, size.height / 800);
   return { scale, x: (size.width - 1100 * scale) / 2, y: (size.height - 800 * scale) / 2 };
@@ -219,8 +314,8 @@ test("P11 actual mouse mapping handles CSS scaling/letterbox without double DPR"
     { x: 550, y: 400 },
   );
 });
-async function harness(stage = 8) {
-  const sceneRef = { current: model.initialPointScene() },
+async function harness(stage = 8, debug = stage === 8) {
+  const sceneRef = { current: { ...model.initialPointScene(), debug } },
     drag = { current: null },
     captured = new Set(),
     canvas = {
@@ -249,6 +344,7 @@ async function harness(stage = 8) {
     "togglePause",
     "step",
     "toggleDebug",
+    "toggleMeasure",
     "editPoint",
     "editCamera",
     "editLens",
@@ -258,6 +354,7 @@ async function harness(stage = 8) {
     "pointerUp",
     "pointerCancel",
     "onKeyDown",
+    "onKeyUp",
   ])
     env[name] = await componentCallback("projection-lab.tsx", name, env);
   return {
@@ -331,9 +428,9 @@ test("P11 actual keyboard keeps Tab/modifiers, depth, repeated Space and reduced
     });
   h.onKeyDown(event("e"));
   near(h.sceneRef.current.point.z, 4.1);
-  h.onKeyDown(event("d"));
+  h.onKeyDown(event("ArrowRight"));
   near(h.sceneRef.current.point.x, 1.1);
-  h.onKeyDown(event("d", { ctrlKey: true }));
+  h.onKeyDown(event("ArrowRight", { ctrlKey: true }));
   near(h.sceneRef.current.point.x, 1.1);
   h.onKeyDown(
     event("Tab", {
@@ -369,10 +466,62 @@ test("P11 actual keyboard keeps Tab/modifiers, depth, repeated Space and reduced
   toggle();
   assert.equal(h.sceneRef.current.paused, true);
 });
+test("P11 routes held and opposing physical keys, key-up, blur and repeat without moving the stars", async () => {
+  const h = await harness(8, false);
+  const key = (key, extra = {}) => ({ key, repeat: false, preventDefault() {}, ...extra });
+  const initial = structuredClone(h.sceneRef.current.point);
+  const direction = () => model.flightDirection(h.sceneRef.current);
+  const tick = () => h.commit(model.advancePoint(h.sceneRef.current, 0.1, direction()));
+  h.onKeyDown(key("w"));
+  assert.equal(direction(), 1);
+  tick();
+  near(h.sceneRef.current.camera.position.z, 0.2);
+  h.onKeyDown(key("s"));
+  assert.equal(direction(), 0);
+  tick();
+  near(h.sceneRef.current.camera.position.z, 0.2);
+  h.onKeyUp(key("w"));
+  assert.equal(direction(), -1);
+  tick();
+  near(h.sceneRef.current.camera.position.z, 0);
+  h.onKeyUp(key("s"));
+  assert.equal(direction(), 0);
+  h.onKeyDown(key("w"));
+  tick();
+  h.pauseForEnvironment();
+  assert.equal(direction(), 0);
+  h.onKeyDown(key("w", { repeat: true }));
+  assert.equal(direction(), 0);
+  const before = h.sceneRef.current.camera.position.z;
+  tick();
+  near(h.sceneRef.current.camera.position.z, before);
+  h.onKeyDown(key("w"));
+  h.onKeyDown(key("r"));
+  tick();
+  assert.deepEqual(h.sceneRef.current, model.initialPointScene());
+  assert.deepEqual(h.sceneRef.current.point, initial);
+
+  const reducedKeyDown = await componentCallback("projection-lab.tsx", "onKeyDown", {
+    ...h,
+    reducedMotion: true,
+  });
+  reducedKeyDown(key("w"));
+  near(h.sceneRef.current.camera.position.z, 0.2);
+  assert.equal(
+    direction(),
+    0,
+    "opt-in keypress is one step; reduced motion must not start the loop",
+  );
+  reducedKeyDown(key("w", { repeat: true }));
+  near(h.sceneRef.current.camera.position.z, 0.2);
+  reducedKeyDown(key("s"));
+  near(h.sceneRef.current.camera.position.z, 0);
+});
+
 test("P11 actual edits cancel capture and pause before changing geometry/camera/lens", async () => {
   for (const [name, args] of [
     ["editPoint", ["x", 2]],
-    ["editCamera", ["x", 1]],
+    ["editCamera", ["z", 1]],
     ["editLens", ["nearPlane", 1]],
   ]) {
     const h = await harness(),
@@ -469,75 +618,74 @@ test("P11 actual step cancels a drag before changing depth and cannot run while 
   early.step();
   assert.deepEqual(early.sceneRef.current, model.initialPointScene());
 });
-test("P11 actual clean renderer keeps depth geometry/marker and hides overlays, rejects behind marker", async () => {
+test("P11 clean mode paints the field without making the diagnostic probe a second star", async () => {
   const lines = [],
-    labels = [],
     arcs = [],
-    noop = () => {},
-    ctx = {
-      save: noop,
-      restore: noop,
-      translate: noop,
-      scale: noop,
-      fillRect: noop,
-      beginPath: noop,
-      rect: noop,
-      clip: noop,
-      stroke: noop,
-      arc: (...a) => arcs.push(a),
-      fill: noop,
-      fillText: (t) => labels.push(t),
-    };
+    fields = [];
+  const noop = () => {};
+  const ctx = {
+    save: noop,
+    restore: noop,
+    translate: noop,
+    scale: noop,
+    fillRect: noop,
+    beginPath: noop,
+    moveTo: noop,
+    lineTo: noop,
+    rect: noop,
+    clip: noop,
+    stroke: noop,
+    arc: (...a) => arcs.push(a),
+    fill: noop,
+    fillText: noop,
+    setLineDash: noop,
+  };
   const draw = await componentCallback("projection-lab-view.ts", "drawProjectionLab", {
     ...math,
     ...model,
     layout,
+    starCatalog,
     setupCanvas: noop,
+    drawStarfield: (_ctx, scene, view) => fields.push({ scene, view }),
     drawLine: (_ctx, a, b, color) => lines.push({ a, b, color }),
   });
+  const size = { width: 1100, height: 800, dpr: 2 };
   const s = model.initialPointScene();
-  s.debug = false;
-  draw(ctx, { width: 1100, height: 800, dpr: 2 }, s, 8);
-  assert.ok(lines.some((l) => l.color === "#28334d"));
-  assert.ok(lines.some((l) => l.color === "#74839f"));
-  assert.equal(arcs.length, 2);
-  assert.equal(labels.length, 0);
-  assert.ok(!lines.some((l) => l.color === "#ffe26c" || l.color === "#ff6b6b"));
-  const first = arcs[0];
-  arcs.length = 0;
+  const run = (stage) => {
+    arcs.length = 0;
+    lines.length = 0;
+    fields.length = 0;
+    draw(ctx, size, s, stage);
+  };
+  run(8);
+  assert.equal(fields.length, 1);
+  assert.deepEqual(fields[0].view, model.viewportFor(s));
+  assert.equal(arcs.length, 0, "hidden probe must not paint on the field");
+  assert.ok(!lines.some((l) => l.color === "#ffe26c"));
   s.debug = true;
   s.measureDepth = true;
-  draw(ctx, { width: 1100, height: 800, dpr: 2 }, s, 8);
-  assert.equal(arcs.length, 3, "two filled discs make one light; B is only a ring");
-  near(arcs[2][0], (550 + first[0]) / 2);
-  near(arcs[2][1], (400 + first[1]) / 2);
-  arcs.length = 0;
-  s.point.z = 9;
-  draw(ctx, { width: 1100, height: 800, dpr: 2 }, s, 8);
-  assert.equal(arcs.length, 2, "hide B when its depth exceeds far");
-  s.point.z = 4;
-  s.debug = false;
-  arcs.length = 0;
-  const far = model.pointPreset(1);
-  far.debug = false;
-  draw(ctx, { width: 1100, height: 800, dpr: 2 }, far, 8);
-  near(arcs[0][0] - 550, (first[0] - 550) * 0.5);
-  near(arcs[0][1] - 400, (first[1] - 400) * 0.5);
-  arcs.length = 0;
-  draw(ctx, { width: 1100, height: 800, dpr: 2 }, model.pointPreset(3), 8);
-  assert.equal(arcs.length, 0);
-  lines.length = 0;
-  draw(ctx, { width: 1100, height: 800, dpr: 2 }, s, 3);
-  assert.equal(
-    lines.some((l) => l.color === "#28334d" || l.color === "#74839f"),
-    false,
-    "first divide lesson has no unexplained 3D scene",
-  );
-  draw(ctx, { width: 1100, height: 800, dpr: 2 }, s, 5);
+  run(8);
+  const probe = model.pointDisplay(s, 8).screen;
+  const hasArc = (x, y) => arcs.some((a) => Math.abs(a[0] - x) < 1e-6 && Math.abs(a[1] - y) < 1e-6);
+  assert.ok(hasArc(probe.x, probe.y), "visible debug marker");
   assert.ok(
-    lines.some((l) => l.color === "#74839f"),
-    "clipping lesson introduces world frames",
+    hasArc((550 + probe.x) / 2, (400 + probe.y) / 2),
+    "B is half the displacement of A, not half of its pixel coordinates",
   );
+  s.point.z = 9;
+  run(8);
+  const far = model.pointDisplay(s, 8).screen;
+  assert.ok(hasArc(far.x, far.y));
+  assert.ok(!hasArc((550 + far.x) / 2, (400 + far.y) / 2), "the doubled test depth is beyond far");
+  s.point.z = -1;
+  run(8);
+  assert.equal(arcs.length, 0, "no synthetic screen position behind the viewer");
+  assert.equal(fields.length, 1, "the rest of the scene remains usable");
+  s.point.z = 4;
+  run(3);
+  assert.equal(fields.length, 0, "do not introduce the full catalog before students know depth");
+  run(5);
+  assert.equal(fields.length, 1);
 });
 test("P11 actual side-section draws similar triangles, tracks depth and does not divide behind camera", async () => {
   for (const [coordinate, z] of [

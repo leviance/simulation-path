@@ -61,15 +61,26 @@ inline bool presentFramebuffer(SDL_Renderer* renderer, SDL_Texture* texture, con
     }
 #if LAB_CHECKPOINT >= 8
     if (!scene.debug) {
+        if (!SDL_SetRenderDrawColor(renderer, 153, 183, 214, 255) || !text(renderer, 30, 21, "PROJECT 11   /   PERSPECTIVE                            CPU FRAMEBUFFER")) return false;
+        if (!SDL_SetRenderDrawColor(renderer, 230, 238, 251, 255) || !SDL_SetRenderScale(renderer, 2, 2)) return false;
+        const bool titleDrawn = text(renderer, 15, 26, "Starfield");
+        if (!SDL_SetRenderScale(renderer, 1, 1) || !titleDrawn) return false;
+        char telemetry[150]{};
+        std::snprintf(telemetry, sizeof(telemetry), "Camera Z: %5.2f / 12      vFOV: %.0f deg      Stars in world: %zu", scene.camera.position.z, scene.lens.verticalFovRadians * 180.0 / kPi, starCatalog().size());
+        if (!text(renderer, 30, 720, telemetry)) return false;
+        const char* hint = "Hold W to fly forward. Release to stop. The amber star stays in the same place in the world.";
+        if (scene.camera.position.z >= flightLimit) hint = "End of this star field. Hold S to fly back, or R to return to the start.";
+        if (!SDL_SetRenderDrawColor(renderer, 167, 190, 214, 255) || !text(renderer, 30, 746, hint)) return false;
+        if (!text(renderer, 30, 774, "W/S: forward / back    Space: cruise    N: step    +/-: lens    V: aspect    F/M: instruments    R: reset")) return false;
         return finishFrame(renderer, capturePath);
     }
 #endif
-    const char* controls = "PROJECT 11 | WASD: XY, Q/E: Z | R: reset | Esc: quit";
+    const char* controls = "PROJECT 11 | Arrows: star XY, Q/E: Z | R: reset | Esc: quit";
 #if LAB_CHECKPOINT >= 2
-    controls = "PROJECT 11 | WASD: XY, Q/E: Z | IJKL U/O: move camera | R: reset | Esc: quit";
+    controls = "PROJECT 11 | Arrows: star XY, Q/E: Z | J/L: observer Z | R: reset | Esc: quit";
 #endif
 #if LAB_CHECKPOINT >= 4
-    controls = "PROJECT 11 | WASD Q/E: light | IJKL U/O: camera | +/-: lens | V: aspect | R: reset | Esc: quit";
+    controls = "PROJECT 11 | Arrows + Q/E: test star | J/L: observer Z | +/-: lens | V: aspect | R: reset | Esc: quit";
 #endif
     const char* experiment = "F1 / F2: compare the same X/Y at depths 4 and 8";
 #if LAB_CHECKPOINT >= 5
@@ -107,9 +118,10 @@ inline bool presentFramebuffer(SDL_Renderer* renderer, SDL_Texture* texture, con
 #if LAB_CHECKPOINT >= 6
     const char* state = "PAUSED";
     if (!scene.paused) {
-        state = "FLYING";
+        state = "CRUISE";
     }
-    std::snprintf(value, sizeof(value), "t %.3f s | %s | Space pause, N step 0.1s, mouse drag from lesson 7, F debug from lesson 8", scene.elapsed, state);
+    if (scene.forwardHeld || scene.backwardHeld) state = "MANUAL";
+    std::snprintf(value, sizeof(value), "t %.3f s | %s | W/S: hold to fly | Space: cruise | N: step | F: instruments", scene.elapsed, state);
     if (!text(renderer, 16, 768, value)) {
         return false;
     }

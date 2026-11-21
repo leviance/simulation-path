@@ -1,28 +1,28 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Chạy cùng vòng đời bằng SoA
+# Một hạt có sống như nhau trong hai cách lưu?
 
 ## Vấn đề cần giải quyết
 
-Checkpoint 04 đổi qua lại giữa hai layout nhưng chỉ AoS mới chạy vật lý. Giờ thêm kernel SoA để hạt vẫn được phát, rơi và tái sử dụng khi dữ liệu nằm trong mười một mảng riêng.
+Hai cách lưu đã cho cùng một hình lúc dừng. Nhưng nhấn `N` sau khi chuyển sang SoA thì làm sao biết một giọt vừa lên tới đỉnh sẽ rơi về đúng vị trí như khi dùng AoS? Và quan trọng hơn: khi giọt đó hết tuổi, hai bên có phát ra **cùng một hạt mới** không?
 
-Không đổi integrator, timestep, seed hay cách respawn để làm SoA nhanh hơn. Trước khi đo tốc độ, ta phải trả lời: **hai kernel có đang làm cùng công việc trên cùng state không?** Một hình đài phun tương tự hoặc hai checksum gần nhau chưa đủ.
+Từ bài này, SoA sẽ tự cập nhật được cả đài phun. Ta giữ AoS làm lời giải đối chiếu, không dùng hình hai tia nước “trông cũng giống” làm bằng chứng duy nhất.
 
-## Theo chân một particle
+## Hiểu ý tưởng trước khi viết code
 
-Cả hai layout phải cho cùng một bước: gravity đổi velocity, velocity đổi position, age tăng rồi xét respawn. Trước khi xem code, thử đổi layout tại một state pause và dự đoán generation của slot gần hết lifetime ở bước kế tiếp.
+Lấy một ô có `age = lifetime - dt/2`. Sau một bước, cả hai cách lưu phải giữ nguyên ID, tăng `generation` thêm một và có tuổi mới `dt/2`. Nếu khác thế hệ, không epsilon nào cứu được: ta đang so hai lần sinh khác nhau. Nếu chỉ khác nhau chút ít ở một tọa độ thực, cần hỏi **khác bao nhiêu mét**.
+
+Cũng đừng đợi đến khi cả đài phun đông nghịt mới kiểm. Một lỗi ở đúng một giọt giữa hàng nghìn giọt thường không hiện ra bằng mắt, nhất là khi bộ vẽ chỉ lấy một phần hạt để hiển thị.
 
 <InteractiveLab demo="memory-layout-race" mode="layout-agreement" />
 
-## Bắt tay xây dựng
+## Viết code từng bước
 
-### Bước 1 — Viết lại cách truy cập, giữ nguyên phép tính
+### Cho SoA tiến đúng một bước như AoS
 
-Ở nhánh bình thường, SoA đọc/ghi từng mảng trực tiếp. Thứ tự vẫn là velocityY trước position, rồi age. Khi gặp slot mới hoặc hạt hết lifetime, ta đọc một record tạm, gọi đúng advanceParticle đã dùng cho AoS rồi ghi đủ field về.
-
-Thêm updateSoARange vào include/storage.hpp, sau các hàm copy/read:
-
-```cpp title="include/storage.hpp — cùng hai workload và cùng quy tắc vòng đời"
+{/* snippet include/storage.hpp#update-soa-range */}
+```cpp title="include/storage.hpp — Cập nhật theo cột nhưng giữ nguyên thứ tự tính"
 inline std::size_t updateSoARange(ParticlesSoA& particles, std::size_t begin, std::size_t end, const FountainConfig& config, float dt, MemoryWorkload workload, std::size_t oldActive) {
     std::size_t respawned = 0;
     if (workload == MemoryWorkload::gravityOnly) {
@@ -49,29 +49,29 @@ inline std::size_t updateSoARange(ParticlesSoA& particles, std::size_t begin, st
 }
 ```
 
-Có ba điểm dễ bị bỏ qua:
+Với một hạt còn sống qua hết bước, sửa `velocityY[index]`, dùng vận tốc **vừa sửa** để tiến `positionY[index]`, rồi tăng tuổi như ở bài 02. Với ô mới phát hoặc hạt hết tuổi, gọi lại `advanceParticle` đã kiểm chứng rồi ghi kết quả về đúng chỉ số. Đừng viết hai phiên bản lấy số ngẫu nhiên; cùng một ID và thế hệ phải ra cùng một hướng phóng.
 
-- Nhánh gravityOnly chỉ sửa velocityY, giống AoS. Nó không tăng age hoặc chạy respawn.
-- Điều kiện hết lifetime dùng `dt >= lifetime - age`, cùng cách tính remaining ở advanceParticle. Đổi thành age + dt >= lifetime có thể làm khác nhánh ở ranh giới do làm tròn float.
-- Nhánh respawn dùng cùng seed/ID/generation và phần dt còn lại. Record tạm nằm trên stack C++; không có vector mới trong hot loop.
+### So ngay một ô bị đặt sai chỉ số
 
-Đừng đưa std::sin/std::cos vào nhánh bình thường chỉ để “làm hạt bay giống nhau”. Chúng chỉ dùng khi tạo lần sinh mới. Quỹ đạo giữa hai lần sinh vẫn do solver cập nhật, không phải đặt lại theo một công thức ảnh động.
+{/* snippet include/storage.hpp#maximum-layout-difference */}
+```cpp title="include/storage.hpp — Đọc hạt từ hai cách lưu tại cùng một chỉ số"
+inline float maximumLayoutDifference(std::span<const ParticleAoS> aos, const ParticlesSoA& soa) {
+    if (!soa.valid() || aos.size() != soa.size())
+        return std::numeric_limits<float>::infinity();
+    float maximum = 0;
+    for (std::size_t index = 0; index < aos.size(); ++index) {
+        maximum = std::max(maximum, particleDifference(aos[index], readParticle(soa, index)));
+    }
+    return maximum;
+}
+```
 
-### Bước 2 — So từng field với đúng đơn vị
+`maximumLayoutDifference` giúp bắt lỗi sao chép hoặc cột sai độ dài. Ở đây ta chỉ cần hỏi giá trị nào đó có khác 0 hay không. Đừng dùng một con số tổng hợp từ vị trí, vận tốc và tuổi làm thước đo vật lý: 0,001 m và 0,001 s tuy giống chữ số nhưng không biểu thị cùng một sai khác.
 
-Sau một lần copy layout, state phải giữ nguyên chính xác vì các field vẫn cùng kiểu. Sau nhiều bước tính, ta cần một tiêu chí số thực có nghĩa và phải từ chối NaN/Inf.
+### Kiểm các vòng đời với đơn vị riêng
 
-Với mỗi field:
-
-$$
-|\Delta| \leq \text{absTol} + 10^{-6}\max(|a|,|b|).
-$$
-
-Position dùng absTol = 10⁻⁵ m; velocity dùng 10⁻⁵ m/s; age/lifetime dùng 10⁻⁶ s; hue dùng 10⁻⁷ không đơn vị. ID và generation phải khớp chính xác. Không lấy một epsilon chung cho tất cả rồi gọi đó là sai số vật lý của hệ.
-
-Đây là helper kiểm chứng trong include/storage.hpp, nằm ngoài kernel:
-
-```cpp title="include/storage.hpp — chuẩn hóa sai khác theo ngưỡng của từng field"
+{/* snippet include/storage.hpp#particle-error-ratio */}
+```cpp title="include/storage.hpp — Mỗi đại lượng có khoảng sai số riêng"
 inline float fieldErrorRatio(float first, float second, float absoluteTolerance, float relativeTolerance) {
     const float allowed = absoluteTolerance + relativeTolerance * std::max(std::abs(first), std::abs(second));
     return std::abs(first - second) / allowed;
@@ -96,106 +96,36 @@ inline float particleErrorRatio(const ParticleAoS& first, const ParticleAoS& sec
 }
 ```
 
-fieldErrorRatio lấy sai khác chia cho ngưỡng cho phép của **chính field đó**. particleErrorRatio trả tỉ lệ lớn nhất; kết quả không quá 1 mới đạt. Infinity biểu thị identity không khớp hoặc state không hợp lệ.
+Điều kiện cho một trường là $|a-b|\leq A+r\max(|a|,|b|)$. Phần tuyệt đối $A$ bảo vệ phép so gần 0; phần tương đối $r=10^{-6}$ cho phép sai số làm tròn tăng theo độ lớn. Ở đây vị trí dùng $A=10^{-5}$ m, vận tốc $10^{-5}$ m/s, tuổi và tuổi thọ **10⁻⁶ s**, màu $10^{-7}$. Tỉ số trả về vượt 1 nghĩa là đã có ít nhất một trường vượt ngưỡng. ID và thế hệ phải bằng nhau tuyệt đối; `NaN` hay vô cực đều bị loại.
 
-Max difference thô vẫn có thể được in để chẩn đoán, nhưng trộn mét, m/s, giây và hue thành một số lớn nhất không tạo ra một đại lượng vật lý. Checksum cũng chỉ là output quan sát được; không dùng nó thay phép so mọi field.
+<CourseWorkFile project="32" step={5} path="include/storage.hpp" />
 
-Tiêu chí này kiểm hai implementation tương đương, không chứng minh integrator mô tả tự nhiên chính xác tuyệt đối. Sai số tích phân do dt, điều kiện đầu warm và làm tròn float là các vấn đề khác nhau. JavaScript/stdlib C++ cũng không được hứa khớp từng bit giữa mọi runtime.
+Cuối cùng, nối `updateSoARange` vào `Simulation::tickStep`. Trường hợp AoS đã có sẵn; trường hợp SoA phải dùng cùng `targetActive`, cùng `dt` và cùng quy tắc chỉ đổi bộ đệm sau khi làm hết mảng. Bỏ chốt “SoA chỉ để xem” của bài trước **sau khi** đã có nhánh cập nhật thật.
 
-### Bước 3 — Nối kernel mới vào bước đã có
+<CourseWorkFile project="32" step={5} path="include/simulation.hpp" />
 
-Không tạo một Simulation thứ hai để chạy SoA. Trong Simulation hiện tại, thay tickStep bằng phiên bản có cả hai nhánh layout:
+## Ghép các phần lại
 
-```cpp title="include/simulation.hpp — chọn container nhưng giữ cùng kế hoạch và điểm commit"
-bool tickStep(double budgetMs = 6) {
-    if (pending != PendingWork::physics || (paused && !singleStep))
-        return false;
-    const auto deadline = Clock::now() + std::chrono::duration<double, std::milli>(budgetMs);
-    do {
-        const std::size_t end = std::min(count, cursor + 4096);
-        auto started = Clock::now();
-        if (layout == Layout::aos) {
-            std::copy(aos.begin() + cursor, aos.begin() + end, nextAoS.begin() + cursor);
-        }
-        else {
-            for (std::size_t index = cursor; index < end; ++index)
-                writeParticle(nextSoA, index, readParticle(soa, index));
-        }
-        copyMs += milliseconds(started);
-        const std::size_t updateEnd = std::min(end, targetActive);
-        if (cursor < updateEnd) {
-            started = Clock::now();
-            if (layout == Layout::aos) {
-                respawned += updateAoSRange(nextAoS, cursor, updateEnd, config, fixedDt, MemoryWorkload::fullLifecycle, active);
-            }
-            else {
-                respawned += updateSoARange(nextSoA, cursor, updateEnd, config, fixedDt, MemoryWorkload::fullLifecycle, active);
-            }
-            updateMs += milliseconds(started);
-            updated += updateEnd - cursor;
-        }
-        cursor = end;
-    } while (cursor < count && Clock::now() < deadline);
-    if (cursor < count)
-        return false;
-    if (layout == Layout::aos)
-        aos.swap(nextAoS);
-    else
-        std::swap(soa, nextSoA);
-    active = targetActive;
-    committedUpdated = updated;
-    emissionRemainder = targetRemainder;
-    time += double(fixedDt);
-    ++steps;
-    wholeStepMs = milliseconds(stepStarted);
-    singleStep = false;
-    pending = PendingWork::none;
-    notice = "Complete step committed; updated=" + std::to_string(updated);
-    return true;
-}
+```bash title="Terminal — biên dịch chương trình trong work/"
+cmake --build build-work --config Release --target project_32_work --parallel 1
+.\build-work\Release\project_32_work.exe
 ```
 
-Ở pha copy, nextAoS hoặc nextSoA nhận snapshot nguồn. Ở pha update, layout quyết định gọi kernel nào; cả hai nhận **cùng** config, fixedDt, fullLifecycle và old active. Khi hoàn tất mới swap đúng buffer và tăng time/steps.
+Quay về cùng preset và seed. Lần đầu chạy AoS; lần sau, dùng `L` chuyển sang SoA **trước** khi nhấn `N`. Lấy cùng số bước ở cả hai lần, không dùng thời gian cầm đồng hồ ngoài đời. Bắt đầu bằng một bước để kiểm chiều rơi, sau đó dùng phép thử **400 bước** như trong `tests/tests.cpp` để đi qua cả những lần sinh lại. Với hai lần chạy độc lập, cần ghi kết quả của lần đầu; đừng chỉ đổi cách lưu sau khi đã tính xong rồi coi đó là hai kernel.
 
-beginStep cũng bỏ chặn SoA của checkpoint 04 và resize nextSoA khi cần; xem phần thay đổi đầy đủ của include/simulation.hpp ở cuối bài để không giữ lại nhánh từ chối cũ. planEmission và targetActive không thay theo layout.
+## Thử làm sai để hiểu đúng
 
-Chọn SoA giờ không còn chỉ đổi cách vẽ. Bạn phải thấy steps, time, updated và generation tiến thật khi chạy bằng SoA. Nếu viewport còn chuyển động nhưng age không đổi, hãy kiểm renderer có đang vẽ theo clock thay vì state không.
-
-## Chạy checkpoint và đọc kết quả
-
-Chọn preset 256 hạt sống, tiến vài bước, đổi layout và tiếp tục. Sau đó reset cùng preset/seed để so hai lượt độc lập có cùng số bước: một lượt AoS, một lượt SoA. Thử cả pool cold để kiểm các slot mới sinh.
-
-Fixture C++ trong tests/tests.cpp khởi tạo cùng snapshot, chạy **400 bước** cho từng workload rồi so mọi hạt và field. Khoảng thời gian này đi qua nhiều lần respawn của lifetime mặc định; không chỉ kiểm vài bước mà mọi hạt còn sống nguyên generation 0.
-
-```bash title="Terminal — checkpoint 05 và tests mô hình cuối"
-cmake --build build --config Debug --target project_32_checkpoint_5 project_32_tests
-./build/Debug/project_32_checkpoint_5.exe
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
-```
-
-project_32_tests dùng source final để kiểm hợp đồng mô hình; nó không tự chứng minh mọi executable checkpoint đã build hoặc controls đã được thử. Bạn vẫn cần chạy checkpoint 05 và thao tác trực tiếp.
-
-## Cố tình làm sai
-
-Trước khi tiến một bước từ state pause, dùng age/lifetime/dt để dự đoán slot nào respawn. Kiểm generation sau N.
-
-1. Tạm cập nhật positionY trước velocityY trong SoA. Hình có thể vẫn giống đài phun, nhưng so position sau nhiều bước phải phát hiện sai thứ tự tích phân. Khôi phục velocity trước position.
-2. Tạm không ghi generation trong nhánh respawn. Phép kiểm identity phải thất bại, không được cho qua bằng tolerance. Khôi phục và chạy lại fixture có hạt sát ranh giới hết lifetime.
-
-Giữ cùng số bước/config/seed khi đối chiếu; nếu input khác nhau thì phép kiểm không còn trả lời về hai kernel tương đương.
+1. Trong nhánh SoA, thử tiến `positionY` trước rồi mới sửa `velocityY`. Dùng ca một hạt có $v_y=2$, $g=-8$, $dt=1/32$. Kết quả lệch ngay bước đầu. Hãy sửa thứ tự phép tính, không nới ngưỡng để phép thử sang xanh.
+2. Cho hạt mới dùng số ngẫu nhiên lấy từ thứ tự vòng lặp thay vì ID và thế hệ. Chọn một ô sắp hết tuổi: trước thời điểm ấy hai bên có thể giống hệt, ngay sau đó vận tốc phóng có thể khác. Trả về cùng quy tắc sinh hạt.
 
 ## Tự kiểm tra kết quả
 
-- Gravity-only và full lifecycle làm cùng công việc giữa hai layout.
-- Cùng snapshot/config/seed/dt, mọi ID/generation khớp và mọi field qua ngưỡng theo đơn vị.
-- SoA không tạo lại cả container AoS trong mỗi bước; record tạm chỉ phục vụ nhánh cần chung quy tắc sinh.
-- Kiểm có cả slot mới, nhiều lần respawn, invalid length và NaN/Inf.
-- Layout conversion không tăng thời gian; kernel mới tăng đúng một fixed step sau khi commit đủ.
-- Pause/Cancel không để lộ nửa buffer đích; camera không làm state đổi.
-- Chưa kết luận layout nhanh hơn chỉ vì hình chạy trơn hoặc checksum khớp.
+- Đài phun chạy được ở AoS lẫn SoA; đổi layout không reset hoặc làm tăng thời gian mô phỏng.
+- Ca hết tuổi giữa bước cho đúng ID, thế hệ và phần tuổi mới. Khi cùng đi qua nhiều lần sinh lại, tỉ số sai số lớn nhất không vượt 1.
+- Báo `updated` theo số hạt thực sự cập nhật; đừng lấy số điểm hiện trên màn hình thay cho nó.
 
 ## Bài tập mở rộng
 
-Tạo một fixture có lifetime − age nhỏ hơn, bằng và lớn hơn dt ở ba slot. Dự đoán ID/generation/age sau bước đó trước khi chạy cả hai kernel. Sau đó thử một sai khác position 5 × 10⁻⁶ m và một sai khác age 5 × 10⁻⁶ s quanh 0: vì sao phép kiểm có thể chấp nhận ca đầu nhưng từ chối ca sau?
+Tạo hai hạt có cùng vị trí nhưng khác thế hệ. Cố ý hoán đổi chúng chỉ trong một container rồi kiểm tổng tọa độ, sau đó kiểm từng ID. Phép nào bắt được lỗi? Kết quả cho biết vì sao checksum trong benchmark chỉ là một phần của việc đối chiếu.
 
-Bài tiếp theo: [Giải thích dữ liệu mà vòng lặp chạm tới](/projects/memory-layout-race/06-cache-line-stride-va-useful-bytes).
+Học tiếp: [CPU phải đọc bao nhiêu để sửa một con số?](/projects/memory-layout-race/06-cache-line-stride-va-useful-bytes).

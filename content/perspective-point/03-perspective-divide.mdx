@@ -1,62 +1,48 @@
 import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Vì sao điểm ở xa tiến về tâm?
+# Vì sao các ngôi sao tỏa ra từ tâm ảnh?
 
 ## Vấn đề cần giải quyết
 
-Nhìn đốm sáng lệch về bên phải. Nếu đẩy nó ra xa theo trục Z mà không dịch sang ngang, bạn sẽ thấy nó giữ nguyên chỗ, hay nhích về giữa màn hình? Bản xem trước của bài 2 cho đáp án thứ nhất. Một máy ảnh nhìn thấy đáp án thứ hai. Hôm nay ta chỉ thay bước quyết định sự khác biệt ấy.
-
-Bài này ta sẽ dùng cả ba tọa độ để tìm vị trí của điểm trên màn hình. Trước mắt chỉ cần một điểm sáng; đến bài 5, khi đã biết cách cắt đoạn ở near/far, ta mới thêm lưới và các khung 3D.
+Mắt tại gốc, ngôi sao lệch sang phải một đơn vị và cách mắt bốn đơn vị. Bạn tiến lên hai đơn vị, không hề quay đầu. Ngôi sao vẫn ở phía bên phải ấy, nhưng bây giờ bạn phải liếc sang phải **nhiều hơn** mới nhìn thấy nó. Làm sao dịch góc nhìn đó thành vị trí của một chấm sáng?
 
 ## Hiểu ý tưởng trước khi viết code
 
-Hãy nhìn không gian từ bên cạnh. Camera nằm ở gốc tọa độ, nhìn theo +Z. Kẻ một tia từ camera đi qua điểm P(x,y,z), rồi đặt một mặt phẳng ảnh tưởng tượng ở Z=1. Vị trí tia xuyên qua mặt phẳng đó chính là ảnh của P.
-
-Trong mặt cắt XZ, hai tam giác có chung góc tại camera và đều có một góc vuông. Đó là hai tam giác đồng dạng, nên tỉ lệ giữa cạnh đứng và cạnh ngang bằng nhau. Làm tương tự với YZ:
+Vẽ trên giấy một mắt ở gốc và một ngôi sao tại `(X, Z) = (1, 4)`. Nối chúng bằng một đường thẳng. Đặt một mặt phẳng ảnh tưởng tượng cách mắt đúng một đơn vị; tia nhìn cắt mặt ấy ở đâu? Hai tam giác đồng dạng cho ta tỉ lệ sau, với $(x_c,y_c,z_c)$ là tọa độ **so với camera**:
 
 $$
-\frac{x'}{1}=\frac{x}{z},\qquad \frac{y'}{1}=\frac{y}{z}.
+u=\frac{x_c}{z_c},\qquad v=\frac{y_c}{z_c}.
 $$
 
-Vì thế x′=x/z, y′=y/z. Với P=(1,0.5,4), ta được (0.25,0.125). Nếu giữ nguyên X/Y và đưa điểm ra Z=8, kết quả còn (0.125,0.0625). Điểm càng xa, tia càng gần trục nhìn, nên ảnh càng gần tâm. Ta thu hẹp **độ lệch khỏi tâm**, không chia tọa độ pixel tuyệt đối.
-
-Trong bài này focal scale tạm bằng 1, tương đương vertical FOV 90°. Bài 4 mới thay hệ số đó bằng thông số FOV có thể điều chỉnh. Ta cũng viết các nhánh kiểm tra near/far ngay từ lần chiếu đầu tiên để không chia cho Z=0; bài 5 sẽ giải thích kỹ từng trường hợp bị loại.
+Khi mắt tiến hai đơn vị, $z_c$ từ 4 còn 2. Với cùng $x_c=1$, giao điểm dịch từ 0,25 ra 0,5: **độ lệch so với tâm tăng gấp đôi**. Ngôi sao ở đúng trục nhìn có $x_c=y_c=0$ nên vẫn ở tâm chừng nào nó còn ở phía trước và còn trong vùng nhìn. Hãy đổi giữa mặt cắt XZ và YZ dưới hình để thấy cùng một lập luận theo cả hai chiều.
 
 <InteractiveLab demo="projection" mode="projection-divide" />
 
-Trong hình nhìn ngang bên dưới viewport, chọn mặt cắt XZ. Đặt camera về (0,0,0), giữ Point.X=1, rồi đổi Point.Z từ 4 lên 8. Cạnh đứng của tam giác lớn không đổi, cạnh ngang dài gấp đôi; cạnh đứng của tam giác nhỏ vì thế giảm một nửa. Đổi sang YZ để kiểm tra cùng lập luận cho y/z.
-
 ## Viết code từng bước
 
-Mở lại thư mục `work/` của bài trước. Các đường dẫn như `include/lab.hpp` dưới đây đều tính từ **work/**. Configure lại sẽ không ghi đè phần bạn đã viết.
-
-Giữ nguyên camera, X, Y và khung nhìn. Với điểm mặc định của chương trình, chọn F1 rồi F2: hai lần chỉ khác nhau ở Z (4 và 8). Hãy thử đo **từ tâm ảnh** đến hai vị trí, đừng đo từ mép trái cửa sổ.
-
-```powershell title="Chạy chương trình đang viết (Windows, Visual Studio)"
+```powershell title="Windows / Visual Studio — chạy bài đang viết"
 cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
 cmake --build build-work --config Debug --target project_11_work --parallel 1
 .\build-work\Debug\project_11_work.exe
 ```
 
-`checkpoints/03` là bản tham khảo sau bài này. Khi muốn thử phần mình vừa sửa, hãy chạy `project_11_work`, không chạy checkpoint.
+`checkpoints/03` là bản tham khảo sau bài này. Tiếp tục sửa trong `work/`; cấu hình lại không ghi đè bài của bạn.
 
-### Bước 1 — Viết phép chia từ tỉ lệ vừa suy ra
+### Bước 1 — Viết phép chia vừa vẽ ra giấy
 
 {/* snippet include/lab.hpp#divide */}
-```cpp title="include/lab.hpp — tọa độ trên mặt phẳng ảnh depth 1"
+```cpp title="include/lab.hpp — chia cho độ sâu tính từ mắt"
 inline Vec2 perspectiveDivide(Vec3 cameraPoint) {
     return {cameraPoint.x / cameraPoint.z, cameraPoint.y / cameraPoint.z};
 }
 ```
 
-Hàm này chỉ biết chia. Nếu truyền điểm ngay tại camera thì mẫu số bằng 0. Vì vậy ta sẽ đặt lời gọi ở đúng một nơi: sau khi đã kiểm tra độ sâu.
+Đây là phần lõi của cả chuyến bay. Hàm nhận tọa độ đã đổi gốc; lấy `worldPoint.z` làm mẫu số sẽ khiến người xem bay mà bầu trời chẳng chuyển động. Hai số trả về vẫn là **tỉ số**, chưa phải pixel.
 
-### Bước 2 — Ghép thành phép chiếu có guard
+### Bước 2 — Cho phép hàm trả lời “không có ảnh”
 
-Thêm các khai báo dưới vào namespace lab, sau worldToCamera/cameraToWorld và trước projectPerspective. ProjectionResult có cameraPoint và hai optional là ndc/screen. isInsideNdc cũng phải có trước khi projectPerspective gọi nó.
-
-```cpp title="include/lab.hpp — khai báo trước projectPerspective"
+```cpp title="include/lab.hpp — trạng thái và những giá trị có thể không tồn tại"
 enum class ProjectionStatus {
     Visible,
     BehindCamera,
@@ -72,171 +58,64 @@ struct ProjectionResult {
     std::optional<Vec2> ndc;
     std::optional<Vec2> screen;
 };
-
-inline bool validLens(const PerspectiveLens& lens, const Viewport& viewport) {
-    return std::isfinite(lens.verticalFovRadians) && lens.verticalFovRadians > 0.0 && lens.verticalFovRadians < kPi &&
-        std::isfinite(lens.nearPlane) && std::isfinite(lens.farPlane) && lens.nearPlane > 0.0 && lens.farPlane > lens.nearPlane &&
-        std::isfinite(viewport.x) && std::isfinite(viewport.y) && std::isfinite(viewport.width) && std::isfinite(viewport.height) && viewport.width > 0.0 && viewport.height > 0.0;
-}
 ```
 
-Thêm hàm kiểm cạnh ảnh. Một điểm đúng ở mép vẫn thuộc khung nhìn:
+Đừng lấy `(0,0)` làm tín hiệu rằng điểm không thể chiếu: đó vẫn là tọa độ thật ở góc ảnh. `ProjectionStatus` cho biết lý do, còn `std::optional` cho ta biết có hay không có kết quả số. `inline bool validLens` kiểm dữ liệu đầu vào. Trước khi chia phải loại độ sâu bằng 0, ở sau mắt hoặc ngoài khoảng gần/xa. Bài 05 sẽ dùng các điều kiện đó cho từng sao.
 
 {/* snippet include/lab.hpp#ndc-limits */}
-```cpp title="include/lab.hpp — kiểm hai biên NDC"
+```cpp title="include/lab.hpp — hai biên của vùng nhìn"
 inline bool isInsideNdc(Vec2 ndc) {
     return std::abs(ndc.x) <= 1.0 && std::abs(ndc.y) <= 1.0;
 }
 ```
 
-Chưa cần học hết enum ngay: bài 5 sẽ giải thích ý nghĩa từng nhánh. Chúng có mặt sớm để bản chạy thử luôn an toàn.
+Sau phép chia ta vẫn cần kiểm xem điểm có lọt vào khung không. Ở đây NDC có biên trái/phải là −1 và +1. Điểm ngoài khung không phải là một chấm dính vào mép.
 
-```cpp title="include/lab.hpp — pipeline an toàn với focal scale tạm"
-inline ProjectionResult projectPerspective(Vec3 worldPoint, const Camera3D& camera, const PerspectiveLens& lens, const Viewport& viewport) {
-    ProjectionResult result;
-    if (!finite(worldPoint) || !finite(camera.position) || !validLens(lens, viewport)) {
-        return result;
-    }
-    const Vec3 cameraPoint = worldToCamera(worldPoint, camera);
-    result.cameraPoint = cameraPoint;
-    if (!finite(cameraPoint)) {
-        return result;
-    }
-    // Các guard đã có từ bài 3 để checkpoint không chia cho 0.
-    // Bài 5 giải thích và đưa từng trạng thái ra giao diện.
-    if (cameraPoint.z <= 0.0) {
-        result.status = ProjectionStatus::BehindCamera;
-        return result;
-    }
-    if (cameraPoint.z < lens.nearPlane) {
-        result.status = ProjectionStatus::BeforeNearPlane;
-        return result;
-    }
-    if (cameraPoint.z > lens.farPlane) {
-        result.status = ProjectionStatus::BeyondFarPlane;
-        return result;
-    }
-    const double aspectRatio = viewport.width / viewport.height;
-    const Vec2 divided = perspectiveDivide(cameraPoint);
-    // Ở bài 3 mặt phẳng ảnh tạm có focal scale = 1.
-    const Vec2 ndc{divided.x / aspectRatio, divided.y};
-    const Vec2 screen{viewport.x + viewport.width * 0.5 + ndc.x * viewport.width * 0.5, viewport.y + viewport.height * 0.5 - ndc.y * viewport.height * 0.5};
-    if (!std::isfinite(ndc.x) || !std::isfinite(ndc.y) || !std::isfinite(screen.x) || !std::isfinite(screen.y)) {
-        return result;
-    }
-    result.ndc = ndc;
-    result.screen = screen;
-    result.status = ProjectionStatus::OutsideFrustum;
-    if (isInsideNdc(ndc)) {
-        result.status = ProjectionStatus::Visible;
-    }
-    return result;
-}
-```
-
-Theo thứ tự: kiểm finite/lens, đổi world sang camera, chặn depth, mới divide và chuyển về screen. X chia aspect để hình tròn không bị kéo rộng khi viewport không vuông. result.screen là optional: thiếu giá trị nghĩa là chưa có ảnh hợp lệ, không phải marker ở góc (0,0).
-
-### Bước 3 — Đưa kết quả vào framebuffer
-
-Hàm chiếu chỉ tính toán, không tự vẽ pixel. Trong view.hpp, thay toàn bộ renderScene cũ bằng hàm dưới. Không giữ lưới XY và nhánh preview nữa: chúng thuộc bản xem trước, không phải cảnh perspective.
-
-```cpp title="include/view.hpp — perspective áp dụng cho vị trí và bán kính"
-inline void renderScene(Framebuffer& image, const Scene& scene) {
-    image.clear(kBackground);
-    const Viewport viewport = viewportFor(scene);
-    [[maybe_unused]] const Vec2 center{viewport.x + viewport.width * 0.5, viewport.y + viewport.height * 0.5};
-    const auto projected = projectPerspective(scene.point, scene.camera, scene.lens, viewport);
-    if (projected.status == ProjectionStatus::Visible && projected.screen) {
-        // Bán kính world 0.12, vị trí cũng được chiếu perspective; không giả depth bằng size.
-        double focalPixels = viewport.height * 0.5;
-        const int radius = static_cast<int>(std::clamp(std::lround(0.12 * focalPixels / projected.cameraPoint.z), 3L, 30L));
-        drawPointMarker(image, *projected.screen, radius, viewport, scene.debug);
-    }
-}
-```
-
-`projectPerspective` trả tọa độ liên tục; `drawPointMarker` mới làm tròn và tô pixel. Chỉ vẽ khi status là Visible **và** screen có giá trị. Như vậy một điểm bị loại không bị vẽ nhầm ở góc (0,0).
-
-Bán kính world 0.12 cũng chia cho Z, nhưng bị giới hạn trong [3,30] pixel để marker dễ nhìn. Đây chỉ là ký hiệu của điểm sáng, chưa phải bộ vẽ hình cầu. Điều cần kiểm tra ở bài này là **tâm marker đổi vị trí**, không chỉ kích thước của nó.
-
-### Tự ghép trong `work/`
-
-Các đoạn trên giải thích phần mới. Khi viết, mở từng tệp dưới đây để thấy chỗ cần sửa trong **bản của bài trước**. Đoạn nào đã gõ rồi thì chỉ đối chiếu, không chèn thêm lần nữa.
-
-Kiểm độ sâu trước, sau đó mới chia X và Y cho Z. Điểm bị loại không có pixel.
+Trong diff phần toán, nối `worldToCamera` → kiểm độ sâu → `perspectiveDivide`; đừng gọi phép chia lên dữ liệu chưa kiểm.
 
 <CourseWorkFile project="11" step={3} path="include/lab.hpp" />
 
-Bỏ bản xem trước XY. Dùng tọa độ vừa chiếu để vẽ đốm sáng.
+### Bước 3 — Chọn tâm ảnh và khoảng cách tính bằng pixel
+
+Đặt đoạn dưới trong `projectPerspective` ở `work/include/lab.hpp`, ngay sau phần kiểm tra độ sâu. Từ đây mới tính pixel để hàm vẽ có chỗ đặt tâm ngôi sao.
+
+```cpp title="include/lab.hpp — dùng mặt ảnh với hệ số tiêu cự bằng 1"
+const double aspectRatio = viewport.width / viewport.height;
+const Vec2 divided = perspectiveDivide(cameraPoint);
+// Ở bài 3 mặt phẳng ảnh tạm có focal scale = 1.
+const Vec2 ndc{divided.x / aspectRatio, divided.y};
+const Vec2 screen{viewport.x + viewport.width * 0.5 + ndc.x * viewport.width * 0.5, viewport.y + viewport.height * 0.5 - ndc.y * viewport.height * 0.5};
+```
+
+Ở bài này hệ số tiêu cự tạm bằng 1. Tâm viewport của C++ là `(550,400)`, nửa chiều cao là 292,5 pixel. Với `(1,0.5,4)`, bạn có thể tính tay `(623.125,363.4375)`. Ngôi sao mặc định dùng `Y=0.6` nên hiện ở `(623.125,356.125)`. Dịch mắt tới Z=2: độ lệch theo cả hai trục phải gấp đôi, **không phải** nhân đôi hai tọa độ màn hình.
+
+Trong gói C++, `inline const char* statusText` và `inline bool presentFramebuffer` đưa trạng thái cùng số đo lên cửa sổ. Phần vẽ chỉ tô sao khi kết quả có pixel hợp lệ và nằm trong ảnh.
+
+Thay tọa độ XY tạm bằng kết quả của `projectPerspective` khi vẽ tâm chấm.
 
 <CourseWorkFile project="11" step={3} path="include/view.hpp" />
 
-Hiện tọa độ đã dùng để vẽ. Khi không có kết quả, ghi rõ lý do thay vì in (0,0).
+Hiện trạng thái và pixel vừa tính để so với phép tính tay ở trên.
 
 <CourseWorkFile project="11" step={3} path="include/presentation.hpp" />
 
 ## Ghép các phần lại
 
-### Hiển thị số đo của phép chiếu
-
-Trong `include/presentation.hpp`, hàm `inline bool presentFramebuffer(...)` đã có sẵn công việc đưa texture lên cửa sổ. Sau khi dùng `projectPerspective`, chỉ đọc `screen` và `ndc` nếu cả hai thực sự tồn tại. Phần cần hiểu là nhánh sau, không phải toàn bộ mã của SDL.
-
-Đừng để bảng số vẫn ghi “XY PREVIEW ONLY” khi đèn đã được chiếu theo Z. Thêm `statusText`, rồi chỉnh hàm `presentFramebuffer` đang có theo chỉ dẫn cho `work/include/presentation.hpp`. Hai đoạn dưới cho thấy cách gọi tên trạng thái và cách đọc kết quả. Với điểm sau camera, không có tọa độ ảnh để in ra.
-
-```cpp title="include/presentation.hpp — tên của từng trạng thái"
-inline const char* statusText(ProjectionStatus status) {
-    switch (status) {
-    case ProjectionStatus::Visible:
-        return "visible";
-    case ProjectionStatus::BehindCamera:
-        return "behind";
-    case ProjectionStatus::BeforeNearPlane:
-        return "before-near";
-    case ProjectionStatus::BeyondFarPlane:
-        return "beyond-far";
-    case ProjectionStatus::OutsideFrustum:
-        return "outside";
-    default:
-        return "invalid";
-    }
-}
-```
-
-```cpp title="include/presentation.hpp — số đo đi cùng ảnh perspective"
-if (projected.screen && projected.ndc) {
-    std::snprintf(value, sizeof(value), "NDC (%.4f, %.4f) -> screen (%.2f, %.2f), continuous viewport coordinates", projected.ndc->x, projected.ndc->y, projected.screen->x, projected.screen->y);
-} else {
-    std::snprintf(value, sizeof(value), "NDC / screen: undefined (depth rejected before division)");
-}
-if (!text(renderer, 16, 724, value)) {
-    return false;
-}
-```
-
-Build lại `project_11_work`. Giữ nguyên X/Y, dùng Q/E thay Z và đọc số đo trên HUD. Với viewport mặc định, tâm là (550,400), focalPixels=292.5. P=(1,0.5,4) phải tới (623.125,363.4375); đổi Z thành 8 được (586.5625,381.71875). Hai độ lệch (73.125,−36.5625) và (36.5625,−18.28125) đúng là hơn kém nhau hai lần.
-
-Để thử ngay bằng phím mà không cần đặt Y=0.5, bấm F1 rồi F2. Hai preset dùng Y=0.6: bạn sẽ thấy gần (623.125, 356.125) rồi (586.5625, 378.0625). Cả hai phép đo đều lấy mốc ở tâm (550, 400).
-
-Các giá trị này dùng FOV tạm 90° của riêng bài 3. Không lấy số đo từ bài 4–8 đang dùng FOV mặc định 60° để so trực tiếp.
+Đọc vị trí của chấm khi mắt ở gốc, rồi chỉ kéo camera theo Z. Bạn không cần chờ tới bài làm bầu trời: ngay trên **một** chấm lệch tâm, giờ đây đã thấy chuyển động tỏa ra mà bài 02 không tạo được.
 
 ## Thử làm sai để hiểu đúng
 
-1. Thay x/z bằng x, giữ nguyên code đổi size marker. Bạn sẽ thấy đĩa nhỏ hơn nhưng tâm không tiến về giữa. Đó là fake depth; khôi phục perspectiveDivide.
-
-2. Chọn preset Xa gấp đôi: X/Y giữ nguyên, Z tăng 4→8. Đo displacement so với tâm: cả X và Y phải giảm một nửa. Đừng so trực tiếp screen.x của hai lần.
-
-3. Bỏ guard rồi thử Z=0 là một thí nghiệm trên bản sao, không đưa vào bản final. Dự đoán Inf/NaN, sau đó giữ lại guard để lỗi không tới rasterizer.
+1. Thử bỏ phép chia cho `cameraPoint.z`, chỉ giữ X/Y. Tiến sát sao, nó lại đứng im như bài 02. Khôi phục mẫu số và thử lại ở cùng vị trí camera.
+2. Thử đưa điểm ra sau camera. Nếu bỏ chốt kiểm độ sâu, vị trí có thể lật sang phía đối diện; nếu chỉ đổi màu hoặc vẽ ở tâm để chữa, bạn sẽ tạo thêm một ngôi sao không có thật.
 
 ## Tự kiểm tra kết quả
 
-- cameraPoint được tính trước phép chia và world point không bị sửa.
-- Z tăng gấp đôi làm displacement giảm một nửa.
-- Điểm được vẽ bằng projectPerspective, không còn đi qua previewPoint.
-- Point behind/near không đi vào chia; NDC/screen bị loại được ghi là undefined.
-- Ở checkpoint 3 focal scale bằng 1, không giả rằng lens FOV đã hoạt động.
+- Nhìn mặt cắt và giải thích được vì sao sao bên phải chạy sang phải, sao bên trái chạy sang trái khi tiến về phía trước.
+- Đưa cùng điểm từ độ sâu 4 xuống 2 làm độ lệch khỏi tâm gấp đôi; một điểm trên trục vẫn ở giữa.
+- Với điểm không có ảnh, không đọc hoặc dùng tọa độ pixel tưởng tượng.
 
 ## Bài tập mở rộng
 
-Đặt thêm hai điểm có cùng X/Y và Z lần lượt 2,4,8. Ghi vị trí dự đoán trước khi chạy; dùng center làm gốc khi so tỉ lệ.
+Hai ngôi sao ban đầu nằm trên cùng một tia: `(1,0,4)` và `(2,0,8)`. Cho camera tiến hai đơn vị. Chúng còn trùng ảnh không? Tính hai tỉ số mới trước rồi dùng điểm thử để kiểm từng trường hợp.
 
-[Sang bài tiếp theo — Chọn FOV và hình dạng viewport](/projects/perspective-point/04-fov-aspect-ndc-va-pixel).
+[Bài tiếp: Bay tới hay chỉ đổi ống kính?](/projects/perspective-point/04-fov-aspect-ndc-va-pixel).

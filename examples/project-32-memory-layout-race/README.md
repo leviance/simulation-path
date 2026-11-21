@@ -1,6 +1,8 @@
 # Project 32 — Đài phun hạt CPU: AoS và SoA
 
-Xây một đài phun bằng C++20/SDL3: hạt được phát từ emitter, bay dưới gravity, hết lifetime rồi sinh lại trong cùng slot. Khi mô hình đã chạy đúng, lưu cùng state bằng AoS hoặc SoA và so hai workload: chỉ sửa velocityY và cập nhật đầy đủ vòng đời.
+Nước rời một vòi hơi nghiêng trên mặt lưới 3D. Gần miệng vòi, các giọt đi sát nhau thành dòng; qua ngọn, chúng tách thành màn giọt rơi. Thử nhìn ngang bằng **F3**, rồi nhìn từ trên bằng **F2**: cả hai ảnh đều đến từ cùng một tập hạt. Không có bể dựng sẵn hay solver chất lỏng.
+
+Thử thách của bạn là dựng đài phun ấy bằng C++20/SDL3, sau đó **đổi cách lưu một triệu hạt mà người xem không thấy đài phun đổi hình**. Làm được việc đó mới đến câu hỏi về tốc độ: nếu chỉ sửa vận tốc hướng lên, cách lưu nào có lợi? Câu trả lời còn đúng khi phải lo cả tuổi thọ và phát lại giọt nước không?
 
 Bản cuối có preset **1.000.000 hạt sống được cập nhật thật ở mỗi fixed step**. Renderer CPU lấy mẫu tối đa 40.000 hạt để vẽ; số được lấy mẫu và số vẽ sau culling được ghi riêng. Không dùng OpenGL, compute shader, thread pool hoặc engine.
 
@@ -37,7 +39,19 @@ ctest --test-dir build --output-on-failure --timeout 20
 
 Linux cần các development package cho backend window mà SDL sử dụng; xem Getting Started của website nếu configure báo thiếu thư viện hệ thống. Với generator single-config, dùng build directory riêng để kiểm Debug và Release. Với Visual Studio, hai cấu hình dùng chung build nhưng executable nằm trong Debug hoặc Release.
 
-Không sửa trực tiếp final/checkpoints trong bản clone website: chúng được sinh từ source-template. Trong ZIP độc lập, bạn có thể mở/sửa đúng snapshot đang học rồi build target tương ứng.
+### Tự viết từ starter
+
+Trong ZIP, nếu muốn làm theo bài thay vì chỉ chạy lời giải, dùng một thư mục build riêng:
+
+```powershell
+cmake -S . -B build-work -G "Visual Studio 17 2022" -A x64 -DCOURSE_WORKBOOK=ON
+cmake --build build-work --config Debug --target project_32_work --parallel 1
+./build-work/Debug/project_32_work.exe
+```
+
+CMake tạo `work/` từ starter đúng **một lần**. Mỗi bài cho biết tệp nào trong đó cần sửa và đặt phần mới vào đâu. Build lại cùng target sau mỗi bài; chạy configure lần sau không ghi đè phần bạn đã viết. Với Ninja, thêm `-DCMAKE_BUILD_TYPE=Debug` và chạy `./build-work/project_32_work`. Cuối bài 08, build target `project_32_tests` trong **build-work**, rồi chạy CTest ở đó: tests sẽ đọc header từ **work/** của bạn, không mượn bản final. Đừng dùng tests của sản phẩm hoàn thiện để chấm một starter còn thiếu chức năng.
+
+`checkpoints/` và `final/` là các bản đối chiếu độc lập. Nếu lạc bước, hãy so sánh đúng hai checkpoint kề nhau trước khi mở final.
 
 ## Cấu trúc source và các mốc học
 
@@ -45,13 +59,13 @@ Không sửa trực tiếp final/checkpoints trong bản clone website: chúng �
 | --- | --- |
 | starter | Tám hạt cố định, window/framebuffer/camera có sẵn để kiểm môi trường |
 | checkpoints/01 | State 44 byte, khởi tạo warm và đếm allocated/alive |
-| checkpoints/02 | Emission carry, gravity, age/lifetime, respawn và bước atomic theo batch |
+| checkpoints/02 | Phát hạt từ một vòi, thay độ xòe, cho rơi rồi tái sử dụng slot khi hết tuổi |
 | checkpoints/03 | Baseline AoS có warm-up, năm mẫu, ba pass/mẫu và checksum |
 | checkpoints/04 | Mười một mảng SoA, chuyển layout theo batch; chưa cập nhật vật lý bằng SoA |
 | checkpoints/05 | Kernel SoA cùng mô hình/precision/thứ tự phép tính, kiểm state |
 | checkpoints/06 | Mô hình địa chỉ/cache line có giả định rõ |
 | checkpoints/07 | So AoS/SoA, AB/BA và scaling ở ba N × hai workload |
-| checkpoints/08, final | Ứng dụng đủ một triệu hạt, controls và workflow nghiệm thu |
+| checkpoints/08, final | Một triệu hạt, soi giọt theo ID qua lần sinh kế tiếp và qua hai layout |
 
 Target checkpoint là project_32_checkpoint_1 … project_32_checkpoint_8. Final là target mặc định; starter và checkpoints chỉ có khi bật BUILD_CHECKPOINTS.
 
@@ -64,6 +78,8 @@ Trong mỗi snapshot:
 - include/render_geometry.hpp: camera, phép chiếu, framebuffer và depth buffer.
 - include/render_surface.hpp: mặt phẳng lưới XZ tại y = 0 và nền/depth buffer được cache.
 - include/render.hpp: đốm sáng mềm, nét chỉ vận tốc và sampling hiển thị tái lập.
+- include/spray_light.hpp: phần sáng mờ do các giọt nhìn thấy góp vào ảnh; không thêm nước vào mô phỏng.
+- include/inspection.hpp, include/showcase.hpp: chọn đúng slot đang sống và đọc trạng thái của nó trên ảnh.
 - include/render_panel.hpp: bảng thông số và trợ giúp theo checkpoint.
 - include/application.hpp: vòng SDL, input, controls và telemetry.
 - src/main.cpp: tài nguyên SDL và chế độ CLI.
@@ -73,6 +89,10 @@ Trong mỗi snapshot:
 
 | Thao tác | Kết quả |
 | --- | --- |
+| F1 / F2 / F3 | Nhìn nghiêng / từ trên / ngang. Đang pause thì cả ba góc dùng đúng một snapshot |
+| , / . | Giảm/tăng độ xòe 0,5 m/s cho những giọt sinh tiếp theo; R khởi tạo lại với thông số hiện tại |
+| I / Tab / bấm một giọt | Mở/đóng chế độ theo dõi, chọn slot kế tiếp hoặc chọn một giọt thấy trên ảnh; từ bài 08 |
+| U rồi N | Tìm slot gần hết tuổi thọ nhất trong tối đa 4.096 slot đầu, rồi tiến một bước. Nếu thời gian còn lại không quá dt thì generation tăng, ID không đổi |
 | Space | Pause/tiếp tục vật lý hoặc tác vụ đang chạy |
 | N | Hủy tác vụ dở rồi tiến đúng một bước vật lý |
 | R | Tạo lại preset bằng cấu hình hiện tại, đưa thời gian về 0 và pause |
@@ -92,9 +112,9 @@ Trong mỗi snapshot:
 | F | Hiện/ẩn phần báo cáo, không giấu controls và các giới hạn |
 | Escape | Hủy thao tác kéo hoặc tác vụ; thoát nếu không còn tác vụ |
 
-Mất focus sẽ pause và nhả mouse capture. Space không tự bật lại sau khi chuyển cửa sổ. Ở checkpoint 04, SoA chỉ đọc/vẽ; quay về AoS để chạy cho tới khi thêm kernel ở checkpoint 05.
+Ứng dụng final chạy ngay khi mở. Nhấn Space để nhìn kỹ; R sẽ dừng ở cùng điều kiện đầu. Ảnh chụp cũng dừng ở bước 0 để so các góc công bằng. Mất focus sẽ pause và nhả mouse capture, không tự bật lại. Ở checkpoint 04, SoA chỉ đọc/vẽ; quay về AoS để chạy cho tới khi thêm kernel ở checkpoint 05.
 
-Hạt mới có lõi trắng, chuyển dần sang xanh lam theo age/lifetime; nét ngắn chỉ hướng vận tốc hiện tại, không phải quỹ đạo đã lưu. Mặt lưới XZ luôn hiện: ô 1 m, đường chính mỗi 5 m. Depth buffer che hạt dưới mặt phẳng, nhưng **chưa có va chạm sàn hay solver chất lỏng**; hạt bị che vẫn được cập nhật đầy đủ. F bật báo cáo và làm lưới rõ hơn. Không có đế hay bể dựng sẵn. Đổi emitter/lifetime không sửa ngược các hạt đã sống; R tạo lại toàn bộ bằng cấu hình mới.
+Giọt mới có màu bạc nhạt, chuyển dần sang xanh thép theo age/lifetime; nét ngắn chỉ hướng vận tốc hiện tại, không phải quỹ đạo đã lưu. Mặt lưới XZ luôn hiện: ô 1 m, đường chính mỗi 5 m. Depth buffer che hạt dưới mặt phẳng, nhưng **chưa có va chạm sàn hay solver chất lỏng**; hạt bị che vẫn được cập nhật đầy đủ. F bật báo cáo và làm lưới rõ hơn. Không có đế hay bể dựng sẵn. Đổi emitter/lifetime không sửa ngược các hạt đã sống; R tạo lại toàn bộ bằng cấu hình mới.
 
 ## Mô hình, giới hạn và bộ nhớ
 
@@ -137,6 +157,10 @@ Khi lưu kết quả, ghi CPU, OS, compiler/version, generator, configuration, c
 Giữ cả ca SoA chậm hơn. JIT của Canvas, cache CPU, batch size, đồng hồ và tải nền đều là giới hạn của phép đo. Mô hình cache line 64 B chỉ đếm địa chỉ với giả định base thẳng hàng 64 B; workload toàn field là cận trên, không phải bộ đếm hardware cache miss.
 
 ## Kiểm chứng
+
+Một cách kiểm bằng mắt: dừng, nhấn U, ghi ID và generation; bấm N cho tới khi tuổi quay về gần 0. Giữ nguyên giọt đó, nhấn L, đợi đổi layout xong rồi đọc lại cả ba số. Nhấn F2 và F3: góc nhìn đổi nhưng giọt không già thêm. Hạt ở dưới lưới vẫn sống dù không xuất hiện trong số visible.
+
+Muốn chụp lại ba góc cho bài học, chạy bản Release với `--capture jet.png --view oblique`, `--capture plan.png --view plan` hoặc `--capture profile.png --view profile`. Thêm `--narrow` để khởi tạo với độ xòe 0 m/s. PNG lấy từ framebuffer SDL của chính ứng dụng.
 
 ```powershell
 cmake --build build --config Debug --parallel 2

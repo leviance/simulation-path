@@ -6,7 +6,7 @@ export function hasVoxelWorkbook(projectId: string) {
 /** Only offer a work target when the downloadable CMake project actually declares it. */
 export function workbookOption(projectId: string) {
   if (hasVoxelWorkbook(projectId)) return "VOXEL_WORKBOOK";
-  if (projectId === "11" || projectId === "31" || /^5[2-7]$/.test(projectId))
+  if (projectId === "11" || projectId === "31" || projectId === "32" || /^5[2-7]$/.test(projectId))
     return "COURSE_WORKBOOK";
   return null;
 }

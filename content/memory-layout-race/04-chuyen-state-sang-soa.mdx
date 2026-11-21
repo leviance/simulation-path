@@ -1,36 +1,28 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
-# Đổi layout mà không làm đổi trạng thái
+# Giữ nguyên đài phun khi đổi sang SoA
 
 ## Vấn đề cần giải quyết
 
-Đài phun AoS đã chạy và có baseline. Ta muốn thử SoA nhưng không muốn mỗi lần đổi layout lại tạo một đài phun khác. Nếu chuyển đổi làm mất age, reset generation hoặc đổi vận tốc, phép so sánh sau đó sẽ không còn cùng bài toán.
+Dừng đài phun khi một giọt vừa chạm độ cao lớn nhất. Ta muốn đổi cách lưu dữ liệu ngay lúc ấy. Nếu tất cả giọt quay về miệng vòi, đổi màu hoặc nhảy đi một quãng, chương trình đã tạo một đài phun khác. Thử thách của bài là đổi cả mảng trong khi **khung hình và đồng hồ vẫn đứng nguyên**.
 
-Bài này **chỉ đổi nơi lưu dữ liệu**. Checkpoint 04 đọc/vẽ được SoA và đổi qua lại mà giữ nguyên state, nhưng chưa có kernel SoA; muốn chạy vật lý hãy trở về AoS. Bài 05 mới nối phần cập nhật SoA. Trình tự này giúp phát hiện lỗi conversion trước khi nghi ngờ solver.
+Hãy khoan viết vòng cập nhật thứ hai. Ở cuối bài này bạn sẽ đổi sang SoA, xem rồi đổi ngược về AoS. SoA mới chỉ để đọc và vẽ; đến bài 05 nó mới tự tính được bước kế.
 
-## Theo chân một particle
+## Hiểu ý tưởng trước khi viết code
 
-### Một hạt, hay một field, nằm cạnh nhau?
+Hãy ghi ba giọt vào một bảng: mỗi **hàng** là một ID, mỗi **cột** là một trường. AoS đặt trọn hàng 0 cạnh hàng 1. SoA đặt toàn bộ cột `velocityY` trong một mảng, toàn bộ cột `age` trong một mảng khác, và cứ thế. Các bảng biểu diễn cùng dữ liệu; điều thay đổi là đường CPU phải đi để tìm ô tiếp theo.
 
-Trong AoS, toàn bộ record của hạt 0 nằm trước record của hạt 1. Trong SoA, mọi positionX nằm trong một mảng, mọi positionY trong mảng khác, và tương tự với các field còn lại.
-
-```text title="Cùng state, hai cách bố trí"
-AoS: [id0 gen0 x0 y0 z0 vx0 vy0 vz0 age0 life0 hue0] [id1 ...]
-SoA: id = [id0 id1 ...]   generation = [gen0 gen1 ...]
-     positionX = [x0 x1 ...]   positionY = [y0 y1 ...]   ...
-```
-
-SoA không cho phép bỏ age, lifetime hoặc hue chỉ vì phép đo hiện tại không chạm tới chúng. Mỗi layout vẫn chứa hai uint32 và chín float cho một slot: payload logic 44 × N byte. Mười một vector có metadata và capacity riêng; tổng RAM thực tế còn phụ thuộc buffer đang giữ.
+Có mười một cột, không chỉ sáu cột vị trí và vận tốc. Bỏ quên `generation` có thể không làm hình đổi ngay, nhưng lần sinh sau sẽ dùng sai chuỗi ngẫu nhiên. Bỏ quên `hue` thì phần vật lý vẫn có thể đúng dù sắc độ của giọt bị đổi.
 
 <InteractiveLab demo="memory-layout-race" mode="soa-layout" />
 
-## Bắt tay xây dựng
+## Viết code từng bước
 
-### Bước 1 — Tạo container chứa đủ mười một mảng
+### Để các cột dùng chung một chỉ số
 
-Thêm ParticlesSoA trong include/storage.hpp, bên trong namespace lab. File này đã include particles.hpp, nơi định nghĩa ParticleAoS và giới hạn N:
-
-```cpp title="include/storage.hpp — container SoA và kiểm độ dài"
+{/* snippet include/storage.hpp#particles-soa */}
+```cpp title="include/storage.hpp — Mười một mảng phải dài bằng nhau"
 struct ParticlesSoA {
     std::vector<std::uint32_t> id{};
     std::vector<std::uint32_t> generation{};
@@ -71,15 +63,12 @@ struct ParticlesSoA {
 };
 ```
 
-`size()` lấy độ dài mảng ID làm chuẩn, còn `valid()` kiểm mọi mảng có cùng size. Phải resize **tất cả**, không chỉ các mảng position/velocity. Nếu một mảng ngắn hơn, đọc cùng index không còn hợp lệ dù hình đài phun đôi khi vẫn trông bình thường.
+`ParticlesSoA` có một `resize` chung. Nếu `id.size() == 10.000` mà cột `age` chỉ có 9.999 ô, thao tác trên hạt cuối đã không còn hợp lệ. Chỉ số `i` luôn phải trỏ đến **cùng một hạt** ở mọi cột.
 
-Hai mảng đầu là uint32 để ID/generation giữ giá trị nguyên chính xác. Không đổi chúng sang float để gom kiểu: float32 không biểu diễn mọi uint32 chính xác.
+### Viết thử một hàng trước khi chuyển cả đài phun
 
-### Bước 2 — Ghi và đọc một record
-
-Thêm writeParticle ngay sau kiểu container:
-
-```cpp title="include/storage.hpp — ghi đủ field vào cùng slot"
+{/* snippet include/storage.hpp#write-particle */}
+```cpp title="include/storage.hpp — Ghi cùng một giọt vào đủ các cột tại index"
 inline void writeParticle(ParticlesSoA& destination, std::size_t index, const ParticleAoS& particle) {
     destination.id[index] = particle.id;
     destination.generation[index] = particle.generation;
@@ -95,42 +84,14 @@ inline void writeParticle(ParticlesSoA& destination, std::size_t index, const Pa
 }
 ```
 
-Mọi mảng dùng cùng index. Lỗi copy-paste như ghi velocityZ vào velocityY sẽ tạo một trạng thái khác, không phải một layout khác.
+`writeParticle` rải các trường của bản ghi vào đúng cột. `readParticle` làm việc ngược lại: gom các giá trị ở cùng chỉ số để bộ vẽ dùng như trước. Đây là phép sao chép `float` sang `float`; nếu chưa tiến thời gian, các số phải giữ nguyên chính xác, không cần cho phép sai số. Hãy thử với ba hạt có ID, thế hệ và màu khác nhau trước.
 
-readParticle thực hiện chiều ngược lại:
+<CourseWorkFile project="32" step={4} path="include/storage.hpp" />
 
-```cpp title="include/storage.hpp — đọc một record SoA để kiểm hoặc vẽ"
-inline ParticleAoS readParticle(const ParticlesSoA& source, std::size_t index) {
-    return {source.id[index], source.generation[index], source.positionX[index], source.positionY[index], source.positionZ[index], source.velocityX[index], source.velocityY[index], source.velocityZ[index], source.age[index], source.lifetime[index], source.hue[index]};
-}
-```
+### Đừng để lộ một mảng mới điền được nửa chừng
 
-Thứ tự các giá trị trong return phải khớp thứ tự field của ParticleAoS. Đây là một bản ghi tạm để renderer và validator dùng chung cách đọc; không có vector mới nào được cấp phát mỗi lần gọi. Kernel SoA bình thường ở bài sau sẽ truy cập trực tiếp các mảng, không chuyển cả container qua AoS rồi mới tính.
-
-### Bước 3 — Giữ layout cũ cho tới khi copy đủ
-
-Trong Simulation, thêm `ParticlesSoA soa{}, nextSoA{};` bên cạnh các buffer AoS. soa là container của layout hiện tại hoặc đích chuyển đổi; nextSoA dành cho bước vật lý ở bài 05. Phần source đầy đủ ở cuối trang cho thấy chính xác khai báo và vị trí các phương thức.
-
-Thêm beginConversion để chuẩn bị đích:
-
-```cpp title="include/simulation.hpp — bắt đầu một tác vụ conversion"
-void beginConversion() {
-    cancel();
-    if (layout == Layout::aos)
-        soa.resize(count);
-    else
-        aos.resize(count);
-    cursor = 0;
-    conversionMs = 0;
-    pending = PendingWork::conversion;
-}
-```
-
-`cancel()` hủy công việc dở và pause mô phỏng; nó không xóa snapshot hoàn tất. Nếu đang dùng AoS, ta chuẩn bị soa; nếu đang dùng SoA, ta chuẩn bị aos. Chưa đổi biến layout tại đây.
-
-Tiếp theo, thêm tickConversion:
-
-```cpp title="include/simulation.hpp — đổi layout chỉ sau khi copy hết N slot"
+{/* snippet include/simulation.hpp#tick-conversion */}
+```cpp title="include/simulation.hpp — Chỉ đổi layout sau khi chép xong ô cuối"
 bool tickConversion(double budgetMs = 6) {
     if (pending != PendingWork::conversion)
         return false;
@@ -160,52 +121,38 @@ bool tickConversion(double budgetMs = 6) {
 }
 ```
 
-Mỗi lần gọi xử lý từng batch tối đa 4.096 slot và nhường lại vòng SDL sau ngân sách khoảng 6 ms. Trong lúc đó, particle() vẫn đọc container được chỉ bởi layout cũ. Chỉ sau khi cursor đi hết count mới đổi layout.
+`beginConversion` đặt con trỏ chép về đầu và chuẩn bị mảng đích. Mỗi lần `tickConversion` chép tiếp vài nhóm ô. Trong lúc đó, bộ vẽ vẫn tra **mảng nguồn**. Chỉ khi `cursor == count` ta mới chuyển `layout`. Nếu người dùng hủy sớm, bản nguồn vẫn là một đài phun nguyên vẹn.
 
-Nếu hủy giữa chừng, một phần destination có thể đã được ghi nhưng **không trở thành state đang dùng**. Vì vậy không cần hoàn tác từng phần tử. Lần chuyển sau sẽ ghi lại toàn bộ destination trước khi công bố nó.
+<CourseWorkFile project="32" step={4} path="include/simulation.hpp" />
 
-Không sửa time, steps, active hoặc emissionRemainder trong conversion. Đặc biệt, pool cold chưa đầy cũng phải giữ phần lẻ emission; nếu bỏ nó, tốc độ phát có thể đổi sau mỗi lần bấm L dù công thức vật lý không thay.
+Điều cần giữ không chỉ nằm trong hai container: `active`, đồng hồ mô phỏng và `emissionRemainder` thuộc về `Simulation`. Không gọi `reset` khi đổi layout; reset sẽ làm mất cả ba. Sau đó nối phím `L` với tác vụ chuyển dữ liệu, `X` để hủy và sửa phần chỉ dẫn trên cửa sổ.
 
-## Chạy checkpoint và đọc kết quả
+<CourseWorkFile project="32" step={4} path="include/application.hpp" />
 
-Trong include/application.hpp, phím L gọi simulation.beginConversion sau khi hủy tác vụ cũ. Vòng SDL gọi tickConversion khi pending là conversion và jobsPaused chưa bật. Space tạm dừng/tiếp tục tác vụ, X hủy; sau conversion, mô phỏng vẫn pause cho tới khi người dùng cho chạy.
+<CourseWorkFile project="32" step={4} path="include/render_panel.hpp" />
 
-Phương thức particle(index) trong Simulation cũng cần chọn nguồn theo layout: AoS trả aos[index], SoA gọi readParticle(soa, index). drawFountain không phải biết mười một mảng được sắp thế nào. Hai phần ghép này có sẵn trong source checkpoint 04 để bạn đối chiếu khi tự viết, không chép riêng các helper vào main rồi bỏ quên chỗ gọi.
+## Ghép các phần lại
 
-Chỉ đổi layout sau khi copy hết cũng quan trọng với thao tác nhanh: nhấn L rồi X không được làm viewport đọc một nửa dữ liệu mới. Dung lượng buffer cũ có thể vẫn được giữ để dùng lại; logical payload không đồng nghĩa mọi allocation cũ đã biến mất.
-
-### Thử round-trip trước khi chạy kernel mới
-
-Dừng tại một state đã có age/generation khác 0. Ghi lại slot đang xem, đổi AoS → SoA → AoS rồi so ID, generation, mọi field, thời gian và bộ đếm. Mỗi lần chuyển có conversion time riêng; đó là chi phí thật, không được giấu vào một phía của benchmark sau này.
-
-Ở bài này, chọn SoA rồi nhấn chạy sẽ nhắc bạn trở về AoS vì kernel SoA chưa được thêm. Đây là ranh giới checkpoint, không phải lý do reset dữ liệu. Canvas có cùng ranh giới bài học nhưng tối đa 20.000 hạt; bản C++ mới cung cấp preset một triệu.
-
-```bash title="Terminal — checkpoint 04"
-cmake --build build --config Debug --target project_32_checkpoint_4
-./build/Debug/project_32_checkpoint_4.exe
+```bash title="Terminal — biên dịch chương trình trong work/"
+cmake --build build-work --config Release --target project_32_work --parallel 1
+.\build-work\Release\project_32_work.exe
 ```
 
-## Cố tình làm sai
+Chọn bộ 10.000 hạt, để mô phỏng tiến vài bước rồi dừng. Ghi lại thời gian, độ cao và bề rộng của tia nước và số hạt sống. Nhấn **L**, chờ nhãn thành SoA, rồi nhấn **L** thêm lần nữa để về AoS. Không có bước vật lý nào giữa ba cảnh. Nếu ở giữa mà **N** chưa làm nước chảy tiếp, đó là đúng phạm vi bài này; đừng giả làm kernel SoA bằng cách chạy trên mảng AoS còn sót lại.
 
-Trước khi đổi layout, dự đoán age/generation có đổi không. Conversion không làm thời gian mô phỏng tiến thêm.
+## Thử làm sai để hiểu đúng
 
-1. Tạm bỏ dòng ghi hue hoặc generation trong writeParticle. Màu có thể chỉ khác nhẹ, nhưng so từng field sau round-trip phải phát hiện. Khôi phục dòng copy trước khi học tiếp.
-2. Tạm đổi layout ngay trong beginConversion, trước khi copy hết destination. Ở N lớn, viewport có thể đọc các slot chưa được ghi; đây là lý do chỉ flip layout sau cursor = count. Khôi phục điểm commit rồi thử X để kiểm Cancel giữ snapshot cũ.
-
-Không dùng “không crash” làm tiêu chí duy nhất. So cả state và thời gian trước/sau tác vụ.
+1. Trong một bản thử, tạm bỏ dòng chép `generation`. Dùng một hạt đã tái sinh; phép so khứ hồi phải tìm ra khác biệt dù ảnh chụp gần như không đổi. Trả lại cột trước khi đi tiếp.
+2. Thử đặt `layout = Layout::soa` ngay khi bắt đầu chuyển một mảng lớn. Hủy giữa chừng: một phần đài phun có thể mất hoặc dùng giá trị cũ của mảng đích. Sửa bằng cách chỉ đổi nhãn ở cuối, không phải bằng cách cấm người dùng hủy.
 
 ## Tự kiểm tra kết quả
 
-- SoA có mười một mảng cùng độ dài; ID/generation không bị chuyển sang float.
-- AoS → SoA → AoS giữ chính xác các giá trị được sao chép, không cần tolerance để hợp thức hóa việc mất field.
-- Active, time, steps và emission carry không đổi do conversion.
-- Layout chỉ đổi sau khi copy đủ N; Cancel không làm lộ destination dở.
-- Renderer đọc qua particle(index), cho cùng hình khi camera không đổi.
-- Conversion time và payload/capacity được tách khỏi update/render.
-- SoA tại checkpoint 04 chỉ đọc/vẽ; kernel sẽ được thêm ở bài sau.
+- AoS → SoA → AoS giữ nguyên từng trường của từng ô, cả khi pool cold chưa đầy.
+- Mười một mảng SoA có cùng độ dài. Không thêm một bộ hạt ngẫu nhiên mới khi đổi layout.
+- Thời gian, số đang sống và phần hạt lẻ đang tích không đổi; số ms dành cho conversion được báo riêng.
 
 ## Bài tập mở rộng
 
-Viết một fixture chỉ có ba hạt nhưng mỗi field mang một giá trị dễ phân biệt. Cho một slot đã ở generation 4 và một slot có hue khác hẳn hai slot còn lại. Chuyển hai chiều và so từng field; cách này bắt lỗi đảo mảng tốt hơn việc chỉ nhìn một đài phun nhiều nghìn hạt.
+Chọn tốc độ phát 30 hạt/s và nhấn một bước từ pool rỗng: mới tích được 0,25 hạt. Đổi layout đi và về rồi tiếp tục ba bước. Nếu chưa thấy hạt đầu tiên, hãy kiểm phần lẻ mà phép chuyển có thể đã làm mất.
 
-Bài tiếp theo: [Chạy cùng vòng đời bằng SoA](/projects/memory-layout-race/05-doi-chieu-hai-kernel).
+Học tiếp: [Một hạt có sống như nhau trong hai cách lưu?](/projects/memory-layout-race/05-doi-chieu-hai-kernel).

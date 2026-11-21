@@ -4,13 +4,41 @@ import { createFountain, beginConversion, tickPending } from "../lib/labs/founta
 import {
   createFountainFrame,
   addWaterLight,
+  layWater,
   projector,
   renderColor,
 } from "../lib/labs/fountain/render-geometry.ts";
 import { renderFountainFrame, fountainParticleColor } from "../lib/labs/fountain/render.ts";
 import { emptyParticle } from "../lib/labs/fountain/state.ts";
 import { prepareFountainSurface } from "../lib/labs/fountain/render-surface.ts";
-import { fountainFocalScale } from "../lib/labs/fountain/camera.ts";
+import { fountainCamera, fountainFocalScale, fountainViews } from "../lib/labs/fountain/camera.ts";
+import { pickFountainDrop } from "../lib/labs/fountain/inspection.ts";
+
+test("P32 changes views of the same jet; clicking picks the visible, not occluded, drop", () => {
+  const scene = createFountain(8, 3);
+  const saved = structuredClone(scene.aos);
+  const frame = createFountainFrame(260, 180);
+  const pictures = fountainViews.map((view) => {
+    scene.camera = fountainCamera(view);
+    renderFountainFrame(frame, scene);
+    return frame.pixels.slice();
+  });
+  assert.notDeepEqual(pictures[0], pictures[1]);
+  assert.notDeepEqual(pictures[0], pictures[2]);
+  assert.deepEqual(scene.aos, saved);
+  scene.active = 2;
+  scene.camera = { yaw: 0, pitch: -Math.PI / 2, distance: 10, x: 0, y: 0, z: 0 };
+  for (const [id, y] of [
+    [0, -0.1],
+    [1, 1],
+  ]) {
+    scene.aos[id] = { ...emptyParticle(id), positionY: y };
+  }
+  assert.equal(pickFountainDrop(scene, 130, 90, 260, 180), 1);
+  assert.equal(pickFountainDrop(scene, 200, 40, 260, 180), -1);
+  scene.active = 1;
+  assert.equal(pickFountainDrop(scene, 130, 90, 260, 180), -1);
+});
 
 test("P32 opaque surfaces occlude water, and the Canvas raster has explicit RGBA bytes", () => {
   const frame = createFountainFrame(8, 8);
@@ -23,7 +51,16 @@ test("P32 opaque surfaces occlude water, and the Canvas raster has explicit RGBA
   assert.equal(addWaterLight(frame, -1, 3, 0.5, renderColor(255, 0, 0), 1), false);
   const fresh = emptyParticle(0),
     old = { ...fresh, age: 2 };
-  assert.equal(fountainParticleColor(fresh), renderColor(228, 250, 255));
+  assert.equal(fountainParticleColor(fresh), renderColor(207, 227, 235));
+  const glint = renderColor(130, 172, 194);
+  frame.pixels[27] = renderColor(0, 0, 0);
+  for (let i = 0; i < 25; i++) assert.ok(layWater(frame, 3, 3, 0.5, glint, 0.5));
+  const result = frame.pixels[27];
+  assert.ok(
+    (result & 255) <= 130 && ((result >>> 8) & 255) <= 172 && ((result >>> 16) & 255) <= 194,
+  );
+  assert.equal(layWater(frame, 3, 3, 2, glint, 1), false);
+  assert.equal(frame.pixels[27], result);
   assert.notEqual(fountainParticleColor(fresh), fountainParticleColor(old));
 });
 
@@ -82,4 +119,16 @@ test("P32 raster allocation and draw budgets are finite", () => {
     frame = createFountainFrame(64, 64);
   assert.deepEqual(renderFountainFrame(frame, scene, false, 0), { sampled: 0, rendered: 0 });
   assert.throws(() => renderFountainFrame(frame, scene, false, 20001), /budget/);
+});
+
+test("P32 spray light and floor accents come only from the live drops of this frame", () => {
+  const scene = createFountain(8, 1);
+  const frame = createFountainFrame(240, 160);
+  renderFountainFrame(frame, scene);
+  assert.ok(frame.spray.count > 0);
+  assert.notDeepEqual(frame.pixels, frame.surface);
+  scene.active = 0;
+  renderFountainFrame(frame, scene);
+  assert.equal(frame.spray.count, 0);
+  assert.deepEqual(frame.pixels, frame.surface);
 });

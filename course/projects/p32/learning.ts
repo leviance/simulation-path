@@ -3,205 +3,218 @@ const learning = {
   guides: {
     "p32-l01": {
       focus:
-        "Chạy khung SDL, đọc state của hạt trong không gian 3D và phân biệt khởi tạo warm với chuyển động do solver.",
+        "Từ tám điểm của starter, tự tạo 256 hạt ở các độ tuổi khác nhau. Xoay camera để phân biệt hình ban đầu với một bước mô phỏng.",
       expected:
-        "Simulation.reset chọn số slot sống; drawFountain chỉ lấy mẫu để vẽ. Số allocated/alive/rendered không phải cùng một đại lượng.",
+        "Khi đồng hồ còn ở 0, màn hình đã có 256 hạt. Quay lại cùng góc nhìn sau hai lần reset sẽ cho cùng một hình.",
       files: ["include/particles.hpp", "include/simulation.hpp"],
       steps: [
         {
-          title: "Chạy chương trình nền",
+          title: "Chạy tám điểm trong starter",
           explanation:
-            "Starter đã có window, renderer CPU và camera; build nó trước rồi đọc state của hạt, không viết lại SDL từ đầu.",
+            "Cấu hình COURSE_WORKBOOK=ON rồi chạy project_32_work trước khi sửa. Cửa sổ, camera và cách chiếu 3D đã có sẵn.",
         },
         {
-          title: "Sinh lại cùng đài phun",
+          title: "Gieo một vòi phun",
           explanation:
-            "spawnParticle lấy ngẫu nhiên từ seed/ID/generation; warmParticle chỉ tạo điều kiện đầu có tuổi khác nhau.",
+            "Từ vị trí và vận tốc khi rời vòi, tính trạng thái ban đầu theo tuổi của từng hạt. Chưa cần chạy vòng cập nhật.",
         },
         {
-          title: "Đếm đúng dữ liệu",
+          title: "Đếm đúng ở thời điểm 0",
           explanation:
-            "Simulation.reset chọn số slot sống; drawFountain chỉ lấy mẫu để vẽ. Số allocated/alive/rendered không phải cùng một đại lượng.",
+            "Đặt số hạt sống theo chế độ warm/cold, tách nó khỏi số ô đã cấp phát và số hạt đã thực sự tiến một bước.",
         },
       ],
     },
     "p32-l02": {
       focus:
-        "Thêm emission carry, gravity, age/lifetime và respawn có seed; tiến một bước đầy đủ rồi mới công bố state.",
+        "Cho giọt rời một vòi hơi nghiêng, theo nó qua đỉnh tia rồi đến lúc rơi. Thay độ xòe ở miệng vòi và dùng lại ô nhớ khi giọt hết tuổi.",
       expected:
-        "beginStep và tickStep ghi vào buffer đích; con trỏ phải đi hết N trước khi đổi buffer và tăng thời gian.",
+        "Đặt spread bằng 0: các giọt vẫn bay về phía trước nhưng không lệch khỏi mặt phẳng của vòi. Mở rộng tia, rồi cho hạt hết tuổi giữa bước để thấy ID vẫn giữ nguyên.",
       files: [
-        "include/application.hpp",
         "include/particles.hpp",
         "include/simulation.hpp",
+        "include/application.hpp",
+        "include/render_panel.hpp",
+        "include/showcase.hpp",
         "src/main.cpp",
       ],
       steps: [
         {
-          title: "Phát hạt theo bước thời gian",
+          title: "Phun thử theo hai cách",
           explanation:
-            "planEmission giữ phần lẻ để tốc độ phát không phụ thuộc số lần render; slot mới được phát ở đầu fixed step.",
+            "Giữ nguyên miệng vòi và độ nghiêng. Để spread bằng 0 làm mốc trước khi thử xem vận tốc lệch sang hai bên làm màn giọt rộng ra như thế nào.",
         },
         {
-          title: "Cho hạt tiến triển",
+          title: "Giữ phần thời gian không tròn",
           explanation:
-            "Gravity đổi velocity trước position; khi hết lifetime, giữ ID, tăng generation và dùng phần dt còn lại cho hạt mới.",
+            "Tích lũy phần lẻ khi phát hạt. Nếu hạt cũ chỉ sống thêm nửa bước, chỉ cho hạt mới tiến nửa bước còn lại.",
         },
         {
-          title: "Chỉ công bố bước đã xong",
+          title: "Đưa bước hoàn chỉnh lên màn hình",
           explanation:
-            "beginStep và tickStep ghi vào buffer đích; con trỏ phải đi hết N trước khi đổi buffer và tăng thời gian.",
+            "beginStep lập kế hoạch phát, tickStep xử lý từng nhóm. Chỉ đổi bộ đệm khi vừa tính xong cả bước.",
         },
       ],
     },
     "p32-l03": {
       focus:
-        "Đo gravity-only và toàn bộ vòng đời bằng AoS; dùng warm-up, nhiều mẫu và checksum ngoài timer.",
+        "Đo riêng chi phí cộng trọng lực và chi phí cập nhật cả vòng đời. Kiểm số lượt thật sự đã chạy trước khi tin đồng hồ.",
       expected:
-        "Checksum và kiểm state đọc đủ các phần tử, tránh một vòng lặp không còn kết quả quan sát được.",
-      files: ["include/application.hpp", "include/benchmark.hpp", "src/main.cpp"],
+        "Mẫu đo 10.000 hạt phải ghi nhận 30.000 lượt cập nhật sau ba pass. Đây là thời gian của kernel, không phải thời gian hiển thị một khung.",
+      files: [
+        "include/particles.hpp",
+        "include/benchmark.hpp",
+        "include/application.hpp",
+        "include/render_panel.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Khóa phép đo",
+          title: "Chọn việc cần đo",
           explanation:
-            "Chọn gravity-only hoặc full lifecycle trên cùng dữ liệu warm, cùng seed/dt. Đài phun vẫn luôn dùng full lifecycle.",
+            "Đo riêng vòng cộng trọng lực và vòng cập nhật cả vòng đời. Chọn workload chỉ đổi việc đem đo, không đổi cách giọt nước đang bay.",
         },
         {
-          title: "Giữ timer ở đúng chỗ",
+          title: "Đặt đồng hồ sát vòng lặp",
           explanation:
-            "BenchmarkJob reset/copy ngoài timer, đo từng range có cùng số target và giữ tổng kernel time; không tính thời gian chờ UI.",
+            "Gieo và chép dữ liệu trước khi bấm đồng hồ. Ghi số phần tử đã làm xong sau mỗi nhóm.",
         },
         {
-          title: "Dùng kết quả sau timer",
+          title: "Đọc kết quả của năm mẫu",
           explanation:
-            "Checksum và kiểm state đọc đủ các phần tử, tránh một vòng lặp không còn kết quả quan sát được.",
+            "Dùng dữ liệu sau phép đo để tính checksum; báo trung vị và min/max. SoA ở bài này chưa được đo.",
         },
       ],
     },
     "p32-l04": {
       focus:
-        "Tách đủ mười một field thành các mảng; chuyển layout theo batch và có thể hủy mà không đổi snapshot đang xem.",
+        "Chuyển mười một trường dữ liệu sang các mảng riêng trong lúc đài phun đứng yên; lần ngược lại để tìm một trường bị bỏ sót.",
       expected:
-        "Thử AoS → SoA → AoS, kể cả pool chưa đầy. Thời gian và emission carry cũng là state cần giữ.",
-      files: ["include/application.hpp", "include/simulation.hpp", "include/storage.hpp"],
+        "Giữ nguyên một khung hình khi đổi AoS → SoA → AoS. Hủy giữa chừng phải còn đọc được đài phun hoàn chỉnh trước lúc đổi.",
+      files: [
+        "include/storage.hpp",
+        "include/simulation.hpp",
+        "include/application.hpp",
+        "include/render_panel.hpp",
+      ],
       steps: [
         {
-          title: "Giữ đủ mọi field",
+          title: "Lập một cột cho mỗi trường",
           explanation:
-            "ParticlesSoA có cả ID, generation, position, velocity, age/lifetime và hue; không bỏ field để có số bộ nhớ đẹp hơn.",
+            "Cho cả mười một vector dùng chung chỉ số. Tất cả dài bằng nhau, kể cả khi đang có ít hạt sống hơn số ô.",
         },
         {
-          title: "Chuyển theo batch",
+          title: "Dời một bản ghi",
           explanation:
-            "beginConversion tạo destination; tickConversion giữ source được dùng cho tới khi sao chép đủ mọi slot.",
+            "writeParticle đặt từng giá trị vào cột tương ứng, readParticle gom chúng lại. Làm thử với ba ID dễ nhận ra trước.",
         },
         {
-          title: "Kiểm round trip",
+          title: "Hoàn tất rồi mới chuyển sang mảng mới",
           explanation:
-            "Thử AoS → SoA → AoS, kể cả pool chưa đầy. Thời gian và emission carry cũng là state cần giữ.",
+            "Chỉ đổi layout khi chép hết. Không gọi reset và không đánh mất phần phát hạt còn lẻ.",
         },
       ],
     },
     "p32-l05": {
       focus:
-        "Viết kernel SoA theo cùng thứ tự phép tính float32, giữ ID/generation và kiểm cả các lần hạt được tái sử dụng.",
+        "Cho AoS và SoA đi qua cùng 400 bước, kể cả lúc hạt sinh lại. So từng ID và từng đại lượng thay vì chỉ so hai bức hình.",
       expected:
-        "tickStep chọn kernel theo layout nhưng cùng planEmission/dt, rồi commit theo cùng quy tắc.",
-      files: ["include/simulation.hpp", "include/storage.hpp"],
+        "Cùng seed, cùng số bước và cùng lần sinh cho trạng thái tương đương. Nếu hai bên lệch generation thì không thể sửa bằng cách nới sai số cho float.",
+      files: ["include/storage.hpp", "include/simulation.hpp"],
       steps: [
         {
-          title: "Dùng lại cùng quy tắc",
+          title: "Chuyển phép tính sang các cột",
           explanation:
-            "Nhánh bình thường SoA dùng đúng thứ tự phép tính float32; nhánh sinh lại gọi cùng quy tắc theo ID/generation.",
+            "Giữ thứ tự sửa vận tốc rồi đến vị trí. Khi hạt hết tuổi, dùng lại đúng quy tắc sinh đã viết cho AoS.",
         },
         {
-          title: "So cả vòng đời",
+          title: "So từng ô trước khi nhìn ảnh",
           explanation:
-            "Không chỉ kiểm vài bước chưa có hạt chết. Chạy đủ lâu để gặp respawn rồi so mọi field và bộ đếm.",
+            "Kiểm ID và thế hệ chính xác; vị trí, vận tốc, tuổi và màu có ngưỡng riêng vì chúng khác đơn vị.",
         },
         {
-          title: "Nối kernel vào mô phỏng",
+          title: "Đi qua cả lần sinh lại",
           explanation:
-            "tickStep chọn kernel theo layout nhưng cùng planEmission/dt, rồi commit theo cùng quy tắc.",
+            "Đưa SoA vào cùng vòng tính và thử cả 400 bước. So với một lần chạy độc lập của AoS ở đúng thời điểm.",
         },
       ],
     },
     "p32-l06": {
       focus:
-        "Đếm cache line của gravity-only và nhận biết giới hạn của mô hình all-field; không gọi nó là số cache miss đo được.",
+        "Lấy bút đánh dấu địa chỉ của velocityY ở 64 hạt. Dùng kết quả để đặt giả thuyết về tốc độ, không coi đó là số lần CPU trượt cache.",
       expected:
-        "Full lifecycle có branch respawn. Mô hình chạm đủ field là upper bound, không phải số cache miss hay lời dự đoán timing.",
-      files: ["include/application.hpp", "include/benchmark.hpp"],
+        "Cùng 64 vận tốc là 256 byte hữu ích; mô hình mảng căn hàng cho 44 cache line ở AoS và 4 ở SoA. Đây không phải bộ đếm cache miss.",
+      files: ["include/benchmark.hpp", "include/application.hpp", "tests/tests.cpp"],
       steps: [
         {
-          title: "Đặt giả định trước",
+          title: "Vẽ các mốc cách nhau 64 byte",
           explanation:
-            "Mô hình giả sử base của mỗi mảng nằm trên biên 64 byte. Allocator thật không được coi là luôn có alignment này.",
+            "Giả sử các mảng bắt đầu ở biên cache line, đánh dấu bốn địa chỉ đầu tiên của velocityY bằng tay.",
         },
         {
-          title: "Tính cho một field",
+          title: "Đếm phạm vi bị chạm",
           explanation:
-            "Gravity-only đọc/ghi velocityY: AoS có stride sizeof(ParticleAoS), SoA có stride sizeof(float).",
+            "Dùng offsetof và sizeof để tính các địa chỉ thay vì nhớ cứng độ dời của một kiểu C++.",
         },
         {
-          title: "Nhìn giới hạn của mô hình",
+          title: "Kiểm cả giới hạn của mô hình",
           explanation:
-            "Full lifecycle có branch respawn. Mô hình chạm đủ field là upper bound, không phải số cache miss hay lời dự đoán timing.",
+            "Trường hợp đọc hết các trường chỉ là cận trên cho full lifecycle. Ghi giả định ngay cạnh kết quả.",
         },
       ],
     },
     "p32-l07": {
       focus:
-        "Đo AoS/SoA với cùng seed và workload ở 10k/100k/1M; đọc median, min/max, chi phí conversion và sai khác state.",
+        "Thử hai cách lưu trên cùng dữ liệu ở ba quy mô. Đọc trung vị cùng khoảng nhỏ nhất–lớn nhất, kể cả khi con số trái dự đoán.",
       expected:
-        "SoA có thể có lợi khi chỉ chạm velocityY nhưng kém hơn ở vòng đời có branch. Đọc kết quả trên đúng máy/build/workload.",
-      files: ["include/application.hpp", "include/benchmark.hpp"],
+        "Có ba quy mô, mỗi quy mô hai workload; mỗi cặp giữ cùng dữ liệu. Một kết quả SoA chậm hơn vẫn là một phần của thí nghiệm.",
+      files: ["include/benchmark.hpp", "include/application.hpp", "include/render_panel.hpp"],
       steps: [
         {
-          title: "Đối chiếu trước khi tính speedup",
+          title: "Đổi cả thứ tự đo",
           explanation:
-            "Mỗi cặp trial bắt đầu từ cùng source; sai ID/generation hoặc field vượt tolerance là lỗi, dù thời gian đẹp.",
+            "Chép lại cùng bản đầu và luân phiên AB/BA. Không lấy kết quả sau ba bước AoS làm đầu vào cho SoA.",
         },
         {
-          title: "Đo nhiều lần",
+          title: "Đối chiếu trước khi chấp nhận một mẫu",
           explanation:
-            "Một warm-up và năm mẫu, mỗi mẫu ba pass đủ N; đổi AB/BA, báo median cùng min/max và chi phí reset/conversion riêng.",
+            "Đếm đủ lượt, kiểm ID và sai số từng trường bên ngoài timer. Chuyển đổi và sao chép có số đo riêng.",
         },
         {
-          title: "Giữ cả lần không thắng",
+          title: "Đọc hai hàng ở cùng N",
           explanation:
-            "SoA có thể có lợi khi chỉ chạm velocityY nhưng kém hơn ở vòng đời có branch. Đọc kết quả trên đúng máy/build/workload.",
+            "Giữ cả khoảng min/max và cấu hình Release. Đừng quy một tỉ số thời gian cho cache hoặc SIMD nếu chưa có thêm bằng chứng.",
         },
       ],
     },
     "p32-l08": {
       focus:
-        "Ghép controls, đài phun, đo hiệu năng và quy trình kiểm chứng đủ một triệu hạt sống thành ứng dụng độc lập.",
+        "Xem đài phun từ trên và ngang, chọn một hạt sắp hết tuổi rồi bước tiếp. Kiểm đủ một triệu hạt trong chính chương trình vừa viết.",
       expected:
-        "Build mọi checkpoint, CTest Debug/Release, benchmark Release và desktop là các loại bằng chứng riêng; ghi rõ phần chưa kiểm.",
+        "Ở một triệu hạt, thay đổi camera chỉ đổi số nhìn thấy. Sau một bước, từng slot có đúng tuổi và thế hệ dù chỉ lấy tối đa 40.000 mẫu để vẽ.",
       files: [
-        "include/application.hpp",
+        "include/inspection.hpp",
         "include/render.hpp",
-        "include/render_surface.hpp",
-        "include/render_geometry.hpp",
+        "include/showcase.hpp",
         "include/render_panel.hpp",
+        "include/application.hpp",
         "tests/tests.cpp",
       ],
       steps: [
         {
-          title: "Chạy đúng preset nghiệm thu",
+          title: "Nhìn cùng một đài phun từ ba phía",
           explanation:
-            "Bản cuối khởi tạo một triệu slot sống. Workflow kiểm từng slot sau một bước, không chỉ kiểm vector.size().",
+            "Dừng bằng Space, dùng F1/F2/F3. Nhìn ngang để thấy cột nước cao đến đâu, nhìn từ trên để đọc bề rộng mà không đổi thời điểm.",
         },
         {
-          title: "Đọc telemetry theo phạm vi",
+          title: "Chọn một giọt sắp hết tuổi",
           explanation:
-            "Updated đếm hạt trong bước commit; sampled là tập thử vẽ, rendered còn loại hạt ngoài khung hoặc bị hình học che. Frame và kernel có đồng hồ riêng.",
+            "Giữ slot thay vì giữ con trỏ tới AoS. Bảng soi đọc qua layout hiện hành; U tìm hạt sắp sinh lại để kiểm ID và tuổi qua một bước.",
         },
         {
-          title: "Bàn giao ứng dụng",
+          title: "Chạy cả bản vừa viết và bản đối chiếu",
           explanation:
-            "Build mọi checkpoint, CTest Debug/Release, benchmark Release và desktop là các loại bằng chứng riêng; ghi rõ phần chưa kiểm.",
+            "Chạy --smoke-workflow trên project_32_work, rồi tự thử camera, hủy phép đo và đổi layout; final trong ZIP là bản độc lập để đối chiếu.",
         },
       ],
     },

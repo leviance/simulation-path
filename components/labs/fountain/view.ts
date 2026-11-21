@@ -21,10 +21,12 @@ export function drawFountain(
   width: number,
   height: number,
   debug: boolean,
+  inspect: boolean,
 ): DrawStats {
   const started = performance.now(),
-    pixelWidth = Math.max(1, Math.round(width)),
-    pixelHeight = Math.max(1, Math.round(height));
+    scale = Math.min(1, 1440 / width, 960 / height),
+    pixelWidth = Math.max(1, Math.round(width * scale)),
+    pixelHeight = Math.max(1, Math.round(height * scale));
   let raster = rasters.get(context);
   if (!raster || raster.frame.width !== pixelWidth || raster.frame.height !== pixelHeight) {
     const canvas = document.createElement("canvas");
@@ -40,7 +42,7 @@ export function drawFountain(
     };
     rasters.set(context, raster);
   }
-  const stats = renderFountainFrame(raster.frame, scene, debug);
+  const stats = renderFountainFrame(raster.frame, scene, debug, undefined, inspect);
   raster.image.data.set(new Uint8ClampedArray(raster.frame.pixels.buffer));
   raster.context.putImageData(raster.image, 0, 0);
   // The caller's DPR transform applies to this draw, including the whole CPU raster.

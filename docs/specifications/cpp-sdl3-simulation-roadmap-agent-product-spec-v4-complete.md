@@ -180,7 +180,7 @@ AI Agent tự thiết kế curriculum để đưa người học từ kiến th�
 08. **Tháp pháo ngắm theo chuột: học dot product, góc và projection** — Turret tracking mượt, có vector debug và projection trực quan.
 09. **Trình biến đổi hình vuông: xoay, scale, shear và ghép phép biến đổi** — Square/grid rotate-scale-shear-translate; toggle order cho kết quả khác.
 10. **La bàn 3D: dựng ba trục và vector pháp tuyến của tam giác** — Scene 3D tối giản có X/Y/Z, A, B và normal vuông góc.
-11. **Điểm sáng bay trong không gian: chiếu một điểm 3D xuống màn hình** — Một point có cảm giác xa gần rõ ràng; FOV/focal length thay đổi được.
+11. **Bay xuyên trường sao: tự viết phép chiếu phối cảnh** — Giữ W để bay giữa các điểm 3D đứng yên; tự tính điểm nào sẽ hiện ở pixel nào.
 12. **Tam giác 3D xoay bằng chuột: học rotation trước matrix** — Triangle wireframe xoay tự do; normal quay theo.
 13. **Khối lập phương wireframe tương tác hoàn toàn bằng CPU** — Cube wireframe ổn định, perspective/orthographic toggle, có world axes.
 14. **Đi bộ trong căn phòng wireframe bằng camera kiểu FPS** — FPS camera có forward/right/up và relative mouse mode.
@@ -1026,69 +1026,35 @@ Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bà
 
 # PHẦN III — TỰ DỰNG ĐỒ HỌA 3D TRÊN CPU, CHƯA DÙNG OPENGL
 
-## Project 11 — Điểm sáng bay trong không gian: chiếu một điểm 3D xuống màn hình
+## Project 11 — Bay xuyên trường sao: tự viết phép chiếu phối cảnh
 
-**Mức tham vọng trực quan:** 3D Foundation / viewport chính rõ ràng
+**Vai trò:** Project 10 cho sẵn bộ chiếu để học vector. Ở đây người học viết chính hàm đó cho một điểm; sang Project 12, hàm được dùng cho ba đỉnh của tam giác.
 
 ### Đề bài / mục tiêu sản phẩm
 
-Điều khiển một điểm bằng WASD/QE trong 3D và tự tính vị trí 2D trên màn hình.
+Giữ W để tiến vào một trường sao, thả phím để dừng và giữ S để bay ngược lại. Vì sao một sao lệch trục chạy ra mép ảnh còn sao nằm ngay trên trục nhìn vẫn ở giữa? Hãy làm cho người xem cảm được chiều sâu chỉ với **một loại vật thể: điểm sáng**.
 
-### Trải nghiệm cuối cùng bắt buộc phải nhìn thấy
+### Trải nghiệm cuối cùng và quy mô
 
-Một point có cảm giác xa gần rõ ràng; FOV/focal length thay đổi được.
+- Một cửa sổ C++/SDL3 tự vẽ trên CPU: nền tối, 96 điểm world bất biến ở nhiều độ sâu, trong đó có một sao hổ phách dễ theo dõi. Bắt đầu từ đúng một sao, rồi dùng cùng một hàm cho cả danh mục.
+- Camera nhìn theo +Z, Y hướng lên, chỉ bay dọc Z từ 0 đến 12. Hết vùng sao thì dừng, có thể lùi lại; không thay tọa độ, không sinh lại sao mỗi frame.
+- Giữ W/S, thả để dừng, R về xuất phát với đúng bầu trời ban đầu. Có nút tiến từng bước, điều khiển FOV và aspect. Canvas cho phép dùng phím lẫn controls và tôn trọng reduced motion.
+- Dụng cụ phụ cho phép đổi X/Y/Z của một **điểm thử**, so hai độ sâu, xem world/camera/NDC/pixel và thử các biên. Phần kéo bằng phép chiếu ngược ở một độ sâu đã biết là bài tùy chọn. Khi ẩn dụng cụ chỉ còn trường sao.
 
-Bản hoàn thành phải là một executable tương tác hoặc tool chạy được đúng bản chất project; không chỉ là code snippet, ảnh chụp, notebook hay console output.
+### Phần cốt lõi người học tự viết
 
-### Phạm vi chức năng tối thiểu bắt buộc
+World → camera bằng phép trừ; chiếu X/Z, Y/Z; FOV dọc, aspect, viewport → pixel. Loại dữ liệu không hữu hạn, điểm sau mắt hoặc ngoài khoảng near/far trước khi chia. Phân biệt điểm ngoài khung với điểm không có phép chiếu. Bước bay dùng vận tốc 2 đơn vị/giây, giới hạn dt khi quay lại từ một frame bị ngắt.
 
-- Một object/point có tọa độ 3D thật.
-- Perspective projection tự tính.
-- Có near-plane guard và FOV/focal parameter.
+### Không thuộc phạm vi
 
-### Quy mô / độ phức tạp tối thiểu
-
-- Điểm phải di chuyển xuyên nhiều giá trị depth.
-- Phiên bản nhỏ hơn có thể được dùng như bước học trung gian, nhưng **không được dùng làm sản phẩm cuối**.
-
-### Tương tác bắt buộc
-
-- WASD/QE hoặc controls thay x/y/z.
-
-### Mức đồ họa / trình bày tối thiểu
-
-- Viewport 3D phải là phần chính của cửa sổ, có perspective/depth rõ ràng và camera tương tác khi project yêu cầu.
-- Scene phải có nền/grid/axes hoặc depth cues đủ để người xem cảm nhận không gian 3D, không phải vài hình 2D giả lập chiều sâu.
-- Debug overlays như normals, wireframe, depth, clipping phải có thể bật/tắt; khi tắt debug, scene vẫn phải là một demo 3D sạch và dễ quan sát.
-
-### Ràng buộc kỹ thuật / phần cốt lõi phải tự xây
-
-- Perspective projection
-- Near-plane rejection
-- AI Agent được tự chọn cách tổ chức source code, abstraction và thứ tự triển khai miễn không né phần cốt lõi của project.
-
-### Không được coi là hoàn thành nếu
-
-- Dùng OpenGL projection.
-- Fake depth chỉ bằng thay size không có x/z,y/z.
-- Chỉ có ảnh/chụp màn hình hoặc mô tả lý thuyết mà không có chương trình chạy được.
-- Chỉ hoàn thành một prototype trung gian nhỏ hơn đáng kể rồi đổi tên thành sản phẩm cuối.
-- Chỉ có screenshot/video/render tĩnh mà không có chương trình chạy được.
-- Dùng debug visualization thô làm đầu ra duy nhất khi project ở mức Advanced/Capstone.
+Không cần tàu vũ trụ, hành tinh, mesh, texture, tia kéo dài, trọng lực nhiều vật, GPU hay camera xoay. Không dùng nền sao vẽ sẵn, đẩy pixel ra mép theo vận tốc giả hoặc chỉ tăng kích thước chấm để thay cho phép chiếu. Đây không phải thiên hà N-body của Project 31.
 
 ### Acceptance Criteria
 
-- Kiểm điểm tại tâm, lệch trục, trên/gần near và phía sau camera; công bố convention, FOV/aspect và điều kiện reject trước phép chia.
-- Fixture tọa độ screen có giá trị tính tay; đổi FOV và z tác động khác nhau nhưng không làm state world tự đổi.
-- Tăng z làm displacement trên screen giảm.
-- Không nổ số khi z→0.
-- Đạt đầy đủ **phạm vi chức năng**, **quy mô**, **tương tác** và **mức đồ họa/trình bày tối thiểu** ở trên.
-- Có ít nhất một cách kiểm chứng correctness phù hợp với project: reference CPU/brute-force, nghiệm giải tích, invariant, conservation law, unit test, statistical check hoặc visual debug có cơ sở.
-- Có chế độ demo đủ sạch để người khác nhìn vào hiểu ngay project đang mô phỏng/giải quyết điều gì.
-
-### Quyền tự quyết của AI Agent khi xây giáo trình
-
-Agent được tự chọn kiến thức cần dạy, thứ tự bài học, bài tập cầu nối, cách chia milestone và cách giải thích. Agent có thể bắt đầu bằng phiên bản nhỏ để học, nhưng toàn bộ giáo trình phải hội tụ về đúng Acceptance Criteria của specification này.
+- Trong viewport 800×800, FOV dọc 90°, sao (1; 0,6; 4) ở (500; 340) khi camera Z=0 và (600; 280) khi camera Z=2. Sao (0; 0; 10) luôn tại tâm **khi còn nhìn thấy**.
+- Tiến và lùi cùng quãng đường khôi phục đúng bố cục; R tái lập khung xuất phát. Giữ đồng thời W/S, nhả phím đang giữ hoặc mất focus không làm camera trôi ngoài ý muốn. Các phân hoạch dt hợp lệ cho cùng quãng đường.
+- Cùng thay FOV làm mọi độ lệch khỏi tâm được nhân với cùng hệ số; tiến camera thì hệ số phụ thuộc từng độ sâu. Có kiểm số tính tay cho viewport lệch gốc, near/far, sau camera, NDC và resize/letterbox.
+- Có thử thách trước hướng dẫn, bài nối tiếp từ một điểm tới trường sao tự điều khiển, mã thật và bản hoàn chỉnh chạy từ ZIP. Có ảnh lấy từ chương trình C++ và Canvas tương tác dùng đúng tọa độ, điều khiển và phép chiếu. Không coi Canvas là sản phẩm thay thế.
 
 ---
 

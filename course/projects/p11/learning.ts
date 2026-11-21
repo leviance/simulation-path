@@ -2,205 +2,203 @@ import type { ProjectLearningAssets } from "../../learning/types";
 const learning = {
   guides: {
     "p11-l01": {
-      focus: "Dựng marker trên framebuffer, rồi nối WASD/QE với world point bằng delta time.",
+      focus: "Làm sáng một pixel ở đúng chỗ trước khi thêm cả bầu trời.",
       expected:
-        "Cửa sổ của bạn đã có đốm sáng. WASD làm nó dịch chuyển; Q/E đổi số Z nhưng chưa đổi hình.",
+        "Các phím mũi tên đổi vị trí chấm trên ảnh. Q/E thay Z trong dữ liệu nhưng chưa làm chấm dịch chuyển: bản xem thử XY chưa hề đọc Z.",
       files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Đọc ba tọa độ trước khi vẽ",
+          title: "Chạy bộ khung",
           explanation:
-            "Vec3 và Scene đã có trong Starter; giữ world point riêng, chỉ preview tạm bỏ qua Z.",
+            "Mở cửa sổ từ work/ trước khi sửa. Starter đã lo SDL, texture và framebuffer; tìm chỗ tô chấm trước khi trình bày khung hình.",
         },
         {
-          title: "Vẽ marker từ các pixel",
+          title: "Đặt một ngôi sao",
           explanation:
-            "Vẽ đốm màu hổ phách và dấu chữ thập trong viewport, rồi đưa framebuffer lên texture SDL.",
+            "Lưu ba tọa độ world; dùng X/Y để thử tô lệch tâm 70 pixel sang phải và 42 pixel lên trên.",
         },
         {
-          title: "Giữ phím theo thời gian",
+          title: "Thử chiều còn thiếu",
           explanation:
-            "Đọc scancode sau PollEvent, normalize direction và nhân speed×dt; di chuyển tay dừng quỹ đạo.",
+            "Cho điểm lệch sang bên rồi nhấn E. Nhìn con số tăng trong khi ảnh vẫn đứng yên, rồi tự hỏi phép chiếu đang thiếu dữ kiện nào.",
         },
       ],
     },
     "p11-l02": {
-      focus: "Giữ world point riêng và đổi gốc tọa độ bằng vị trí camera.",
-      expected: "Camera đi sang phải làm marker đi trái, trong khi world point giữ nguyên.",
-      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
+      focus: "Tìm khoảng cách từ mắt đến một ngôi sao mà không di chuyển chính ngôi sao ấy.",
+      expected:
+        "Với sao ở Z=4 và mắt ở Z=2, độ sâu để chiếu là 2. Thay vị trí mắt không được ghi đè dữ liệu world.",
+      files: [
+        "include/lab.hpp",
+        "include/presentation.hpp",
+        "include/scene.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Đặt camera và chiều nhìn",
+          title: "Đặt mắt tại gốc",
           explanation:
-            "Camera ở position, nhìn +Z và chưa xoay; không dùng ngầm basis orbit của P10.",
+            "Camera nhìn thẳng theo +Z. Chỉ cho nó tịnh tiến; chưa cần ma trận hoặc thao tác xoay.",
         },
         {
-          title: "Trừ vị trí camera",
+          title: "Đổi nơi đứng để đo",
           explanation:
-            "worldToCamera đổi gốc, không ghi đè scene.point; camera đi phải làm điểm đi trái trong preview.",
+            "Trừ vị trí mắt khỏi vị trí sao. Kiểm trường hợp ở cùng độ sâu và trường hợp camera đã đi qua nó.",
         },
         {
-          title: "Viết cặp hàm đổi ngược",
-          explanation: "cameraToWorld cộng lại vị trí; ví dụ số kiểm được từng thành phần.",
+          title: "Đi rồi quay lại",
+          explanation:
+            "Dùng J/L hoặc điều khiển trên Canvas để thay Z của camera. Tách chuyện có đúng khoảng cách khỏi chuyện đã vẽ được phối cảnh.",
         },
       ],
     },
     "p11-l03": {
-      focus: "Nhìn hai tam giác đồng dạng, tự viết x/z, y/z rồi kiểm vị trí điểm sáng.",
+      focus: "Dùng một tia nhìn để tìm pixel của sao thay vì đoán quãng đường chấm chạy.",
       expected:
-        "Tăng Z gấp đôi làm độ lệch khỏi tâm giảm một nửa; hình nhìn ngang giải thích được vì sao.",
-      files: [
-        "include/lab.hpp",
-        "include/scene.hpp",
-        "include/view.hpp",
-        "include/presentation.hpp",
-        "src/main.cpp",
-      ],
+        "Khi độ sâu giảm một nửa, độ lệch khỏi tâm ảnh tăng gấp đôi, miễn sao còn trong khung. Điểm trên trục vẫn ở tâm.",
+      files: ["include/lab.hpp", "include/presentation.hpp", "include/view.hpp"],
       steps: [
         {
-          title: "Suy hai tỉ lệ từ tam giác đồng dạng",
-          explanation: "Mặt phẳng ảnh tạm ở Z=1 cho x′=x/z và y′=y/z.",
+          title: "Vẽ hai tam giác",
+          explanation:
+            "Trong mặt cắt XZ, nối mắt với ngôi sao rồi xét mặt ảnh cách mắt một đơn vị. Làm tương tự bên mặt cắt YZ.",
         },
         {
-          title: "Chặn depth rồi mới chia",
+          title: "Chia cho đúng độ sâu",
           explanation:
-            "Guard near/far đã đi cùng helper để checkpoint không nổ số; bài 5 sẽ giải thích các nhánh.",
+            "Dùng Z so với mắt, không dùng Z world. Trả về trạng thái riêng cho những điểm không có ảnh.",
         },
         {
-          title: "Vẽ đúng kết quả vừa tính",
+          title: "Đổi tỉ số ra pixel",
           explanation:
-            "Thay nhánh preview bằng projectPerspective, đọc pixel trên HUD và so với tâm viewport.",
+            "Từ tâm viewport, cộng hiệu theo X và trừ hiệu theo Y. So hai vị trí có thể tính trước trên giấy.",
         },
       ],
     },
     "p11-l04": {
-      focus: "Tự tính focal scale, NDC và pixel; đổi aspect mà không kéo méo cảnh.",
-      expected: "FOV90° và viewport (10,20,800,600) đưa point (1,0.5,4) tới pixel (485,282.5).",
-      files: [
-        "include/lab.hpp",
-        "include/scene.hpp",
-        "include/view.hpp",
-        "include/presentation.hpp",
-        "src/main.cpp",
-      ],
+      focus: "Phân biệt bay đến gần vật với phóng to bằng ống kính.",
+      expected:
+        "Đổi FOV nhân độ lệch của tất cả sao cùng một hệ số. Bay tới lại thay đổi độ sâu của từng sao theo tỉ lệ khác nhau.",
+      files: ["include/lab.hpp", "include/presentation.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Từ nửa góc đến focal scale",
+          title: "Chọn góc nhìn",
           explanation:
-            "f=1/tan(vFOV/2), focalPixels=height×f/2; con số tạm bài 3 được thay bằng lens thật.",
+            "Dùng tangent của nửa góc mở dọc. Thử với góc 90° để biết ngay tiêu cự theo pixel.",
         },
         {
-          title: "Đưa camera point về NDC",
+          title: "Giữ khung không méo",
           explanation:
-            "X chia thêm aspect=width/height, Y không chia aspect vì đây là vertical FOV.",
+            "Tính aspect từ viewport, rồi đổi NDC thành tọa độ có gốc thật của vùng ảnh.",
         },
         {
-          title: "Đổi NDC sang screen liên tục",
-          explanation: "Viewport có origin riêng; +1 là cạnh phải, không phải chỉ số pixel hợp lệ.",
+          title: "So cùng hai ngôi sao",
+          explanation:
+            "Giữ camera và đổi FOV trước. Khôi phục FOV rồi mới tiến camera, không thay hai biến cùng một lúc.",
         },
       ],
     },
     "p11-l05": {
-      focus: "Kiểm vùng nhìn, cắt đoạn ở near/far rồi dựng lưới sàn và bốn khung 3D.",
+      focus: "Từ một hàm chiếu điểm, tạo cả bầu trời mà không học thêm một loại vật thể nào.",
       expected:
-        "Điểm bị loại đúng lý do; đoạn đi xuyên near vẫn giữ phần nhìn thấy và cảnh nền có chiều sâu thật.",
-      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
+        "96 ngôi sao giữ nguyên tọa độ. Chỉ những sao có độ sâu hợp lệ và nằm trong vùng nhìn mới thành chấm trên màn hình.",
+      files: [
+        "include/lab.hpp",
+        "include/presentation.hpp",
+        "include/starfield.hpp",
+        "include/view.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Phân loại trước phép chia",
+          title: "Chọn bầu trời cố định",
           explanation:
-            "Invalid, behind, before-near, beyond-far trả screen/NDC trống; chỉ depth hợp lệ đi tiếp.",
+            "Tạo danh sách một lần. Giữ hai sao dễ nhận biết để so với đáp số, dùng các dải độ sâu cho phần còn lại.",
         },
         {
-          title: "Phân biệt ngoài góc nhìn và ngoài depth",
+          title: "Loại điểm không nhìn thấy",
           explanation:
-            "Outside vẫn có số chiếu hữu hạn, nhưng marker không vẽ; không clamp điểm đó vào cạnh.",
+            "Phân biệt sau mắt, ngoài khoảng near/far và lệch khỏi khung ngang/dọc. Không đẩy chúng dính vào viền.",
         },
         {
-          title: "Cắt đoạn khác loại bỏ điểm",
+          title: "Vẽ từng sao",
           explanation:
-            "Tính giao điểm near/far rồi viết line3D; dùng nó dựng lưới sàn và bốn khung world ở Z=2/4/8/12.",
+            "Lặp cùng projectPerspective cho mọi điểm. Màu và rìa mềm chỉ tô ngôi sao tại pixel đã biết, không làm sao di chuyển.",
         },
       ],
     },
     "p11-l06": {
-      focus: "Tách điều khiển tay khỏi quỹ đạo thời gian, không để hai nguồn input tranh nhau.",
+      focus: "Cho người học tự bay qua các sao bằng một thao tác giữ rồi nhả phím.",
       expected:
-        "Space chạy/dừng, N tiến 0.1s; input tay dừng quỹ đạo và nhiều chuỗi dt cùng tổng cho cùng điểm.",
-      files: [
-        "include/lab.hpp",
-        "include/scene.hpp",
-        "include/view.hpp",
-        "include/presentation.hpp",
-        "src/main.cpp",
-      ],
+        "Giữ W để tiến, S để lùi với tốc độ 2 đơn vị/giây. Thả phím dừng ngay khi không bật tự bay; về Z=0 vẫn là bố cục cũ.",
+      files: ["include/presentation.hpp", "include/scene.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Tách hai nguồn điều khiển",
+          title: "Đếm thời gian bằng giây",
           explanation:
-            "WASD/QE dịch điểm hiện tại; quỹ đạo là hàm vị trí tuyệt đối của elapsed, không cộng dồn delta vào point.",
+            "Đổi số mili giây của SDL sang giây, chặn mỗi lần cập nhật ở 0,1 giây để một khung bị trễ không làm camera nhảy vọt.",
         },
         {
-          title: "Chạy bằng elapsed time",
+          title: "Dịch camera",
           explanation:
-            "flightPoint dùng sin/cos để depth đi từ 2 đến 10; advanceFlightTime giới hạn dt và bỏ nonfinite.",
+            "Nhân tốc độ với hướng và thời gian. Hành trình Z=0 đến Z=12 không sửa dữ liệu của trường sao.",
         },
         {
-          title: "Dừng và kiểm từng nhịp",
+          title: "Nhả phím để dừng",
           explanation:
-            "Space chỉ toggle một lần, N tiến 0.1s khi paused, reset/preset đưa scene về trạng thái tái lập.",
+            "Nhận cả lúc nhấn lẫn lúc thả. Thử riêng Space để tự bay và N để nhận ra độ dịch của chỉ một bước.",
         },
       ],
     },
     "p11-l07": {
-      focus: "Đảo phép chiếu tại một độ sâu đã biết và quản lý pointer capture đúng chủ sở hữu.",
+      focus: "Tùy chọn: đặt lại điểm thử bằng chuột trong khi cả trường sao vẫn đứng yên.",
       expected:
-        "Kéo giữ chỗ nắm và camera depth; thả ngoài, blur và đổi input đều kết thúc đúng thao tác cũ.",
-      files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
+        "Biết một pixel và một độ sâu mới xác định được điểm trong không gian. Có lối đi thẳng sang bài 08 bằng hai tệp tham khảo.",
+      files: ["include/lab.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Một pixel chỉ cho một tia",
-          explanation: "Giữ cameraDepth rồi đảo NDC và focal để chọn duy nhất một camera point.",
+          title: "Giữ một độ sâu",
+          explanation:
+            "Lưu độ sâu so với camera ngay lúc nắm điểm thử. Giữ cả khoảng lệch giữa tâm điểm và con trỏ.",
         },
         {
-          title: "Giữ chỗ nắm và chủ sở hữu",
-          explanation:
-            "Hit-test gần marker, lưu offset/depth/mouse ID, nhận delta qua tọa độ logic đã đổi đúng một lần.",
+          title: "Đưa pixel trở về world",
+          explanation: "Đổi pixel về NDC, dựng điểm ở độ sâu đã giữ rồi cộng lại vị trí camera.",
         },
         {
-          title: "Kết thúc cả khi ra ngoài",
+          title: "Trả lại quyền điều khiển",
           explanation:
-            "Up nhận mẫu cuối; lost capture/blur/resize/input thay đổi hủy drag và không để inverse dùng lens cũ.",
+            "Lấy vị trí cuối lúc thả chuột, hủy khi mất focus hoặc resize. Không cho thao tác của một thiết bị khác giành lần kéo đang dở.",
         },
       ],
     },
     "p11-l08": {
-      focus: "Đo từ tâm ảnh, dự đoán ảnh ở độ sâu gấp đôi rồi so với hai lần chiếu thật.",
+      focus: "Kiểm chuyến bay bằng cả một khung hình nhìn thấy được lẫn một đáp số pixel tính tay.",
       expected:
-        "Ẩn thước vẫn thấy đèn và cổng. Bật lại để đọc A/B. CTest kiểm mã trong work/ ở cả Debug và Release.",
+        "Bật tắt được dụng cụ mà không làm đổi bầu trời. Chương trình từ work/ đi qua các ca kiểm ở cả Debug lẫn Release.",
       files: [
         "include/lab.hpp",
+        "include/presentation.hpp",
         "include/scene.hpp",
         "include/view.hpp",
-        "include/presentation.hpp",
         "src/main.cpp",
-        "tests/tests.cpp",
       ],
       steps: [
         {
-          title: "Tạo bản xem sạch",
+          title: "Tính hai ảnh trước",
           explanation:
-            "F tắt HUD, axes và crosshair, giữ lưới và khung world để vẫn thấy perspective.",
+            "Dùng khung vuông 800×800, FOV 90° và sao (1,0.6,4). Tiến camera từ Z=0 tới Z=2 và kiểm hai pixel (500,340), (600,280).",
         },
         {
-          title: "Dùng expected không sinh từ hàm cần kiểm",
+          title: "Bật thước để đối chiếu",
           explanation:
-            "FOV 90° và viewport có origin cho pixel tính tay; round-trip chỉ là phép kiểm bổ sung.",
+            "M vẽ thêm ảnh của điểm thử ở độ sâu gấp đôi. Đo từ tâm viewport; B là dấu đo, không phải một sao mới.",
         },
         {
-          title: "Kiểm chính chương trình bạn đã viết",
+          title: "Chạy mã mình vừa viết",
           explanation:
-            "Bật COURSE_WORKBOOK rồi build project_11_tests: cả Debug và Release đều đọc header trong work/, không kiểm hộ bằng bản final.",
+            "Kiểm ảnh khi bay trở về và chạy CTest cho work/. Lấy final/ trong ZIP khi cần đối chiếu nguyên chương trình.",
         },
       ],
     },

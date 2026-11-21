@@ -3,6 +3,96 @@ import { expect, test } from "@playwright/test";
 const finalRoute = "/projects/memory-layout-race/08-hoan-thien-memory-layout-race";
 const canvasName = /Đài phun hạt CPU — Canvas minh họa/;
 
+test("P32 overview shows three native photographs of one jet and serves its downloadable course", async ({
+  page,
+}) => {
+  await page.goto("/projects/memory-layout-race");
+  const gallery = page.locator("[data-native-media]").first();
+  const image = gallery.locator("figure img");
+  await gallery.scrollIntoViewIfNeeded();
+  for (const [name, photo] of [
+    ["Theo đường nước từ miệng vòi đến khi rơi", "single.png"],
+    ["Nhìn ngang để thấy nơi giọt đổi chiều", "profile.png"],
+    ["Nhìn từ trên để thấy độ xòe", "plan.png"],
+  ]) {
+    await gallery.getByRole("button", { name, exact: true }).click();
+    await expect(image).toHaveAttribute("src", "/field-notes/cpu-fountain/" + photo);
+    await expect
+      .poll(() => image.evaluate((el: HTMLImageElement) => [el.naturalWidth, el.naturalHeight]))
+      .toEqual([1120, 820]);
+  }
+  const download = page.locator('a[href$="project-32-memory-layout-race.zip"]').first();
+  const href = await download.getAttribute("href");
+  if (!href) throw new Error("Overview has no source ZIP");
+  expect((await page.request.head(href)).ok()).toBeTruthy();
+  const lessons = [
+    ...new Set(
+      await page
+        .locator('a[href^="/projects/memory-layout-race/"]')
+        .evaluateAll((anchors) =>
+          anchors
+            .map((a) => a.getAttribute("href"))
+            .filter((v): v is string => !!v && /\/\d{2}-/.test(v)),
+        ),
+    ),
+  ];
+  expect(lessons).toHaveLength(8);
+  for (const lesson of lessons) expect((await page.request.get(lesson)).ok()).toBeTruthy();
+});
+
+test("P32 spread, three views and an expiring drop all refer to the same live state", async ({
+  page,
+}) => {
+  await page.goto(finalRoute);
+  const observation = page.getByRole("region", { name: "Bàn quan sát đài phun" });
+  const canvas = page.getByRole("img", { name: canvasName });
+  const spread = observation.getByRole("slider", { name: "Độ xòe" });
+  await expect(spread).toHaveValue("2");
+  await observation.getByRole("button", { name: "Theo một giọt" }).click();
+  await observation.getByRole("button", { name: "Tìm giọt sắp tái sinh" }).click();
+  const inspector = observation.getByRole("group", { name: "Giọt đang theo dõi" });
+  const id = await inspector.getByLabel("Slot cần xem").inputValue();
+  await expect(inspector).toContainText("ID " + id + " · generation 0");
+  const age = inspector
+    .locator("div")
+    .filter({ has: page.getByText("Tuổi / lifetime", { exact: true }) })
+    .last()
+    .locator("dd");
+  const ageBefore = await age.innerText();
+  const image = () => canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL());
+  const oblique = await image();
+  await observation.getByRole("button", { name: "Nhìn từ trên" }).click();
+  await expect.poll(image).not.toBe(oblique);
+  const plan = await image();
+  await canvas.press("F3");
+  await expect(observation.getByRole("button", { name: "Nhìn ngang" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect.poll(image).not.toBe(plan);
+  await expect(age).toHaveText(ageBefore);
+  const lateral = inspector
+    .locator("div")
+    .filter({ has: page.getByText("Vận tốc ngang X / Z", { exact: true }) })
+    .last()
+    .locator("dd");
+  const velocities = await lateral.innerText();
+  await spread.press("Home");
+  await expect(spread).toHaveValue("0");
+  await expect(lateral).toHaveText(velocities);
+  await expect(age).toHaveText(ageBefore);
+  await canvas.press("n");
+  await expect(inspector).toContainText("ID " + id + " · generation 1");
+  await expect(age).not.toHaveText(ageBefore);
+  await expect(lateral).toContainText(" / 0.000 m/s");
+  await canvas.press("r");
+  await expect(inspector).toContainText("ID " + id + " · generation 0");
+  await expect(age).toHaveText(ageBefore);
+  await expect(lateral).toContainText(" / 0.000 m/s");
+  await canvas.press(".");
+  await expect(spread).toHaveValue("0.5");
+});
+
 test("P32 performs a full live step and preserves state through a layout round trip", async ({
   page,
 }) => {
@@ -30,6 +120,7 @@ test("P32 pointer ownership releases capture and Escape restores the camera gest
 }) => {
   await page.goto(finalRoute);
   const canvas = page.getByRole("img", { name: canvasName });
+  await canvas.scrollIntoViewIfNeeded();
   const box = await canvas.boundingBox();
   if (!box) throw new Error("Canvas is not visible");
   await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.4);

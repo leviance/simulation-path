@@ -26,6 +26,8 @@ import {
   changePointCamera,
   changePointLens,
   advancePoint,
+  flightDirection,
+  stopFlight,
   type PointScene,
 } from "@/lib/labs/projection-scene";
 import { drawProjectionLab, projectionPointFromEvent } from "./projection-lab-view";
@@ -34,14 +36,14 @@ import { ProjectionControls } from "./projection-controls";
 import { LabReadout, useCanvasSize, useReducedMotion, usePauseOnReducedMotion } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
 const stageHint: Record<number, string> = {
-  1: "Thử D, rồi E. D đưa đèn sang phải. E tăng số Z nhưng hình chưa đổi: bản xem trước này mới dùng X và Y.",
-  2: "Giữ đèn đứng yên và tăng Camera.X. Đèn trượt sang trái dù dòng world point không đổi.",
-  3: "Chọn Mặc định rồi Xa gấp đôi. So vị trí đèn với tâm ảnh; xem thêm mặt cắt XZ hoặc YZ dưới hình.",
-  4: "Giữ nguyên điểm, mở rộng Vertical FOV. Đổi Aspect để thử một khung nhìn khác; kéo rộng cửa sổ không phải là đổi ống kính.",
-  5: "Bốn cổng có cùng kích thước ở Z = 2, 4, 8, 12. Thử đưa đèn ra sau camera. Đèn biến mất nhưng phần đường còn nhìn thấy vẫn ở đó.",
-  6: "Cho đèn bay rồi tạm dừng. Mỗi lần nhấn N, đồng hồ tiến đúng 0.1 giây. So vị trí sau hai lần thử có cùng thời gian.",
-  7: "Nắm gần mép đốm sáng rồi kéo. Nó không được giật vào giữa con trỏ, và độ sâu so với camera phải giữ nguyên.",
-  8: "Đoán vị trí của đèn ở xa gấp đôi, rồi nhấn M để kiểm. Nắm đèn kéo sang chỗ khác và làm lại. Nhấn F để ngắm cảnh không có thước.",
+  1: "Dịch sao thử sang phải, rồi đổi Z. Vì sao bước đầu chỉ thấy thay đổi theo X và Y?",
+  2: "Đưa camera từ Z = 0 đến Z = 2. Tọa độ thế giới của sao giữ nguyên; độ sâu so với mắt đổi từ 4 thành 2. Bản vẽ XY vẫn chưa thể hiện điều đó.",
+  3: "So sao mặc định với mẫu Xa gấp đôi. Bật mặt cắt XZ hoặc YZ bên dưới để nhìn hai tam giác đồng dạng.",
+  4: "Giữ nguyên vị trí quan sát rồi tăng FOV. Đưa ống kính về ban đầu, lần này tiến camera. Hai thao tác có giống nhau đối với các sao ở độ sâu khác nhau không?",
+  5: "Hạ Far xuống 8 rồi đưa về 16. Các sao xa biến mất và trở lại đúng vị trí vì danh sách tọa độ chưa từng đổi.",
+  6: "Bấm vào khung hình, giữ W để tiến và S để lùi. Thả phím: các sao đứng lại ngay. Bạn cũng có thể bấm Tiến 0.1 s để xem một nhịp.",
+  7: "Nắm gần mép sao thử rồi kéo. Nó không được giật vào giữa con trỏ; độ sâu so với camera phải giữ nguyên.",
+  8: "Theo dõi ngôi sao màu hổ phách khi giữ W. Vì sao nó rời tâm ảnh còn ngôi sao đúng trên trục nhìn thì không? Nhấn R để bay lại từ đúng bầu trời ban đầu.",
 };
 const format = (p: Vec3) => "(" + [p.x, p.y, p.z].map((n) => n.toFixed(4)).join(", ") + ")";
 export default function ProjectionLab({ mode }: { mode?: InteractiveLabMode }) {
@@ -67,36 +69,39 @@ function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
   }, []);
   const pauseForEnvironment = useCallback(() => {
     cancelDrag();
-    commit({ ...sceneRef.current, paused: true });
+    commit(stopFlight(sceneRef.current));
   }, [cancelDrag, commit]);
   const size = useCanvasSize(canvasRef, pauseForEnvironment);
   usePauseOnReducedMotion(pauseForEnvironment);
   const reset = useCallback(
-    (index = 0) => {
+    (index?: number) => {
       cancelDrag();
-      commit(pointPreset(index));
+      const next = pointPreset(index ?? 0);
+      if (index !== undefined) next.debug = true;
+      commit(next);
     },
     [cancelDrag, commit],
   );
   const togglePause = () => {
     cancelDrag();
-    commit({ ...sceneRef.current, paused: reducedMotion ? true : !sceneRef.current.paused });
+    const current = sceneRef.current;
+    commit({ ...stopFlight(current), paused: reducedMotion || !current.paused });
   };
   const step = () => {
     cancelDrag();
     const s = sceneRef.current;
-    if (stage < 6 || !s.paused) return;
+    if (stage < 6 || !s.paused || s.forwardHeld || s.backwardHeld) return;
     commit(advancePoint(s, 0.1));
   };
   const toggleDebug = () => {
     cancelDrag();
-    commit({ ...sceneRef.current, debug: !sceneRef.current.debug });
+    commit({ ...stopFlight(sceneRef.current), debug: !sceneRef.current.debug });
   };
   const toggleMeasure = () => {
     cancelDrag();
     const current = sceneRef.current;
     commit({
-      ...current,
+      ...stopFlight(current),
       measureDepth: !(current.measureDepth && current.debug),
       debug: true,
       paused: true,
@@ -126,7 +131,7 @@ function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
   const editAspect = useCallback(
     (aspect: number) => {
       cancelDrag();
-      commit({ ...sceneRef.current, paused: true, aspect });
+      commit({ ...stopFlight(sceneRef.current), aspect });
     },
     [cancelDrag, commit],
   );
@@ -147,6 +152,7 @@ function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
       r = pointDisplay(s, stage),
       v = viewportFor(s);
     if (
+      (stage >= 8 && !s.debug) ||
       !mouse ||
       r.status !== "visible" ||
       !r.screen ||
@@ -164,7 +170,7 @@ function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
       depth: r.cameraPoint.z,
       offset: { x: mouse.x - r.screen.x, y: mouse.y - r.screen.y },
     };
-    commit({ ...s, paused: true });
+    commit(stopFlight(s));
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
     } catch {
@@ -205,6 +211,23 @@ function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
       if (!event.repeat) step();
       return;
     }
+    if (stage >= 6 && (key === "w" || key === "s")) {
+      event.preventDefault();
+      if (event.repeat) return;
+      cancelDrag();
+      const current = sceneRef.current;
+      if (reducedMotion) {
+        commit(advancePoint(stopFlight(current), 0.1, key === "w" ? 1 : -1));
+        return;
+      }
+      commit({ ...current, paused: true, [key === "w" ? "forwardHeld" : "backwardHeld"]: true });
+      return;
+    }
+    if (stage >= 2 && (key === "j" || key === "l")) {
+      event.preventDefault();
+      editCamera("z", sceneRef.current.camera.position.z + (key === "j" ? -0.1 : 0.1));
+      return;
+    }
     if (stage >= 8 && key === "m") {
       event.preventDefault();
       if (!event.repeat) toggleMeasure();
@@ -216,10 +239,6 @@ function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
       return;
     }
     const deltas: Record<string, Vec3> = {
-      a: { x: -0.1, y: 0, z: 0 },
-      d: { x: 0.1, y: 0, z: 0 },
-      w: { x: 0, y: 0.1, z: 0 },
-      s: { x: 0, y: -0.1, z: 0 },
       q: { x: 0, y: 0, z: -0.1 },
       e: { x: 0, y: 0, z: 0.1 },
       arrowleft: { x: -0.1, y: 0, z: 0 },
@@ -233,10 +252,17 @@ function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
       commit(movePoint(sceneRef.current, deltas[key]));
     }
   };
+  const onKeyUp = (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
+    const key = event.key.toLowerCase();
+    if (stage < 6 || (key !== "w" && key !== "s")) return;
+    event.preventDefault();
+    const field = key === "w" ? "forwardHeld" : "backwardHeld";
+    if (sceneRef.current[field]) commit({ ...sceneRef.current, [field]: false });
+  };
   useEffect(() => {
     const pause = () => {
       cancelDrag();
-      commit({ ...sceneRef.current, paused: true });
+      commit(stopFlight(sceneRef.current));
     };
     const hidden = () => {
       if (document.hidden) pause();
@@ -250,19 +276,21 @@ function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
     };
   }, [cancelDrag, commit]);
   useEffect(() => {
-    if (stage < 6 || scene.paused || reducedMotion) return;
+    if (stage < 6 || flightDirection(sceneRef.current) === 0 || reducedMotion) return;
     let frame = 0,
       previous = performance.now();
     const animate = (now: number) => {
-      if (sceneRef.current.paused) return;
-      const dt = Math.min(0.1, Math.max(0, (now - previous) / 1000));
+      const current = sceneRef.current;
+      const direction = flightDirection(current);
+      if (direction === 0) return;
+      const next = advancePoint(current, (now - previous) / 1000, direction);
       previous = now;
-      commit(advancePoint(sceneRef.current, dt));
-      frame = requestAnimationFrame(animate);
+      if (next !== current) commit(next);
+      if (flightDirection(next) !== 0) frame = requestAnimationFrame(animate);
     };
     frame = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(frame);
-  }, [stage, scene.paused, reducedMotion, commit]);
+  }, [stage, scene.paused, scene.forwardHeld, scene.backwardHeld, reducedMotion, commit]);
   useEffect(() => {
     const ctx = canvasRef.current?.getContext("2d");
     if (ctx) drawProjectionLab(ctx, size, scene, stage);
@@ -303,19 +331,31 @@ function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
         onPointerCancel={pointerCancel}
         onLostPointerCapture={pointerCancel}
         onKeyDown={onKeyDown}
+        onKeyUp={onKeyUp}
         onBlur={() => {
           cancelDrag();
-          commit({ ...sceneRef.current, paused: true });
+          commit(stopFlight(sceneRef.current));
         }}
-        aria-label="Điểm sáng 3D: WASD đổi XY, Q/E đổi depth; từ bài 7 kéo marker tại depth cố định"
+        aria-label="Bay xuyên trường sao: W/S tiến hoặc lùi, thả phím để dừng; phím mũi tên và Q/E dịch sao thử"
       />
+      {stage >= 6 && (
+        <p data-testid="flight-status">
+          Camera Z = {scene.camera.position.z.toFixed(2)} / 12 ·{" "}
+          {flightDirection(scene) === 0
+            ? "Đang dừng"
+            : flightDirection(scene) > 0
+              ? "Đang tiến"
+              : "Đang lùi"}
+          .{scene.camera.position.z >= 12 && " Đã tới cuối vùng sao. Giữ S để quay về."}
+        </p>
+      )}
       <p>
         {stageHint[stage]}{" "}
         {stage === 1 &&
-          "Trong Canvas, bấm vào hình để dùng WASD/QE; mỗi lần nhấn dịch 0.1 đơn vị. Trong bản SDL, giữ phím để đi liên tục."}
+          "Trong Canvas, bấm vào hình để dùng phím mũi tên và Q/E; mỗi lần nhấn dịch 0.1 đơn vị. Trong bản SDL, giữ phím để đi liên tục."}
         {stage >= 6 &&
           reducedMotion &&
-          " Bạn đang bật giảm chuyển động: vẫn có thể dùng nút Tiến 0.1 s."}
+          " Bạn đang bật giảm chuyển động: nhấn W hoặc S để nhích từng bước, không tự bay."}
       </p>
       {(stage === 3 || stage === 4) && <ProjectionGeometry scene={scene} />}
       {showRuler && (

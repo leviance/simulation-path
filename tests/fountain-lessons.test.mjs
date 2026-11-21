@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
-import { codeTokens, isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
+import {
+  codeTokens,
+  isContiguousCodeExcerpt,
+  markedSnippetBlockPattern,
+} from "../scripts/code-snippets.mjs";
 
 // Snippet/source matching alone permits a fragment cut across unrelated branches.
 // Lessons must also present complete delimiter-balanced statements or definitions.
@@ -12,6 +16,11 @@ for (const file of lessons) {
     const lesson = await readFile(new URL(file, directory), "utf8");
     const blocks = [...lesson.matchAll(/```cpp([^\n]*)\n([\s\S]*?)```/g)];
     assert.ok(blocks.length >= 3, "Keep substantive source examples");
+    assert.equal(
+      [...lesson.matchAll(markedSnippetBlockPattern())].length,
+      blocks.length,
+      "Bind every teaching example to its source marker",
+    );
     const checkpoint = Number(file.slice(0, 2));
     const sourceDirectory = new URL(
       `../examples/project-32-memory-layout-race/checkpoints/0${checkpoint}/`,
@@ -21,7 +30,10 @@ for (const file of lessons) {
     for (const [index, block] of blocks.entries()) {
       const sourcePath = block[1].match(/title="([^" ]+\.(?:hpp|cpp))/)?.[1];
       assert.ok(sourcePath, `block ${index + 1}: identify its actual source file`);
-      const source = await readFile(new URL(sourcePath, sourceDirectory), "utf8");
+      const root = sourcePath.startsWith("tests/")
+        ? new URL("../../", sourceDirectory)
+        : sourceDirectory;
+      const source = await readFile(new URL(sourcePath, root), "utf8");
       assert.ok(
         isContiguousCodeExcerpt(block[2], source),
         `block ${index + 1}: differs from ${sourcePath}`,

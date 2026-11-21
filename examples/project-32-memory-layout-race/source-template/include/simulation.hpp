@@ -28,7 +28,7 @@ struct Simulation {
     ParticlesSoA soa{}, nextSoA{};
 #endif
     std::size_t count{}, active{}, cursor{}, targetActive{}, updated{}, committedUpdated{}, respawned{}, born{};
-    std::uint64_t steps{};
+    std::uint64_t steps{}, resetVersion{};
     double time{}, emissionRemainder{}, targetRemainder{};
     double copyMs{}, updateMs{}, conversionMs{}, wholeStepMs{};
     bool paused{true}, singleStep{}, cold{};
@@ -36,10 +36,11 @@ struct Simulation {
     Clock::time_point stepStarted{};
     std::string notice{"Ready; pre-warm is only the initial state"};
 
-    // [snippet:reset]
+    // [snippet reset]
     void reset(std::size_t requested, bool coldStart = false) {
         validateConfig(config);
         aos = makeParticlesAoS(requested, config, !coldStart);
+        ++resetVersion;
         count = requested;
         cold = coldStart;
 #if LAB_CHECKPOINT >= 1
@@ -74,7 +75,7 @@ struct Simulation {
 #endif
     }
 
-    // [/snippet:reset]
+    // [/snippet reset]
 
     ParticleAoS particle(std::size_t index) const {
 #if LAB_CHECKPOINT >= 4
@@ -105,7 +106,7 @@ struct Simulation {
     }
 
 #if LAB_CHECKPOINT >= 2
-    // [snippet:beginStep]
+    // [snippet begin-step]
     void beginStep() {
         validateConfig(config);
 #if LAB_CHECKPOINT < 5
@@ -132,9 +133,9 @@ struct Simulation {
         pending = PendingWork::physics;
     }
 
-    // [/snippet:beginStep]
+    // [/snippet begin-step]
 
-    // [snippet:tickStep]
+    // [snippet tick-step]
     bool tickStep(double budgetMs = 6) {
         if (pending != PendingWork::physics || (paused && !singleStep))
             return false;
@@ -188,11 +189,11 @@ struct Simulation {
         return true;
     }
 
-    // [/snippet:tickStep]
+    // [/snippet tick-step]
 #endif
 
 #if LAB_CHECKPOINT >= 4
-    // [snippet:beginConversion]
+    // [snippet begin-conversion]
     void beginConversion() {
         cancel();
         if (layout == Layout::aos)
@@ -204,8 +205,8 @@ struct Simulation {
         pending = PendingWork::conversion;
     }
 
-    // [/snippet:beginConversion]
-    // [snippet:tickConversion]
+    // [/snippet begin-conversion]
+    // [snippet tick-conversion]
     bool tickConversion(double budgetMs = 6) {
         if (pending != PendingWork::conversion)
             return false;
@@ -234,7 +235,7 @@ struct Simulation {
         return true;
     }
 
-    // [/snippet:tickConversion]
+    // [/snippet tick-conversion]
 #endif
 };
 } // namespace lab
