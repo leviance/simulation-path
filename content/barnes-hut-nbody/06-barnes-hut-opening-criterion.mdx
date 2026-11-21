@@ -1,173 +1,125 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 # Khi nào một cụm xa có thể thay bằng một nguồn?
 
 ## Vấn đề cần giải quyết
 
-Cây đã giữ đúng mass và center of mass. Ta muốn một cụm xa được tính như một nguồn duy nhất, nhưng không thể thay mọi internal node bằng aggregate: ở gần, các nguồn phân bố trong cụm không còn tạo lực giống một điểm.
+Đứng ở sát một cụm, bạn phân biệt được nhiều ngôi sao. Nhìn cùng cụm đó từ đầu kia của thiên hà, một vật thay thế tại tâm khối có thể đủ tốt. Làm sao để chương trình quyết định điều này cho **từng sao đang chịu lực**, thay vì chia cả thiên hà thành “vùng gần” và “vùng xa” một lần?
 
 ## Hiểu ý tưởng trước khi viết code
 
-Gọi s là cạnh hộp node, d là khoảng cách từ target đến centerOfMass. Opening criterion của bản này là $s/d < \theta$. Theta nhỏ thường mở nhiều node hơn; theta lớn thường chấp nhận nhiều aggregate hơn. Không có cam kết error hay runtime giảm đơn điệu ở mọi snapshot.
+Với một ô cây, đặt $s$ là độ dài cạnh và $d$ là khoảng cách từ sao đang xét đến tâm khối của ô. Khi $s/d<\theta$, ta cho phép thay toàn bộ cụm bằng một nguồn có khối lượng bằng tổng khối lượng của ô. Ví dụ ô rộng 2, cách 10 và `theta = 0,5` thì tỉ số 0,2 đủ nhỏ. Đưa sao lại cách 3, tỉ số khoảng 0,67: phải mở ô để xét các con.
 
-Điều kiện hình học chưa đủ. Node chứa target không được chấp nhận dù s/d nhỏ, vì totalMass của nó chứa cả target. Phải mở tiếp đến leaf, rồi bỏ đúng sourceIndex==targetIndex. Không dùng khoảng cách đến tâm hộp thay cho center of mass.
-
-Barnes–Hut vẫn tính nguồn xa, chỉ gộp chúng lại. Đây không phải radius cutoff như tìm hàng xóm Boids. Với một phân bố xấu hoặc theta gần 0, lượng việc có thể tiến gần direct.
+Có một ngoại lệ quan trọng: **không bao giờ nhận một cụm chứa chính sao đang xét**. Ở lá, chỉ bỏ đúng ID của sao đó. Nếu không, ta đã lén cộng cả sức hút của ngôi sao lên chính nó.
 
 <InteractiveLab demo="barnes-hut-nbody" mode="nbody-opening" />
 
 ## Viết code từng bước
 
-### Ghi lại quyết định trong chính traversal
+### Ghi quyết định ở nơi tính lực
 
-```cpp title="include/tree.hpp — Ghi lại quyết định trong chính traversal"
+{/* snippet include/tree.hpp#force-trace */}
+```cpp title="include/tree.hpp — Hai danh sách cho cùng một sao đang xét"
 struct ForceTrace {
     std::vector<std::size_t> opened{};
     std::vector<std::size_t> accepted{};
 };
 ```
 
-opened và accepted là các node của target đang theo dõi. Chúng không phải danh sách mọi leaf trên màn hình. Ta chỉ bật trace khi cần xem một target, không lưu trace cho toàn bộ 4.096 body.
+`accepted` giữ những ô mà solver đã dùng như một nguồn. `opened` giữ các ô phải đi sâu. Dùng cùng một hàm cho việc tính lực và ghi dấu; nếu lớp vẽ tự đoán, màn hình có thể kể chuyện khác với solver.
 
-### Chọn nguồn tổng hợp hay mở tiếp
+### Thử thay một cụm bằng một nguồn
 
-```cpp title="include/tree.hpp — Chọn nguồn tổng hợp hay mở tiếp"
-inline void accumulateBarnesHutNode(
-    const BarnesHutTree& tree,
-    std::span<const Body> bodies,
-    std::size_t targetIndex,
-    std::size_t nodeIndex,
-    double theta,
-    double gravitationalConstant,
-    double softening,
-    AccelerationResult& result,
-    ForceTrace* trace = nullptr
+```cpp title="include/tree.hpp — Quyết định mở hay nhận theo góc nhìn từ sao"
+const Vec3 displacement = node.centerOfMass - bodies[targetIndex].position;
+const double distanceToCenter = length(displacement);
+const double nodeSize = node.bounds.maximum.x - node.bounds.minimum.x;
+const bool containsTarget = pointInsideBounds(bodies[targetIndex].position, node.bounds);
+if (
+    !containsTarget && distanceToCenter > 0.0 &&
+    nodeSize / distanceToCenter < theta
 ) {
-    const BarnesHutNode& node = tree.nodes[nodeIndex];
-    ++result.metrics.visitedNodes;
-    if (node.totalMass <= 0.0) {
-        return;
+    result.acceleration += softenedAcceleration(
+        bodies[targetIndex].position,
+        node.centerOfMass,
+        node.totalMass,
+        gravitationalConstant,
+        softening
+    );
+    ++result.metrics.approximatedNodes;
+    if (trace) {
+        trace->accepted.push_back(nodeIndex);
     }
+    return;
+}
+```
 
-    if (node.isLeaf()) {
-        for (const std::size_t sourceIndex : node.bodyIndices) {
-            if (sourceIndex == targetIndex) {
-                continue;
-            }
-            result.acceleration += softenedAcceleration(
-                bodies[targetIndex].position,
-                bodies[sourceIndex].position,
-                bodies[sourceIndex].mass,
-                gravitationalConstant,
-                softening
-            );
-            ++result.metrics.exactInteractions;
+Đây là khoảng cách trong **không gian 3D của sao**, không phải khoảng cách đến camera. `!containsTarget` bảo vệ vật đích; `distanceToCenter > 0.0` bảo vệ phép chia. Khi nhận, ta thêm **một** đóng góp lực rồi dừng ở ô đó.
+
+### Khi xuống tới lá thì cộng từng sao thật
+
+```cpp title="include/tree.hpp — Không gộp và không tự hút ở lá"
+if (node.isLeaf()) {
+    for (const std::size_t sourceIndex : node.bodyIndices) {
+        if (sourceIndex == targetIndex) {
+            continue;
         }
-        return;
-    }
-
-    const Vec3 displacement = node.centerOfMass - bodies[targetIndex].position;
-    const double distanceToCenter = length(displacement);
-    const double nodeSize = node.bounds.maximum.x - node.bounds.minimum.x;
-    const bool containsTarget = pointInsideBounds(bodies[targetIndex].position, node.bounds);
-    if (
-        !containsTarget && distanceToCenter > 0.0 &&
-        nodeSize / distanceToCenter < theta
-    ) {
         result.acceleration += softenedAcceleration(
             bodies[targetIndex].position,
-            node.centerOfMass,
-            node.totalMass,
+            bodies[sourceIndex].position,
+            bodies[sourceIndex].mass,
             gravitationalConstant,
             softening
         );
-        ++result.metrics.approximatedNodes;
-        if (trace) {
-            trace->accepted.push_back(nodeIndex);
-        }
-        return;
+        ++result.metrics.exactInteractions;
     }
-
-    if (trace) {
-        trace->opened.push_back(nodeIndex);
-    }
-    for (const std::size_t childIndex : node.children) {
-        accumulateBarnesHutNode(
-            tree,
-            bodies,
-            targetIndex,
-            childIndex,
-            theta,
-            gravitationalConstant,
-            softening,
-            result,
-            trace
-        );
-    }
+    return;
 }
 ```
 
-Đọc theo thứ tự: bỏ node rỗng; leaf cộng từng source thật; internal node kiểm containsTarget và s/d; nếu chưa được nhận thì đệ quy vào children. Gia tốc của nguồn tổng hợp dùng đúng softenedAcceleration đã kiểm ở bài 02.
+Nếu một ô trong không đạt điều kiện, duyệt tám ô con của nó. Các ô rỗng không góp lực. Ở những lá có nhiều sao, mỗi ID còn lại là một lần tính cặp giống bài 02.
 
-### Giữ interface đối chiếu với direct
+### Tự ghép trong `work/`
 
-```cpp title="include/tree.hpp — Giữ interface đối chiếu với direct"
-inline AccelerationResult barnesHutAcceleration(
-    const BarnesHutTree& tree,
-    std::span<const Body> bodies,
-    std::size_t targetIndex,
-    double theta,
-    double gravitationalConstant,
-    double softening,
-    ForceTrace* trace = nullptr
-) {
-    AccelerationResult result{};
-    if (targetIndex < bodies.size() && !tree.nodes.empty()) {
-        accumulateBarnesHutNode(
-            tree,
-            bodies,
-            targetIndex,
-            0,
-            theta,
-            gravitationalConstant,
-            softening,
-            result,
-            trace
-        );
-    }
-    return result;
-}
-```
+Trong `work/include/tree.hpp`, viết đường đi xuống cây: xử lý ô rỗng, lá, ô đủ xa, rồi đến trường hợp phải xét con. Thêm thống kê ngay cạnh phép cộng thực tế.
 
-Wrapper trả vector acceleration và work counters như directAcceleration. Integrator không đổi công thức hoặc dt khi bạn đổi solver. Đó là điều kiện để quy sai khác lực cho xấp xỉ thay vì cho một mô hình khác.
+<CourseWorkFile project="31" step={6} path="include/tree.hpp" />
+
+Trong `work/include/simulation.hpp`, dùng cây của đúng thời điểm để lấy gia tốc; vẫn giữ cách tính trực tiếp cho hệ nhỏ.
+
+<CourseWorkFile project="31" step={6} path="include/simulation.hpp" />
+
+Nối `ForceTrace` vào `work/include/presentation.hpp` để có thể so ô được mở và ô đã nhận trên đúng ngôi sao đó.
+
+<CourseWorkFile project="31" step={6} path="include/presentation.hpp" />
+
+Trong `work/include/application.hpp`, thêm phím chỉnh `theta`, `epsilon` và đổi solver cho hệ nhỏ. Đổi tham số không được giữ một bước dở đang dùng tham số cũ.
+
+<CourseWorkFile project="31" step={6} path="include/application.hpp" />
 
 ## Ghép các phần lại
 
-Từ checkpoint 06, preset mặc định là 4.096 body; advancePhysics dùng Barnes–Hut trừ khi đang ở preset nhỏ và chọn Direct. Sau mỗi commit, rebuild cây cho position mới. Khi theta/epsilon đổi, hủy pending force để không trộn hai cấu hình trong một bước.
+Từ bài này bản C++ chạy thiên hà 4.096 vật. Giữ thời gian đứng yên, kiểm tra lớp quan sát đang bật (`F` đổi bật/tắt), chọn một sao ngoài rìa và thử hai giá trị `theta` bằng `[`/`]`. Hãy xem một cụm cụ thể từ góc độ của sao đó. Bây giờ chỉ xoay camera: cùng sao, cùng cây và cùng `theta` thì quyết định của solver không đổi.
 
-Bật F để xem debug. Hộp xanh là node được mở; vàng là aggregate được chấp nhận cho target. Chỉ vẽ tối đa 512 hộp mỗi loại để không che scene; giới hạn này không cắt bớt nguồn lực.
-
-```bash title="Terminal — checkpoint 06"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_31_checkpoint_6
+```sh title="Terminal — chạy phần vừa viết trong work/"
+cmake --build build-work --config Release --target project_31_work --parallel 1
+.\build-work\Release\project_31_work.exe
 ```
-
-Trên Windows chạy ./build/Debug/project_31_checkpoint_6.exe; với Ninja/macOS/Linux, executable nằm trực tiếp trong build. Toàn bộ source và phần so sánh với bài trước ở cuối trang.
 
 ## Thử làm sai để hiểu đúng
 
-1. Bỏ containsTarget khỏi điều kiện nhận node và thử theta lớn trên fixture nhỏ. So vector với direct ở body gần tâm khối: self-force có thể xuất hiện. Khôi phục kiểm target trước khi đo tiếp.
-2. Đặt theta rất nhỏ, giữ nguyên snapshot. Kết quả thường gần direct hơn nhưng lượng việc tăng; đọc cả sai số và số node mở, không chỉ nhìn quỹ đạo. Trả theta về preset đã chọn.
+Tạm bỏ `!containsTarget` rồi thử một hệ nhỏ với ô có tâm khối lệch khỏi vật đang xét. Mũi tên có thể trông hợp mắt dù sai. So với lực trực tiếp cho đúng ID, rồi khôi phục điều kiện. Đừng dùng riêng trường hợp một sao để kết luận hết self-force: lá đơn vẫn có nhánh bỏ ID.
 
 ## Tự kiểm tra kết quả
 
-- Mọi accepted node đều không chứa position của target.
-- Một body duy nhất có acceleration=0, không có self interaction.
-- Theta gần 0 khớp direct trong absolute tolerance 10⁻¹⁰ trên fixture nhỏ.
-- Đổi Direct/BH ở cùng preset nhỏ giữ cùng integrator/dt và điều kiện đầu khi Reset.
+- Trong hệ một vật, không có nguồn khác để tạo gia tốc.
+- Một ô đã nhận chỉ đóng góp một nguồn; solver không tính tiếp cả tám con của ô đó.
+- Cố định sao rồi chỉ xoay camera: các ô đổi vị trí trên màn hình nhưng ID ô đã nhận/mở không đổi. Đổi sao được chọn thì chúng có thể đổi.
+- Trên preset nhỏ (tối đa 256 vật), phím `M` cho đối chiếu hai cách tính; ở 4.096 vật không ép toàn bộ mô phỏng chạy direct chỉ để kiểm một sao.
 
 ## Bài tập mở rộng
 
-Đếm riêng visitedNodes, approximatedNodes và exactInteractions cho target gần lõi và ở rìa. Giải thích vì sao chúng không nhất thiết có cùng lượng việc dù N giống nhau.
+Chọn hai sao: một ở lõi, một ở rìa. Hãy tìm cùng một ô cây được nhận khi tính lực cho sao này nhưng phải mở khi tính cho sao kia. Giải thích bằng $s$, $d$ và điều kiện chứa vật đích.
 
-Bài tiếp theo: [Tìm self-force và lỗi cấu trúc cây](/projects/barnes-hut-nbody/07-self-force-va-topology-inspector).
+Học tiếp: [Tìm self-force và lỗi cấu trúc cây](/projects/barnes-hut-nbody/07-self-force-va-topology-inspector).

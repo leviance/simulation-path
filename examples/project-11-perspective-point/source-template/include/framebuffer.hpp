@@ -86,10 +86,11 @@ inline void drawCircle(Framebuffer& image, int cx, int cy, int radius, std::uint
 
 constexpr std::uint32_t kBackground = 0x11182BFFu;
 constexpr std::uint32_t kGrid = 0x28334DFFu;
-constexpr std::uint32_t kShape = 0x53F0AEFFu;
+constexpr std::uint32_t kShape = 0xFFAC47FFu;
 constexpr std::uint32_t kGhost = 0x74839FFFu;
 constexpr std::uint32_t kAxisX = 0xFF6B6BFFu;
-constexpr std::uint32_t kAxisY = 0x84A9FFFFu;
+constexpr std::uint32_t kAxisY = 0x53F0AEFFu;
+constexpr std::uint32_t kAxisZ = 0x84A9FFFFu;
 constexpr std::uint32_t kWhite = 0xFFFFFFFFu;
 constexpr std::uint32_t kMarker = 0xFFE26CFFu;
 } // namespace lab

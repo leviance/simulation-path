@@ -13,6 +13,7 @@ export type GalaxyAction =
   | "direct"
   | "selected"
   | "debug"
+  | "view"
   | "camera"
   | "zoomIn"
   | "zoomOut"
@@ -66,6 +67,11 @@ export default function GalaxyControls({
           <option value="pan">Dịch góc nhìn</option>
         </select>
       </label>
+      <div role="group" aria-label="Nhìn cùng một thiên hà từ ba phía">
+        <button onClick={() => act("view", 0)}>Nhìn nghiêng</button>
+        <button onClick={() => act("view", 1)}>Nhìn từ trên</button>
+        <button onClick={() => act("view", 2)}>Nhìn ngang đĩa</button>
+      </div>
       <button onClick={() => act("camera")}>Đặt lại camera</button>
       <button onClick={() => act("zoomIn")}>Tiến vào thiên hà</button>
       <button onClick={() => act("zoomOut")}>Lùi ra xa</button>

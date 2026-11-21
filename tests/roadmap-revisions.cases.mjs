@@ -7,6 +7,12 @@ import { render, projectCatalog } from "./site-support.mjs";
 test("updated roadmap and homepage distinguish planned products from available material", async () => {
   const roadmap = await (await render("/roadmap")).text();
   assert.equal((roadmap.match(/id="project-\d{2}"/g) ?? []).length, 78);
+  assert.ok(roadmap.includes("Chọn đường học theo thứ bạn muốn tự xây"));
+  const routeStops = [...roadmap.matchAll(/href="#project-(\d{2})"/g)].map((match) => match[1]);
+  for (const id of ["06", "11", "12", "14", "21", "27", "28", "52", "58"]) {
+    assert.ok(routeStops.includes(id), "missing learning route stop " + id);
+  }
+  for (const id of routeStops) assert.ok(roadmap.includes(`id="project-${id}"`));
   assert.equal(
     (roadmap.match(/class="roadmap-item is-revised"/g) ?? []).length,
     Object.keys(rebuildRevisions).length,
@@ -22,7 +28,9 @@ test("updated roadmap and homepage distinguish planned products from available m
     assert.ok(roadmap.includes(roadmapSeed[Number(id) - 1].title));
   }
   const home = await (await render("/")).text();
-  assert.ok(home.includes("Những thứ bạn sẽ tự tay tạo ra"));
+  const hasPending = Object.keys(rebuildRevisions).length > 0;
+  assert.equal(home.includes('id="planned-heading"'), hasPending);
+  assert.equal(home.includes("Những thứ bạn sẽ tự tay tạo ra"), hasPending);
   assert.match(home, /class="floating-label label-a">index = y × width \+ x<\/div>/);
   assert.doesNotMatch(home, /class="floating-label label-a">x = y × width \+ x<\/div>/);
   assert.ok(home.includes("hướng dẫn hiện tại"));
@@ -62,9 +70,10 @@ test("every revised product has an honest scope page and preserved old overview 
 test("downloads separate previous ZIPs without deleting or relabelling them as new products", async () => {
   const html = await (await render("/downloads")).text();
   const split = html.indexOf('id="previous-editions"');
-  assert.ok(split > 0);
-  const current = html.slice(0, split);
-  const previous = html.slice(split);
+  const hasPending = Object.keys(rebuildRevisions).length > 0;
+  assert.equal(split > 0, hasPending);
+  const current = hasPending ? html.slice(0, split) : html;
+  const previous = hasPending ? html.slice(split) : "";
   for (const id of Object.keys(rebuildRevisions)) {
     const source = projectCatalog.find((project) => project.id === id);
     const download = `/downloads/${source.sourceDirectory}.zip`;
@@ -73,5 +82,8 @@ test("downloads separate previous ZIPs without deleting or relabelling them as n
     assert.ok(previous.includes(`href="/roadmap/${id}"`));
   }
   assert.equal((html.match(/download=""/g) ?? []).length, projectCatalog.length);
-  assert.match(previous, /Tải ZIP bản cũ/);
+  for (const source of projectCatalog.filter((p) => !rebuildRevisions[p.id])) {
+    assert.ok(current.includes(`href="/downloads/${source.sourceDirectory}.zip"`));
+  }
+  assert.equal(html.includes("Tải ZIP bản cũ"), hasPending);
 });

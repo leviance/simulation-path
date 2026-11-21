@@ -107,6 +107,7 @@ struct EnergyJob {
     }
 
     // [snippet:energyBatch]
+// [snippet energy-batch]
     void tick() {
         const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(6);
         while (first < snapshot.size()) {
@@ -123,7 +124,8 @@ struct EnergyJob {
         active = false;
     }
 
-    // [/snippet:energyBatch]
+    // [/snippet energy-batch]
+// [/snippet:energyBatch]
 };
 
 // [/snippet:EnergyJob]

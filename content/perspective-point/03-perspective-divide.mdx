@@ -1,10 +1,11 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 # Vì sao điểm ở xa tiến về tâm?
 
 ## Vấn đề cần giải quyết
 
-Ở bài trước, bạn đã dịch chuyển được điểm và camera. Nhưng hãy giữ nguyên X/Y rồi tăng Z từ 4 lên 8: điểm vẫn nằm ở chỗ cũ. Bản xem trước mới bỏ qua Z, nên nó chưa thể hiện được khoảng cách tới camera.
+Nhìn đốm sáng lệch về bên phải. Nếu đẩy nó ra xa theo trục Z mà không dịch sang ngang, bạn sẽ thấy nó giữ nguyên chỗ, hay nhích về giữa màn hình? Bản xem trước của bài 2 cho đáp án thứ nhất. Một máy ảnh nhìn thấy đáp án thứ hai. Hôm nay ta chỉ thay bước quyết định sự khác biệt ấy.
 
 Bài này ta sẽ dùng cả ba tọa độ để tìm vị trí của điểm trên màn hình. Trước mắt chỉ cần một điểm sáng; đến bài 5, khi đã biết cách cắt đoạn ở near/far, ta mới thêm lưới và các khung 3D.
 
@@ -28,27 +29,28 @@ Trong hình nhìn ngang bên dưới viewport, chọn mặt cắt XZ. Đặt cam
 
 ## Viết code từng bước
 
-Tiếp tục sửa **starter/include** và **starter/src**, giữ lại mã đã hoàn thành ở bài trước. Tiêu đề code block ghi đường dẫn tính từ thư mục Starter. Nếu bài yêu cầu thay một hàm, hãy thay hàm cũ, không dán thêm một bản trùng tên.
+Mở lại thư mục `work/` của bài trước. Các đường dẫn như `include/lab.hpp` dưới đây đều tính từ **work/**. Configure lại sẽ không ghi đè phần bạn đã viết.
 
-Build và chạy đúng mã bạn vừa viết:
+Giữ nguyên camera, X, Y và khung nhìn. Với điểm mặc định của chương trình, chọn F1 rồi F2: hai lần chỉ khác nhau ở Z (4 và 8). Hãy thử đo **từ tâm ảnh** đến hai vị trí, đừng đo từ mép trái cửa sổ.
 
-```powershell title="Chạy mã đang học trong Starter"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_11_starter --parallel 2
-.\build\Debug\project_11_starter.exe
+```powershell title="Chạy chương trình đang viết (Windows, Visual Studio)"
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
+cmake --build build-work --config Debug --target project_11_work --parallel 1
+.\build-work\Debug\project_11_work.exe
 ```
 
-**Checkpoint 03 là bản tham khảo sau bài này**, không phải nơi tự nhận thay đổi từ Starter. Khi cần đối chiếu, mở checkpoints/03 hoặc build riêng target project_11_checkpoint_3; lệnh đó chạy mã mẫu, không kiểm chứng phần bạn vừa sửa.
+`checkpoints/03` là bản tham khảo sau bài này. Khi muốn thử phần mình vừa sửa, hãy chạy `project_11_work`, không chạy checkpoint.
 
 ### Bước 1 — Viết phép chia từ tỉ lệ vừa suy ra
 
+{/* snippet include/lab.hpp#divide */}
 ```cpp title="include/lab.hpp — tọa độ trên mặt phẳng ảnh depth 1"
 inline Vec2 perspectiveDivide(Vec3 cameraPoint) {
     return {cameraPoint.x / cameraPoint.z, cameraPoint.y / cameraPoint.z};
 }
 ```
 
-Hàm nhỏ này không tự biết near plane. Caller có trách nhiệm kiểm depth trước; không gọi nó tùy tiện ở mọi nơi trong renderer.
+Hàm này chỉ biết chia. Nếu truyền điểm ngay tại camera thì mẫu số bằng 0. Vì vậy ta sẽ đặt lời gọi ở đúng một nơi: sau khi đã kiểm tra độ sâu.
 
 ### Bước 2 — Ghép thành phép chiếu có guard
 
@@ -76,6 +78,12 @@ inline bool validLens(const PerspectiveLens& lens, const Viewport& viewport) {
         std::isfinite(lens.nearPlane) && std::isfinite(lens.farPlane) && lens.nearPlane > 0.0 && lens.farPlane > lens.nearPlane &&
         std::isfinite(viewport.x) && std::isfinite(viewport.y) && std::isfinite(viewport.width) && std::isfinite(viewport.height) && viewport.width > 0.0 && viewport.height > 0.0;
 }
+```
+
+Thêm hàm kiểm cạnh ảnh. Một điểm đúng ở mép vẫn thuộc khung nhìn:
+
+{/* snippet include/lab.hpp#ndc-limits */}
+```cpp title="include/lab.hpp — kiểm hai biên NDC"
 inline bool isInsideNdc(Vec2 ndc) {
     return std::abs(ndc.x) <= 1.0 && std::abs(ndc.y) <= 1.0;
 }
@@ -151,11 +159,29 @@ inline void renderScene(Framebuffer& image, const Scene& scene) {
 
 Bán kính world 0.12 cũng chia cho Z, nhưng bị giới hạn trong [3,30] pixel để marker dễ nhìn. Đây chỉ là ký hiệu của điểm sáng, chưa phải bộ vẽ hình cầu. Điều cần kiểm tra ở bài này là **tâm marker đổi vị trí**, không chỉ kích thước của nó.
 
+### Tự ghép trong `work/`
+
+Các đoạn trên giải thích phần mới. Khi viết, mở từng tệp dưới đây để thấy chỗ cần sửa trong **bản của bài trước**. Đoạn nào đã gõ rồi thì chỉ đối chiếu, không chèn thêm lần nữa.
+
+Kiểm độ sâu trước, sau đó mới chia X và Y cho Z. Điểm bị loại không có pixel.
+
+<CourseWorkFile project="11" step={3} path="include/lab.hpp" />
+
+Bỏ bản xem trước XY. Dùng tọa độ vừa chiếu để vẽ đốm sáng.
+
+<CourseWorkFile project="11" step={3} path="include/view.hpp" />
+
+Hiện tọa độ đã dùng để vẽ. Khi không có kết quả, ghi rõ lý do thay vì in (0,0).
+
+<CourseWorkFile project="11" step={3} path="include/presentation.hpp" />
+
 ## Ghép các phần lại
 
 ### Hiển thị số đo của phép chiếu
 
-HUD cũ vẫn ghi “XY PREVIEW ONLY”. Thêm statusText rồi **thay presentFramebuffer** trong presentation.hpp bằng hai hàm dưới; không giữ cả hai phiên bản presentFramebuffer. Chúng chỉ đọc kết quả để hiển thị, không tự chiếu lại theo một công thức khác. NDC/screen bị loại sẽ hiện “undefined” thay cho tọa độ giả.
+Trong `include/presentation.hpp`, hàm `inline bool presentFramebuffer(...)` đã có sẵn công việc đưa texture lên cửa sổ. Sau khi dùng `projectPerspective`, chỉ đọc `screen` và `ndc` nếu cả hai thực sự tồn tại. Phần cần hiểu là nhánh sau, không phải toàn bộ mã của SDL.
+
+Đừng để bảng số vẫn ghi “XY PREVIEW ONLY” khi đèn đã được chiếu theo Z. Thêm `statusText`, rồi chỉnh hàm `presentFramebuffer` đang có theo chỉ dẫn cho `work/include/presentation.hpp`. Hai đoạn dưới cho thấy cách gọi tên trạng thái và cách đọc kết quả. Với điểm sau camera, không có tọa độ ảnh để in ra.
 
 ```cpp title="include/presentation.hpp — tên của từng trạng thái"
 inline const char* statusText(ProjectionStatus status) {
@@ -177,37 +203,19 @@ inline const char* statusText(ProjectionStatus status) {
 ```
 
 ```cpp title="include/presentation.hpp — số đo đi cùng ảnh perspective"
-inline bool presentFramebuffer(SDL_Renderer* renderer, SDL_Texture* texture, const Scene& scene) {
-    // Letterbox phải dùng màu nền, không dùng lại màu chữ của frame trước.
-    if (!SDL_SetRenderDrawColor(renderer, 17, 24, 43, 255) || !SDL_RenderClear(renderer) || !SDL_RenderTexture(renderer, texture, nullptr, nullptr) || !SDL_SetRenderDrawColor(renderer, 225, 232, 250, 255)) {
-        return false;
-    }
-    if (!text(renderer, 16, 14, "PROJECT 11 | WASD: XY, Q/E: Z | IJKL U/O: camera | +/- FOV | V aspect | R reset | Esc quit") || !text(renderer, 16, 34, "F1 default, F2 far, F3 near, F4 behind, F5 beyond-far, F6 outside | [ ] near, ; ' far")) {
-        return false;
-    }
-    char value[230]{};
-    std::snprintf(value, sizeof(value), "world (%.3f, %.3f, %.3f) | camera at (%.2f, %.2f, %.2f)", scene.point.x, scene.point.y, scene.point.z, scene.camera.position.x, scene.camera.position.y, scene.camera.position.z);
-    if (!text(renderer, 16, 58, value)) {
-        return false;
-    }
-    const auto projected = projectPerspective(scene.point, scene.camera, scene.lens, viewportFor(scene));
-    std::snprintf(value, sizeof(value), "camera point (%.3f, %.3f, %.3f) | status %s", projected.cameraPoint.x, projected.cameraPoint.y, projected.cameraPoint.z, statusText(projected.status));
-    if (!text(renderer, 16, 80, value)) {
-        return false;
-    }
-    if (projected.screen && projected.ndc) {
-        std::snprintf(value, sizeof(value), "NDC (%.4f, %.4f) -> screen (%.2f, %.2f), continuous viewport coordinates", projected.ndc->x, projected.ndc->y, projected.screen->x, projected.screen->y);
-    } else {
-        std::snprintf(value, sizeof(value), "NDC / screen: undefined (depth rejected before division)");
-    }
-    if (!text(renderer, 16, 724, value)) {
-        return false;
-    }
-    return SDL_RenderPresent(renderer);
+if (projected.screen && projected.ndc) {
+    std::snprintf(value, sizeof(value), "NDC (%.4f, %.4f) -> screen (%.2f, %.2f), continuous viewport coordinates", projected.ndc->x, projected.ndc->y, projected.screen->x, projected.screen->y);
+} else {
+    std::snprintf(value, sizeof(value), "NDC / screen: undefined (depth rejected before division)");
+}
+if (!text(renderer, 16, 724, value)) {
+    return false;
 }
 ```
 
-Build lại project_11_starter. Giữ nguyên X/Y, dùng Q/E thay Z và đọc số đo trên HUD. Với viewport mặc định, tâm là (550,400), focalPixels=292.5. P=(1,0.5,4) phải tới (623.125,363.4375); đổi Z thành 8 được (586.5625,381.71875). Hai độ lệch (73.125,−36.5625) và (36.5625,−18.28125) đúng là hơn kém nhau hai lần.
+Build lại `project_11_work`. Giữ nguyên X/Y, dùng Q/E thay Z và đọc số đo trên HUD. Với viewport mặc định, tâm là (550,400), focalPixels=292.5. P=(1,0.5,4) phải tới (623.125,363.4375); đổi Z thành 8 được (586.5625,381.71875). Hai độ lệch (73.125,−36.5625) và (36.5625,−18.28125) đúng là hơn kém nhau hai lần.
+
+Để thử ngay bằng phím mà không cần đặt Y=0.5, bấm F1 rồi F2. Hai preset dùng Y=0.6: bạn sẽ thấy gần (623.125, 356.125) rồi (586.5625, 378.0625). Cả hai phép đo đều lấy mốc ở tâm (550, 400).
 
 Các giá trị này dùng FOV tạm 90° của riêng bài 3. Không lấy số đo từ bài 4–8 đang dùng FOV mặc định 60° để so trực tiếp.
 

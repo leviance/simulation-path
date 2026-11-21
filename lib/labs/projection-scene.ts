@@ -12,6 +12,7 @@ export interface PointScene {
   aspect: number;
   paused: boolean;
   debug: boolean;
+  measureDepth: boolean;
   elapsed: number;
 }
 export const initialPointScene = (): PointScene => ({
@@ -21,6 +22,7 @@ export const initialPointScene = (): PointScene => ({
   aspect: 0,
   paused: true,
   debug: true,
+  measureDepth: false,
   elapsed: 0,
 });
 export function viewportFor(scene: PointScene): PointViewport {

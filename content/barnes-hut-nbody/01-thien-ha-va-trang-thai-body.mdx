@@ -1,100 +1,34 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 # Dựng đĩa sao từ một chương trình SDL đang chạy
 
 ## Vấn đề cần giải quyết
 
-Ta đã dùng Octree để tìm điểm trong một vùng ở Project 30. Bây giờ câu hỏi khác hẳn: nếu mọi vật thể hút mọi vật thể khác, có cách nào giảm số phép tính mà vẫn giữ chuyển động hợp lý? Chưa nên trả lời bằng Barnes–Hut ngay. Trước hết, hãy mở được đĩa sao đứng yên, đổi góc nhìn và biết state nào thuộc về mô phỏng.
+Trước khi viết một dòng tính lực, hãy mở thiên hà và dừng ở khung hình đầu. Nhìn thẳng, bạn cần nhận ra các dải sao uốn quanh vùng sáng ở giữa. Xoay sang ngang, phần lớn sao phải dồn thành một dải mỏng nhưng vùng giữa vẫn phồng lên. Nếu xoay mà hình vẫn y hệt, rất có thể ta chỉ đang nhìn một bức ảnh.
+
+Thử thách của bài: từ danh sách sao, tự tính khối lượng và tâm khối của cả hệ. Bạn có thể dùng kết quả ấy để kiểm một thiên hà dù nó đang ở ngoài màn hình.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Starter đã có renderer CPU và event loop. Checkpoint 01 thêm phép đọc tổng khối lượng, tâm khối và momentum; chưa tiến thời gian. Body có position, velocity, mass trong XYZ thật. Đĩa nằm gần mặt phẳng XY nhưng có chiều dày theo Z. Camera tạo pixel để quan sát, không sửa position. Đây là mô hình học thuật dùng reduced units, không phải mô hình thiên hà quan trắc.
+Một ngôi sao trên màn hình và một `Body` trong mô phỏng không phải cùng một thứ. `position` cho biết nó ở đâu trong không gian; `velocity` cho biết nó sẽ đi theo hướng nào; `mass` quyết định nó hút các sao khác mạnh đến đâu. Phải qua camera và phép chiếu thì vị trí đó mới thành một điểm sáng.
 
-G=0,001; central body có mass 120, tổng mass đĩa xấp xỉ 120. Tăng N làm đĩa được lấy mẫu dày hơn, không làm mass tăng tỉ lệ với N. Velocity ban đầu là điều kiện đầu gần quỹ đạo tròn, không phải đường đi sẽ bị áp đặt. Ta trừ cùng bulk velocity khỏi mọi body để bỏ chuyển động tịnh tiến toàn hệ.
+Hình xoắn xuất hiện ngay cả khi đồng hồ còn ở `t = 0`. Ta gieo nhiều sao gần hai dải cong không đều, ít sao hơn ở giữa các dải và rải một số sao cả ngoài đĩa. Hai dải có chỗ rộng, chỗ mờ và các nhánh ngắn; vùng phình ở tâm dày hơn đĩa. Khoảng tối là nơi lấy mẫu thưa, không phải bụi hấp thụ ánh sáng. Sau khi bắt đầu tính lực, không có đường ray nào giữ sao nằm trong nhánh.
 
-Để nhìn rõ cấu trúc, ta gieo khoảng một phần ba số sao vào lõi ellipsoid lớn, có thể tích thật. Một vùng halo thưa bao quanh lõi; phần còn lại nằm trong hai nhánh xoắn dày, không bị ép vào một mặt phẳng. Đây là **hình dạng được chọn ở thời điểm ban đầu**, chưa phải bằng chứng Barnes–Hut tự tạo ra thiên hà xoắn. Sau khi bấm chạy, solver chỉ đọc position, velocity và mass; không có đoạn code nào kéo sao trở lại nhánh cũ.
-
-$$
-\mathbf c=\frac{\sum_i m_i\mathbf p_i}{\sum_i m_i},\qquad\mathbf P=\sum_i m_i\mathbf v_i
-$$
+Bản khởi đầu chỉ dùng 256 vật để bạn lần theo từng vị trí; với số mẫu này, nhánh có thể còn đứt quãng. Từ bài 06, cùng cách gieo ấy được dùng cho 4.096 vật. Màu ấm ở lõi và màu lạnh hơn về phía rìa giúp đọc hình, không phải phép đo nhiệt độ sao. Đừng khắc phục một ảnh quá thưa bằng cách thêm sao giả ngoài danh sách `bodies`.
 
 <InteractiveLab demo="barnes-hut-nbody" mode="nbody-scene" />
 
 ## Viết code từng bước
 
-### Bước 1 — Giữ một chương trình chạy được
+### Mở khung chương trình trước
 
-```cpp title="src/main.cpp — Giữ một chương trình chạy được"
-int main(int argc, char** argv) {
-    bool smoke = false;
-    bool workflow = false;
-    bool benchmark = false;
-    for (int index = 1; index < argc; ++index) {
-        if (std::strcmp(argv[index], "--smoke") == 0) {
-            smoke = true;
-        } else if (std::strcmp(argv[index], "--smoke-workflow") == 0) {
-            smoke = true;
-            workflow = true;
-        } else if (std::strcmp(argv[index], "--benchmark") == 0) {
-            benchmark = true;
-        } else {
-            std::cerr << "Unknown argument: " << argv[index] << '\n';
-            return EXIT_FAILURE;
-        }
-    }
-    if (benchmark) {
-        std::cerr << "Runtime study starts at checkpoint 09\n";
-        return EXIT_FAILURE;
-    }
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
-        std::cerr << SDL_GetError() << '\n';
-        return EXIT_FAILURE;
-    }
-    SDL_Window* window = SDL_CreateWindow("Project 31 | 3D Barnes-Hut galaxy", 1120, 820, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
-    if (!window) {
-        std::cerr << SDL_GetError() << '\n';
-        SDL_Quit();
-        return EXIT_FAILURE;
-    }
-    SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
-    if (!renderer) {
-        std::cerr << SDL_GetError() << '\n';
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return EXIT_FAILURE;
-    }
-    SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, 1120, 570);
-    if (!texture) {
-        std::cerr << SDL_GetError() << '\n';
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return EXIT_FAILURE;
-    }
-    SDL_SetRenderLogicalPresentation(renderer, 1120, 820, SDL_LOGICAL_PRESENTATION_LETTERBOX);
-    SDL_SetRenderVSync(renderer, 1);
-    int result = EXIT_SUCCESS;
-    try {
-        result = project31::runApplication(window, renderer, texture, smoke, workflow);
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
-        result = EXIT_FAILURE;
-    }
-    // Reverse ownership order on every exit, including bounded-job failures.
-    SDL_CaptureMouse(false);
-    SDL_DestroyTexture(texture);
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
-    return result;
-}
-```
+Tải [ZIP Project 31](/downloads/project-31-barnes-hut-nbody.zip), giải nén và mở terminal ở thư mục chứa `CMakeLists.txt`. Chạy lần lượt các lệnh ở phần **Ghép các phần lại**. Lần cấu hình đầu sao chép `starter/` thành `work/`. Hãy chạy bản đó một lần để nhận diện những gì đã có sẵn: cửa sổ SDL, camera, bộ gieo sao và bộ vẽ. Từ đây chỉ sửa `work/`; không chép đè bằng `final/`.
 
-Đọc main theo thứ tự tạo window → renderer → texture, kiểm lỗi rồi gọi runApplication. Khi thất bại, chỉ hủy tài nguyên đã tạo. Starter cung cấp phần trình bày để bạn không phải viết lại SDL từ đầu.
+### Một ngôi sao cần mang theo gì?
 
-### Bước 2 — Tách state khỏi pixel
-
-```cpp title="include/lab.hpp — Tách state khỏi pixel"
+{/* snippet include/lab.hpp#body-state */}
+```cpp title="include/lab.hpp — Dữ liệu của một ngôi sao"
 struct Body {
     Vec3 position{};
     Vec3 velocity{};
@@ -102,156 +36,29 @@ struct Body {
 };
 ```
 
-Không thêm screenX/screenY vào Body. Acceleration được tính lại từ snapshot đầu bước; renderer chỉ đọc position qua include/render.hpp.
+Ba giá trị này đã có trong starter. Để tìm nơi đông sao, ta đếm vị trí; để tìm tâm khối, ta còn cần khối lượng. Hai sao ở hai đầu đoạn thẳng nhưng có khối lượng khác nhau sẽ không có tâm khối ở giữa đoạn.
 
-### Bước 3 — Sinh lại cùng thí nghiệm
+### Vì sao thấy nhánh thay vì những cánh giống hệt nhau?
 
-Trong hàm sinh sao, `winding` và `phase` chọn độ cuộn cùng góc bắt đầu của mỗi nhánh; `verticalSpeedScale` chọn độ phân tán vận tốc theo chiều dày. Các nhánh `if` chỉ chọn tham số, không lấy thêm số ngẫu nhiên. Giữ nguyên thứ tự gọi `random.unit()` để một seed vẫn tạo lại đúng điều kiện đầu. Đây là cách dựng state ban đầu, không phải quỹ đạo áp đặt ở mỗi frame.
+`include/galaxy-seed.hpp` là dụng cụ cấp sẵn; chưa cần viết lại nó để giải bài. Tại một bán kính, nó cho những góc gần dải xoắn cơ hội nhận sao cao hơn. Ngoài dải vẫn có sao. Seed cố định để lần Reset kế tiếp cho đúng cùng một tập vị trí, kể cả những chỗ lổn nhổn do lấy mẫu.
 
-```cpp title="include/lab.hpp — Sinh lại cùng thí nghiệm"
-inline std::vector<Body> makeGalaxyBodies(std::size_t count, std::uint32_t seed) {
-    if (count < 1 || count > 8192) {
-        throw std::invalid_argument("Body budget: 1..8192");
-    }
-    const std::size_t safeCount = std::max<std::size_t>(1U, count);
-    XorShift32 random(seed);
-    std::vector<Body> bodies{};
-    bodies.reserve(safeCount);
-    bodies.push_back({{}, {}, 120.0});
-
-    // Nghịch đảo CDF của đĩa có mật độ giảm theo exp(-r / scale).
-    // Số vòng chia đôi cố định: không có rejection loop có thể chạy vô hạn.
-    const auto diskRadius = [](double sample) {
-        constexpr double scale = 0.36;
-        constexpr double maximum = 1.4;
-        const double limit = 1.0 - (1.0 + maximum / scale) * std::exp(-maximum / scale);
-        double low = 0;
-        double high = maximum;
-        for (int iteration = 0; iteration < 16; ++iteration) {
-            const double middle = (low + high) * 0.5;
-            const double cumulative = 1.0 - (1.0 + middle / scale) * std::exp(-middle / scale);
-            if (cumulative < sample * limit) {
-                low = middle;
-            } else {
-                high = middle;
-            }
-        }
-        return 0.2 + (low + high) * 0.5;
-    };
-
-    for (std::size_t index = 1; index < safeCount; ++index) {
-        // Đây là điều kiện đầu, không phải quỹ đạo được áp đặt mỗi frame.
-        // Một phần ba số sao tạo lõi ellipsoid; halo và đĩa đều có thể tích XYZ.
-        // Các nhánh chỉ mô tả phân bố ban đầu, không ép sao quay theo đường có sẵn.
-        const bool bulge = index % 3 == 0;
-        const bool halo = !bulge && index % 11 == 0;
-        const double radialSample = random.unit();
-        double radius = diskRadius(radialSample);
-        if (bulge) {
-            radius = 0.06 + std::pow(radialSample, 1.1) * 0.55;
-        } else if (halo) {
-            radius = 0.5 + radialSample * 0.9;
-        }
-        const double angularSample = random.unit();
-        const double scatter = random.unit();
-        double angle = 0;
-        if (bulge || halo) {
-            angle = angularSample * 6.283185307179586;
-        } else if (angularSample < 0.22) {
-            // Đĩa nền giữa các nhánh, không để hai dải rời như cánh quạt.
-            angle = angularSample / 0.22 * 6.283185307179586;
-        } else {
-            const bool firstArm = angularSample < 0.64;
-            double winding = 2.6;
-            double phase = 3.7;
-            if (firstArm) {
-                winding = 3.4;
-                phase = 0.0;
-            }
-            angle = phase + winding * std::log((radius + 0.12) / 0.32);
-            angle += 0.14 * std::sin(radius * 8.0 + phase);
-            angle += (scatter - 0.5) * (0.22 + 0.35 * radius);
-            if (angularSample > 0.90) {
-                angle += 0.3 + 0.3 * radius;
-            }
-        }
-        const double heightSample = random.unit() * 2.0 - 1.0;
-        double planarRadius = radius;
-        double thickness = 0.28 * heightSample * std::abs(heightSample) * (1.3 - 0.35 * radius);
-        if (bulge || halo) {
-            planarRadius = radius * std::sqrt(1.0 - heightSample * heightSample);
-            thickness = radius * heightSample;
-            if (bulge) {
-                thickness *= 0.85;
-            }
-        }
-        // Reduced units: G=0.001, central mass=120, disk mass approximately 120.
-        // Increasing N refines the disk instead of increasing its total mass.
-        const double mass = (0.7 + random.unit() * 0.6) * 120.0 / double(safeCount - 1);
-        const double enclosedMass = 120.0 + 120.0 * std::min(1.0, radius * radius);
-        const double orbitalSpeed = std::sqrt(0.001 * enclosedMass / radius);
-        const double speedJitter = 0.92 + random.unit() * 0.16;
-        double verticalSpeedScale = 0.06;
-        if (bulge || halo) {
-            verticalSpeedScale = 0.5;
-        }
-        bodies.push_back({
-            {std::cos(angle) * planarRadius, std::sin(angle) * planarRadius, thickness},
-            {
-                -std::sin(angle) * orbitalSpeed * speedJitter,
-                std::cos(angle) * orbitalSpeed * speedJitter,
-                (random.unit() - 0.5) * verticalSpeedScale,
-            },
-            mass,
-        });
-    }
-
-    Vec3 momentum{};
-    for (const Body& body : bodies) {
-        momentum += body.velocity * body.mass;
-    }
-    double systemMass = 0;
-    for (const Body& body : bodies) {
-        systemMass += body.mass;
-    }
-    // A common velocity shift removes bulk drift without kicking the central body.
-    const Vec3 bulkVelocity = momentum / systemMass;
-    for (Body& body : bodies) {
-        body.velocity = body.velocity - bulkVelocity;
-    }
-    return bodies;
+{/* snippet include/galaxy-seed.hpp#disk-density */}
+```cpp title="include/galaxy-seed.hpp — Mật độ tương đối tại một góc trên đĩa"
+inline double diskDensity(const SpiralRing& ring, double angle) {
+    const double main = ring.strengthA * ridgeAt(angle, ring.armA, ring.width)
+        + ring.strengthB * ridgeAt(angle, ring.armB, 1.22 * ring.width);
+    const double branches = ring.branchA * ridgeAt(angle, ring.spurA, 0.75 * ring.width)
+        + ring.branchB * ridgeAt(angle, ring.spurB, 0.90 * ring.width);
+    // Nền liên tục: giữa hai nhánh vẫn có sao. Không có texture bụi để che pixel.
+    return 0.115 + ring.contrast * (main + branches);
 }
 ```
 
-Cùng count và seed phải cho cùng từng body. Chú ý mass của mỗi sao chia cho count−1. Cuối hàm, bulkVelocity được trừ khỏi toàn hệ; không đẩy riêng central body với velocity lớn để bù momentum.
+Nhìn vào dòng `return`: hằng số 0,115 giữ nền sao giữa các nhánh; hai số hạng `main` và `branches` nâng mật độ gần những dải cong. Tại cùng bán kính, góc có mật độ cao dễ được chọn hơn, không phải chắc chắn được đặt một sao. Vì còn gieo độ cao theo trục Z, khi nhìn cạnh ta thấy một lớp có chiều dày chứ không phải một tờ giấy.
 
-Không nên chia toàn bộ đĩa thành hai dải đều rồi quay dải thứ hai đúng nửa vòng: kết quả rất dễ giống cánh quạt. Ở đây khoảng 22% sao của đĩa nằm trong lớp nền giữa các nhánh. Hai nhánh chính có độ cuốn khác nhau, góc xuất phát không đối xứng và bề rộng tăng dần ra ngoài; một nhánh còn có các nhánh phụ thưa hơn. Đây vẫn chỉ là cách chọn điều kiện đầu, không phải quy tắc buộc sao đi theo khi mô phỏng chạy.
+### Viết phép đo đầu tiên
 
-`diskRadius` giúp mật độ sao giảm dần ra ngoài thay vì dừng đột ngột ở mép một hình tròn. Nó tìm bán kính tương ứng với một mẫu ngẫu nhiên bằng 16 lần chia đôi trên hàm phân phối tích lũy của đĩa exponential. Số vòng lặp cố định nên không có trường hợp đợi mãi để tìm được một mẫu phù hợp. Bạn chưa cần tự suy ra phân phối này để học gravity: hãy giữ sampler có sẵn, thay seed để thử tính tái lập, rồi tập trung vào position/velocity/mass và cách solver đọc chúng.
-
-Lõi và halo lấy hướng trong không gian bằng góc quanh Z và một giá trị `heightSample` trong [-1, 1]. Phần chiếu lên XY có bán kính `radius * sqrt(1 - heightSample²)`, còn Z là `radius * heightSample`; lõi được nén nhẹ theo Z với hệ số 0,85. Vì vậy nhìn từ cạnh vẫn thấy một khối sao, không phải một tấm tròn. Đĩa cũng có độ dày riêng; bạn có thể dùng W/S, cuộn chuột hoặc các nút tiến/lùi để đi vào giữa các sao.
-
-### Bước 4 — Từ một body tới đốm sáng trên màn hình
-
-Vẽ mọi sao bằng cùng một chấm đặc sẽ làm lõi và các nhánh hòa thành một mảng nhiễu. Renderer có sẵn trong starter dùng `include/star-render.hpp`: chiếu đúng position qua camera, vẽ lõi sáng nhỏ và halo có bán kính hữu hạn, cộng ánh sáng của các sao chồng nhau rồi nén độ sáng bằng tone mapping. Không có sao nền giả hoặc ảnh thiên hà phủ lên mô phỏng.
-
-```cpp title="include/star-render.hpp — Nén độ sáng sau khi cộng các sao"
-inline std::uint32_t displayLight(float value, double background) {
-    // Tone mapping giới hạn độ sáng, giữ được chi tiết khi nhiều sao chồng nhau.
-    const double linear = background + double(value);
-    return std::uint32_t(std::lround(255.0 * std::sqrt(linear / (1.0 + linear))));
-}
-```
-
-`value` là tổng ánh sáng tuyến tính ở một kênh màu, không phải mass hay năng lượng vật lý của hệ. Phép chia `linear / (1 + linear)` giữ đầu ra dưới 1 dù lõi có nhiều sao chồng lên nhau. Căn bậc hai làm các vùng mờ dễ nhìn hơn trên màn hình. Màu vàng ở gần lõi chuyển dần sang xanh khi khoảng cách tới central body gần nhất tăng từ 0 đến 0,75 length unit. Đây là bảng màu khoảng cách để đọc cấu trúc, không phải phép tính tuổi hay nhiệt độ sao. Kích thước đốm sáng phụ thuộc `log(1 + mass)` và độ sâu; tốc độ chỉ điều chỉnh độ sáng trong một khoảng hữu hạn.
-
-Mỗi body góp một điểm nhỏ và một vùng sáng mờ hữu hạn. Khi các vùng mờ chồng lên nhau, phần dày của lõi và các nhánh trở thành một cấu trúc sáng liền mạch, thay vì hàng nghìn vòng tròn rời rạc. Đây là cách làm mượt hình ảnh từ chính vị trí sao đang mô phỏng, không phải thêm một lớp khí/bụi có solver riêng. Có thể đối chiếu hình dáng lõi, đĩa và nhánh trong [ảnh NGC 1300 của NASA/Hubble](https://science.nasa.gov/image-detail/ngc-1300/); bài này không tái hiện khí bụi hay stellar evolution của thiên hà thật.
-
-Event loop giữ hai buffer riêng: `pixels` chứa màu cuối cùng để gửi cho SDL; `light` chứa tổng ánh sáng trước tone mapping. Cả hai được tạo một lần rồi tái sử dụng. Chúng không nằm trong `Body`, nên việc xóa hoặc thay đổi buffer vẽ không thể làm đổi trạng thái mô phỏng.
-
-### Bước 5 — Dùng đúng trọng số
-
-```cpp title="include/lab.hpp — Dùng đúng trọng số"
+```cpp title="include/lab.hpp — Cân từng vị trí bằng khối lượng của sao"
 inline Vec3 centerOfMass(std::span<const Body> bodies) {
     double mass = 0.0;
     Vec3 weightedPosition{};
@@ -266,35 +73,62 @@ inline Vec3 centerOfMass(std::span<const Body> bodies) {
 }
 ```
 
-weightedPosition là tổng m·p. Chỉ sau khi chia cho tổng mass mới có một vị trí. Tâm hộp bao hoặc trung bình các position không thay thế được nó.
+`weightedPosition` cộng các tích khối lượng × vị trí; `mass` cộng các khối lượng. Chia hai tổng sau vòng lặp, không chia từng vị trí cho số sao. Chữ `return {}` xử lý đầu vào không có khối lượng: khi ấy không thể lấy một tâm khối bằng phép chia.
+
+Ghép kết quả với cách khung chương trình khởi động. Ở đây việc tạo renderer nằm trước vòng mô phỏng. Nếu SDL không tạo được renderer thì chưa có frame nào để ta chẩn đoán bằng công thức:
+
+```cpp title="src/main.cpp — Dừng đúng chỗ nếu khung SDL không mở được"
+SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
+if (!renderer) {
+    std::cerr << SDL_GetError() << '\n';
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return EXIT_FAILURE;
+}
+```
+
+Một sao có vị trí XYZ; sau khi chiếu, ánh sáng của nó có thể chồng lên ánh sáng các sao ở cùng vùng ảnh. Bộ vẽ nén giá trị sau khi cộng để lõi sáng không thành một mảng trắng mất chi tiết:
+
+```cpp title="include/star-render.hpp — Đưa ánh sáng tích lũy về độ sáng trên màn hình"
+inline std::uint32_t displayLight(float value, double background) {
+    // Tone mapping giới hạn độ sáng, giữ được chi tiết khi nhiều sao chồng nhau.
+    const double linear = background + double(value);
+    return std::uint32_t(std::lround(255.0 * std::sqrt(linear / (1.0 + linear))));
+}
+```
+
+`linear / (1 + linear)` tiến gần 1 nhưng không vượt 1 với đầu vào không âm. Đây là phép đổi độ sáng trên màn hình. Nó không đổi `position`, `velocity` hay `mass` và không làm phát sinh lực.
+
+### Tự ghép trong `work/`
+
+Trong `work/include/lab.hpp`, giữ nguyên `Body` và hàm sinh sao. Viết các phép cộng khối lượng, động lượng và tâm khối ở những vị trí dưới đây. Động lượng dùng `velocity` thay cho `position` nhưng vẫn phải nhân với `mass`. Mở từng thay đổi để đối chiếu, rồi biên dịch bản của bạn.
+
+<CourseWorkFile project="31" step={1} path="include/lab.hpp" />
 
 ## Ghép các phần lại
 
-Chạy project_31_starter để kiểm môi trường, rồi build checkpoint 01. runApplication gọi Simulation::reset để tạo bodies; drawScene đọc chúng ở mỗi frame. Space chưa tạo physics ở bài này: hình đứng yên là đúng. Xoay/pan/zoom chỉ đổi camera.
+`main` tạo cửa sổ và renderer. Khi reset, chương trình dựng `bodies` với cùng seed. Bộ vẽ đọc các vị trí còn ba phép tổng bạn vừa thêm đọc khối lượng, vị trí và vận tốc. Chưa có bước nào đổi vị trí theo thời gian.
 
-Dự đoán trước khi chạy: đổi camera có làm tổng mass hoặc momentum đổi không? Tăng từ 256 lên 4.096 mẫu sau này có làm mass đĩa tăng mười sáu lần không?
-
-```bash title="Terminal — checkpoint 01"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_31_checkpoint_1
+```sh title="Terminal — chạy phần vừa viết trong work/"
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
+cmake --build build-work --config Release --target project_31_work --parallel 1
+.\build-work\Release\project_31_work.exe
 ```
 
-Trên Windows chạy ./build/Debug/project_31_checkpoint_1.exe; với Ninja/macOS/Linux, executable nằm trực tiếp trong build. Toàn bộ source và phần so sánh với bài trước ở cuối trang.
+Hai dòng sau khi configure dùng cho cả những bài tiếp theo. Với Ninja một cấu hình trên Linux/macOS, cấu hình Release bằng `-DCMAKE_BUILD_TYPE=Release` rồi chạy `./build-work/project_31_work`. Trên Windows với Visual Studio, dùng đường dẫn có `Release` như trên.
 
 ## Thử làm sai để hiểu đúng
 
-1. Dự đoán xem tâm khối có trùng trung bình cộng các position không. Thay phép tính rồi so hai kết quả: central body nặng hơn từng sao nên hai đáp án thường khác nhau. Khôi phục cách tính có trọng số trước khi thử tiếp.
-2. Bỏ phép trừ bulkVelocity rồi kiểm momentum ban đầu. Nó sẽ không còn gần 0; đây là thay đổi điều kiện đầu, chưa liên quan đến Barnes–Hut. Khôi phục phép trừ, giữ cùng seed và chạy lại để kiểm mốc đo.
+Tạm thay trọng số của từng sao bằng 1 trong công thức tâm khối. Thử hai sao ở `x = 0` và `x = 4`, khối lượng lần lượt là 3 và 1: trung bình vị trí cho 2, còn tâm khối phải ở 1. Khôi phục phép nhân với khối lượng trước khi sang bài sau.
 
 ## Tự kiểm tra kết quả
 
-- Starter/checkpoint 01 mở được cửa sổ, có thể đặt lại cùng preset.
-- Cùng seed=0x31c0ffee sinh lại từng position/velocity/mass giống nhau.
-- Mọi mass dương, state hữu hạn; norm momentum đầu dưới 10⁻¹⁰.
-- Camera không sửa bodies hoặc các tổng vật lý.
+- Ở trạng thái dừng, chọn cùng một góc nhìn và Reset hai lần: các đốm sáng xuất hiện lại đúng chỗ.
+- Đổi giữa góc nghiêng, nhìn thẳng và nhìn cạnh (F1/F2/F3 trong C++). Hình trên màn hình đổi nhưng số sao, thời điểm và vị trí của ngôi sao đang chọn không đổi.
+- Với thiên hà đơn, vật tại tâm có khối lượng 120; toàn bộ các sao còn lại có tổng khối lượng xấp xỉ 120, không phải mỗi sao có khối lượng 120.
 
 ## Bài tập mở rộng
 
-Thêm preset hai cụm sao tiến lại gần nhau. Chỉ đặt position/velocity đầu; không gán đường đi sau mỗi frame. Solver của bài sau phải quyết định chuyển động.
+Lấy ba ảnh ở cùng thời điểm. Trên ảnh nhìn thẳng đánh dấu một khoảng thưa giữa hai dải sao; trên ảnh nhìn cạnh chỉ ra phần phình ở tâm. Nếu chỉ được xem một ảnh, đặc điểm nào của không gian 3D bạn sẽ bỏ sót?
 
-Bài tiếp theo: [Một vật thể hút vật thể khác như thế nào?](/projects/barnes-hut-nbody/02-luc-hap-dan-va-softening).
+Học tiếp: [Một vật thể hút vật thể khác như thế nào?](/projects/barnes-hut-nbody/02-luc-hap-dan-va-softening).

@@ -5,6 +5,45 @@ const read = (page: Page, label: string) =>
     .locator(".lab-readout > div")
     .filter({ has: page.getByText(label, { exact: true }) })
     .locator("dd");
+test("P11 measures from the optical center, handles a hidden second point, and loads real work edits", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(route);
+  const surface = page.locator('canvas[aria-label^="Điểm sáng 3D"]');
+  await expect
+    .poll(() => surface.evaluate((el: HTMLCanvasElement) => el.width))
+    .toBeGreaterThan(300);
+  const before = await read(page, "world point").innerText();
+  const button = page.getByRole("button", { name: "Đo ở hai độ sâu", exact: true });
+  await button.click();
+  const ruler = page.getByTestId("depth-measurement");
+  const length = (Math.hypot(1, 0.6) * (585 / 2)) / Math.tan(Math.PI / 6) / 4;
+  await expect(ruler).toContainText(length.toFixed(2) + " px (Z = 4.00)");
+  await expect(ruler).toContainText((length / 2).toFixed(2) + " px (Z = 8.00)");
+  await expect(read(page, "world point")).toHaveText(before);
+  await surface.focus();
+  await surface.press("f");
+  await expect(ruler).toHaveCount(0);
+  await surface.press("m");
+  await expect(ruler).toBeVisible();
+  await page.getByLabel("Điểm mẫu", { exact: true }).selectOption("1");
+  await button.click();
+  await page.getByLabel("Point.Z", { exact: true }).press("ArrowRight");
+  await expect(ruler).toContainText("Không đo được");
+  await expect(read(page, "trạng thái")).toHaveText("visible");
+  await page.getByRole("button", { name: "Đặt lại", exact: true }).click();
+  await expect(button).toHaveAttribute("aria-pressed", "false");
+  const file = page.locator(".voxel-work-file").filter({ hasText: "work/include/lab.hpp" });
+  await file.locator("summary").click();
+  await expect(file.getByRole("region").first()).toBeVisible();
+  await expect(file).toContainText("measureDoubleDepth");
+  const zip = await page.request.get("/downloads/project-11-perspective-point.zip");
+  expect(zip.ok()).toBe(true);
+  expect((await zip.body()).subarray(0, 2).toString()).toBe("PK");
+  expect(errors).toEqual([]);
+});
 test("P11 reduced motion, invalid depth and debug toggle expose honest readouts", async ({
   page,
 }) => {

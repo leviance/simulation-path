@@ -1,31 +1,26 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 # Đo sai số lực trên cùng một snapshot
 
 ## Vấn đề cần giải quyết
 
-Đổi theta rồi nhìn thiên hà khác đi không trả lời được sai số lực là bao nhiêu. Sau vài bước, vị trí đã đổi nên hai solver không còn nhận cùng input. Ta cần dừng physics, giữ một snapshot và hỏi bốn theta cùng một câu hỏi.
+Ta điều chỉnh `theta` và thấy các nhánh thiên hà vẫn đẹp. Điều đó chưa nói được lực sai bao nhiêu. Bài này chụp nguyên một trạng thái, tính trực tiếp cho một nhóm sao, rồi dùng đúng nhóm đó để so các giá trị `theta`.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Direct reference đọc mọi source thật cho từng target. Với hệ 4.096 body, ta chọn tập tối đa 32 target, dùng lại đúng tập đó cho theta 0,25; 0,5; 0,8; 1,1. C++ dùng các index cách đều; Canvas còn đưa target đang chọn vào tập mẫu. Không lấy số pixel vẽ hoặc aggregate nodes làm reference.
+Gọi $\Delta\mathbf a_i=\mathbf a_{BH,i}-\mathbf a_{direct,i}$, tức gia tốc từ cây trừ gia tốc đối chứng. RMS tuyệt đối là $\sqrt{\sum_i\lVert\Delta\mathbf a_i\rVert^2/n}$, còn cùng đơn vị với gia tốc. RMS chuẩn hóa so tổng bình phương sai số với tổng bình phương gia tốc tham chiếu, nên không có đơn vị. Đây **không** phải trung bình của các phần trăm sai số từng sao.
 
-Một lực gần 0 có thể làm relative error của riêng target rất lớn. Vì vậy bảng có cả absolute RMS và normalized RMS, không chỉ một phần trăm:
-
-$$
-e_{\rm abs}=\sqrt{\frac1K\sum_i\|\mathbf a_i^{BH}-\mathbf a_i^D\|^2},\quad
-e_{\rm RMS}=\sqrt{\frac{\sum_i\|\mathbf a_i^{BH}-\mathbf a_i^D\|^2}{\max(\sum_i\|\mathbf a_i^D\|^2,K\cdot10^{-24})}}.
-$$
-
-Absolute RMS có đơn vị gia tốc. Mẫu số của normalized RMS dùng sàn 10⁻¹² acceleration unit trước khi bình phương. Mean/max relative dùng cùng sàn cho từng target; chúng trả lời câu hỏi khác RMS của cả tập.
+Gần nơi các lực triệt tiêu, phần trăm của một sai số rất nhỏ có thể rất lớn. Vì vậy bảng giữ cả hai loại RMS, giá trị lớn nhất, số sao được lấy mẫu và mẫu số có sàn để tránh chia cho 0. Không suy từ vài sao sang toàn bộ hệ mà không ghi phạm vi.
 
 <InteractiveLab demo="barnes-hut-nbody" mode="nbody-accuracy" />
 
 ## Viết code từng bước
 
-### Đặt tên đại lượng trước khi đo
+### Một hàng số phải trả lời được câu hỏi nào?
 
-```cpp title="include/analysis.hpp — Đặt tên đại lượng trước khi đo"
+{/* snippet include/analysis.hpp#accuracy-row */}
+```cpp title="include/analysis.hpp — Dữ liệu cho một giá trị theta"
 struct AccuracyRow {
     double theta{};
     double meanRelativeError{};
@@ -36,178 +31,75 @@ struct AccuracyRow {
 };
 ```
 
-Một hàng có theta, sai số và work counters. Relative error không có đơn vị; absolute RMS có đơn vị gia tốc. Không đổi nhãn giữa các đại lượng chỉ để bảng nhìn gọn.
+Không trộn gia tốc với thời gian chạy. `metrics` đếm lượng việc; `absoluteRmsError` và `normalizedRmsError` so kết quả lực.
 
-### Viết phép đo reference dễ đọc
+### Chọn sao một lần rồi giữ nguyên
 
-```cpp title="include/analysis.hpp — Viết phép đo reference dễ đọc"
-inline std::vector<AccuracyRow> measureThetaAccuracy(
-    std::span<const Body> bodies,
-    std::span<const double> thetaValues,
-    std::size_t sampleCount,
-    double gravitationalConstant,
-    double softening
-) {
-    if (bodies.empty()) {
-        return {};
-    }
-    const BarnesHutTree tree = buildMassOctree(bodies);
-    const std::size_t count = std::min(std::max<std::size_t>(1U, sampleCount), bodies.size());
-    std::vector<std::size_t> targets{};
-    std::vector<Vec3> exactAccelerations{};
-    targets.reserve(count);
-    exactAccelerations.reserve(count);
-    for (std::size_t index = 0; index < count; ++index) {
-        const std::size_t targetIndex = std::min(
-            bodies.size() - 1U,
-            index * bodies.size() / count
-        );
-        targets.push_back(targetIndex);
-        exactAccelerations.push_back(
-            directAcceleration(bodies, targetIndex, gravitationalConstant, softening).acceleration
-        );
-    }
-
-    std::vector<AccuracyRow> rows{};
-    for (const double theta : thetaValues) {
-        AccuracyRow row{};
-        double squaredError = 0;
-        double squaredReference = 0;
-        row.theta = theta;
-        for (std::size_t index = 0; index < targets.size(); ++index) {
-            const AccelerationResult approximate = barnesHutAcceleration(
-                tree,
-                bodies,
-                targets[index],
-                theta,
-                gravitationalConstant,
-                softening
-            );
-            const double relativeError =
-                length(approximate.acceleration - exactAccelerations[index]) /
-                std::max(length(exactAccelerations[index]), 1.0e-12);
-            squaredError += lengthSquared(approximate.acceleration - exactAccelerations[index]);
-            squaredReference += lengthSquared(exactAccelerations[index]);
-            row.meanRelativeError += relativeError;
-            row.maximumRelativeError = std::max(row.maximumRelativeError, relativeError);
-            row.metrics.visitedNodes += approximate.metrics.visitedNodes;
-            row.metrics.approximatedNodes += approximate.metrics.approximatedNodes;
-            row.metrics.exactInteractions += approximate.metrics.exactInteractions;
-        }
-        row.meanRelativeError /= double(targets.size());
-        row.absoluteRmsError = std::sqrt(squaredError / double(targets.size()));
-        row.normalizedRmsError = std::sqrt(squaredError / std::max(squaredReference, double(targets.size()) * 1e-24));
-        rows.push_back(row);
-    }
-    return rows;
+```cpp title="include/analysis.hpp — Tính lời giải đối chứng cho cùng một nhóm ID"
+for (std::size_t index = 0; index < count; ++index) {
+    const std::size_t targetIndex = std::min(
+        bodies.size() - 1U,
+        index * bodies.size() / count
+    );
+    targets.push_back(targetIndex);
+    exactAccelerations.push_back(
+        directAcceleration(bodies, targetIndex, gravitationalConstant, softening).acceleration
+    );
 }
 ```
 
-Bản offline này tạo target set, tính direct một lần rồi quét các theta. Nó phù hợp fixture/CLI nhỏ; không gọi cả hàm đồng bộ cho một workload khổng lồ ngay trong click handler.
+Công thức chỉ số rải mẫu từ đầu đến cuối danh sách, không chỉ lấy một cụm ID đầu. `exactAccelerations` được giữ lại cho tất cả hàng `theta`.
 
-### Đưa phép đo vào UI mà không khóa input
+### Viết phần kết thúc một hàng
 
-```cpp title="include/experiments.hpp — Đưa phép đo vào UI mà không khóa input"
-struct SurveyJob {
-    std::vector<Body> snapshot{};
-    BarnesHutTree tree{};
-    std::vector<Vec3> reference{};
-    std::vector<AccuracyRow> rows{};
-    std::size_t sample{};
-    std::size_t row{};
-    double epsilon{0.02};
-    double squaredError{};
-    double squaredReference{};
-    bool active{};
-    bool timedOut{};
-    double snapshotTime{};
-    std::chrono::steady_clock::time_point deadline{};
-
-    void start(const Simulation& simulation) {
-        *this = {};
-        snapshot = simulation.bodies;
-        tree = buildMassOctree(snapshot);
-        epsilon = simulation.epsilon;
-        snapshotTime = simulation.time;
-        reference.resize(std::min<std::size_t>(32, snapshot.size()));
-        active = true;
-        deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-    }
-
-    // One target per unit of work; UI can pause/cancel between ticks.
-    void tick() {
-        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(6);
-        constexpr std::array<double, 4> angles{0.25, 0.5, 0.8, 1.1};
-        while (active && std::chrono::steady_clock::now() < until) {
-            if (std::chrono::steady_clock::now() > deadline) {
-                active = false;
-                timedOut = true;
-                return;
-            }
-            const std::size_t target = sample * snapshot.size() / reference.size();
-            if (row == 0) {
-                reference[sample] = directAcceleration(snapshot, target, gravity, epsilon).acceleration;
-            }
-            if (rows.size() <= row) {
-                rows.push_back({});
-                rows.back().theta = angles[row];
-            }
-            AccuracyRow& result = rows[row];
-            const auto approximate = barnesHutAcceleration(tree, snapshot, target, angles[row], gravity, epsilon);
-            const double error = length(approximate.acceleration - reference[sample]);
-            const double relative = error / std::max(length(reference[sample]), 1e-12);
-            result.meanRelativeError += relative;
-            result.maximumRelativeError = std::max(result.maximumRelativeError, relative);
-            squaredError += error * error;
-            squaredReference += lengthSquared(reference[sample]);
-            result.metrics.visitedNodes += approximate.metrics.visitedNodes;
-            result.metrics.approximatedNodes += approximate.metrics.approximatedNodes;
-            result.metrics.exactInteractions += approximate.metrics.exactInteractions;
-            ++sample;
-            if (sample == reference.size()) {
-                result.meanRelativeError /= double(reference.size());
-                result.absoluteRmsError = std::sqrt(squaredError / double(reference.size()));
-                result.normalizedRmsError = std::sqrt(squaredError / std::max(squaredReference, double(reference.size()) * 1e-24));
-                sample = 0;
-                squaredError = 0;
-                squaredReference = 0;
-                ++row;
-                active = row < angles.size();
-            }
-        }
-    }
-};
+```cpp title="include/analysis.hpp — Đọc hai loại RMS theo đúng mẫu số"
+row.meanRelativeError /= double(targets.size());
+row.absoluteRmsError = std::sqrt(squaredError / double(targets.size()));
+row.normalizedRmsError = std::sqrt(squaredError / std::max(squaredReference, double(targets.size()) * 1e-24));
+rows.push_back(row);
 ```
 
-SurveyJob giữ snapshot, tree, epsilon, reference và tiến độ. tick chỉ xử lý một số target trong budget khoảng 6 ms. Tất cả theta nhìn cùng bodies; Reset hay đổi cấu hình hủy job và không nhận report cũ.
+`squaredReference` là tổng bình phương gia tốc trực tiếp. Sàn `n × 10⁻²⁴` tương ứng với độ lớn gia tốc tham chiếu tối thiểu cỡ `10⁻¹²`. Không diễn giải một tỉ số rất lớn ở vật cân bằng như một lực rất mạnh.
+
+### Tự ghép trong `work/`
+
+Trong `work/include/analysis.hpp`, định nghĩa từng cột và phép so với lực trực tiếp. Tách công thức khỏi mã vẽ để dễ thử trên bộ số nhỏ.
+
+<CourseWorkFile project="31" step={8} path="include/analysis.hpp" />
+
+Trong `work/include/experiments.hpp`, sao chép trạng thái ở lúc nhấn đo và chia phép đo thành nhiều lượt; không đọc lại thiên hà đang chuyển động ở giữa bảng.
+
+<CourseWorkFile project="31" step={8} path="include/experiments.hpp" />
+
+Trong `work/include/render.hpp`, thêm phần hiển thị kết quả để đọc từng hàng `theta` với đủ cột.
+
+<CourseWorkFile project="31" step={8} path="include/render.hpp" />
+
+Trong `work/include/application.hpp`, nối phím `T`, hành động dừng/tiếp tục và đường nhận bảng sau khi đủ số liệu.
+
+<CourseWorkFile project="31" step={8} path="include/application.hpp" />
 
 ## Ghép các phần lại
 
-Trong C++, T gọi survey.start sau khi hủy pending physics. Event loop gọi tick; Space pause/resume và Escape hủy. Canvas dùng Đo sai số theo theta và Hủy tác vụ. Chuyển camera không đổi snapshot nên không làm phép đo mất hiệu lực.
+Dừng tại một thời điểm dễ nhớ rồi nhấn `T`. Ghi lại preset, thời điểm, `epsilon` và nhóm mẫu. Khi so hai hàng, chỉ `theta` được phép khác. Một bảng có thể cho xu hướng rõ nhưng không bảo đảm sai số giảm đều đối với **từng** sao.
 
-Đọc absolute RMS, normalized RMS và exact+aggregate work cạnh nhau. Nếu theta lớn tiết kiệm nguồn nhưng một vài target có relative error lớn, đó là một kết quả cần giải thích, không phải cớ bỏ target khỏi mẫu.
-
-```bash title="Terminal — checkpoint 08"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_31_checkpoint_8
+```sh title="Terminal — chạy phần vừa viết trong work/"
+cmake --build build-work --config Release --target project_31_work --parallel 1
+.\build-work\Release\project_31_work.exe
 ```
-
-Trên Windows chạy ./build/Debug/project_31_checkpoint_8.exe; với Ninja/macOS/Linux, executable nằm trực tiếp trong build. Toàn bộ source và phần so sánh với bài trước ở cuối trang.
 
 ## Thử làm sai để hiểu đúng
 
-1. Để simulation chạy tiếp trong lúc lần lượt đo các theta. Các hàng đến từ position khác nhau, nên không còn là sweep công bằng. Khôi phục frozen snapshot rồi đo lại.
-2. Đổi epsilon chỉ cho Barnes–Hut và so với direct. Bạn đang đổi force model, không còn chỉ đo tree approximation. Đặt epsilon hai nhánh bằng nhau trước khi diễn giải sai số.
+Thử dùng vị trí sau một bước để tính Barnes–Hut, nhưng giữ kết quả trực tiếp ở bước trước. Chênh lệch lúc này trộn sai số xấp xỉ với thay đổi thật của lực. Đưa cả hai trở về cùng bản chụp.
 
 ## Tự kiểm tra kết quả
 
-- N và thời điểm snapshot được ghi cạnh report; các theta dùng cùng target set/epsilon.
-- Reference của mỗi target đọc đủ N−1 nguồn, không dùng một danh sách cắt bán kính.
-- Absolute/RMS/mean/max finite cả trên fixture có lực triệt tiêu.
-- Pause, cancel và đổi cấu hình không ghi nhận report dở như kết quả hoàn tất.
+- Các hàng đều dùng cùng thời điểm, `epsilon` và danh sách ID tham chiếu.
+- Nhận diện được RMS nào có đơn vị gia tốc, RMS nào không có đơn vị.
+- Trường hợp lực trực tiếp rất gần 0 không làm phép chia sinh `NaN`; bảng chỉ đại diện cho nhóm đã đo.
 
 ## Bài tập mở rộng
 
-Thêm target gần lõi và ở rìa. Báo thêm phân vị sai số, nhưng giữ normalized RMS và danh sách target để người khác tái lập. Không assert mọi hàng phải giảm đơn điệu.
+Tìm một sao có phần trăm sai số lớn nhưng chênh lệch gia tốc tuyệt đối nhỏ. Nếu phải giải thích cho người đang nhìn hình thiên hà, bạn sẽ cho họ xem hai số nào cùng nhau?
 
-Bài tiếp theo: [Đo chi phí thật của hai cách tính lực](/projects/barnes-hut-nbody/09-scaling-study).
+Học tiếp: [Đo chi phí thật của hai cách tính lực](/projects/barnes-hut-nbody/09-scaling-study).

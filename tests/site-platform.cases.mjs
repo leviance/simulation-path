@@ -280,12 +280,17 @@ test("shared learning pages explain how to start instead of only listing resourc
   assert.match(home, /Đọc đề bài và thử tìm một hướng giải trước khi xem code mẫu/i);
 
   const gettingStarted = await (await render("/getting-started")).text();
-  assert.match(gettingStarted, /starter\/.*nơi bạn bắt đầu và tiếp tục viết code/i);
+  assert.match(gettingStarted, /starter\/.*bộ khung trước bài đầu tiên/i);
+  assert.ok(gettingStarted.includes("project_1_starter"));
+  assert.ok(gettingStarted.includes("-DCOURSE_WORKBOOK=ON"));
+  assert.ok(gettingStarted.includes("project_11_work"));
   assert.match(gettingStarted, /Starter của Project 01 chỉ thoát ngay/i);
   assert.match(gettingStarted, /Dùng checkpoint để đối chiếu, không phải để chép bài/i);
 
   const downloads = await (await render("/downloads")).text();
-  assert.match(downloads, /Viết trong starter/i);
+  assert.match(downloads, /Viết trong bản làm bài của bạn/i);
+  assert.match(downloads, /<code>starter\/<\/code>/i);
+  assert.match(downloads, /<code>work\/<\/code>/i);
   assert.match(downloads, /Đối chiếu checkpoint/i);
   assert.match(downloads, /Kiểm tra bằng final và tests/i);
 
@@ -369,7 +374,12 @@ test("all published project and lesson routes render", async () => {
       assert.match(html, /data-native-media=/, `Missing native gallery: ${project}`);
       assert.match(html, /<figcaption\b/, `Missing recording description: ${project}`);
       assert.ok(html.includes(lab.native.takes[lab.native.overview[0]].poster));
-      assert.doesNotMatch(html, /CANVAS 2D · LIVE/);
+      if (lab.native.withDemo) {
+        assert.match(html, /CANVAS 2D · LIVE/, `Native comparison must retain the live lab: ${project}`);
+        assert.ok(hasCanvasReadoutClass(html), `Missing textual Canvas state: ${project}`);
+      } else {
+        assert.doesNotMatch(html, /CANVAS 2D · LIVE/);
+      }
     } else {
       assert.match(html, /MÔ HÌNH TƯƠNG TÁC/i, `Missing project-level interactive model: ${project}`);
       assert.match(html, /class="interactive-lab"/i, `Missing project Canvas lab: ${project}`);
@@ -610,7 +620,7 @@ test("each Canvas lab ships as an independent lazy client chunk", async () => {
   const labNames = [];
   for (const project of projectCatalog) {
     const { default: lab } = await import(`../course/projects/p${project.id}/lab.ts`);
-    if (!lab.native || Object.keys(lab.modes).some((mode) => !lab.native.lessons[mode])) {
+    if (!lab.native || lab.native.withDemo || Object.keys(lab.modes).some((mode) => !lab.native.lessons[mode])) {
       labNames.push(project.demoId);
     } else {
       assert.ok(!registry.includes(`"/components/labs/${project.demoId}-lab"`) &&

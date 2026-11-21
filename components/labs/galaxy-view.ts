@@ -114,6 +114,7 @@ export function drawGalaxy(
   force: ReturnType<typeof selectedForce>,
 ) {
   const drawn = drawStars(context, width, height, scene);
+  if (scene.stage >= 10 && !scene.debug) return drawn;
   for (let frame = 1; frame < scene.trails.length; frame++)
     for (let body = 0; body < scene.trails[frame].length; body++)
       line(

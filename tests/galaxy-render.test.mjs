@@ -9,49 +9,71 @@ import {
   starStyle,
 } from "../lib/labs/galaxy/appearance.ts";
 import { renderGalaxyRaster } from "../lib/labs/galaxy/render.ts";
-import { dollyGalaxyCamera, projectGalaxy } from "../lib/labs/galaxy/projection.ts";
+import {
+  dollyGalaxyCamera,
+  galaxyCameraView,
+  projectGalaxy,
+} from "../lib/labs/galaxy/projection.ts";
 
-test("P31 real seeded bodies form a thick core and two scattered spiral arms, not decorative pixels", () => {
+test("P31 uses a continuous stellar disk, a thicker bulge and a sparse 3D halo", () => {
   const bodies = makeGalaxyBodies(4096, 0x31c0ffee);
-  let core = 0,
+  let bulge = 0,
+    halo = 0,
     disk = 0,
-    insideDisk = 0,
-    count = 0,
-    deepCore = 0,
-    thickDisk = 0,
-    halo = 0;
-  for (let i = 1; i < bodies.length; i++) {
-    const p = bodies[i].position;
-    const r = Math.hypot(p.x, p.y);
-    if (i % 3 === 0) {
-      const ellipsoidRadius = Math.hypot(p.x, p.y, p.z / 0.85);
-      assert.ok(ellipsoidRadius >= 0.06 && ellipsoidRadius <= 0.61);
-      if (Math.abs(p.z) > 0.18) deepCore++;
-      core++;
-    } else if (i % 11 === 0) {
-      assert.ok(Math.hypot(p.x, p.y, p.z) >= 0.5 && Math.hypot(p.x, p.y, p.z) <= 1.4);
+    inner = 0,
+    overlap = 0,
+    diskZ2 = 0,
+    bulgeZ2 = 0;
+  let windingX = 0,
+    windingY = 0,
+    fixedX = 0,
+    fixedY = 0,
+    band = 0,
+    interarm = 0;
+  for (let id = 1; id < bodies.length; id++) {
+    const { x, y, z } = bodies[id].position,
+      r = Math.hypot(x, y);
+    if (id % 5 === 0) {
+      assert.ok(Math.hypot(r, z / 0.76) <= 0.66);
+      bulgeZ2 += z * z;
+      bulge++;
+    } else if (id % 23 === 0) {
+      const radius = Math.hypot(r, z / 0.86);
+      assert.ok(radius >= 0.48 && radius <= 1.66);
       halo++;
     } else {
-      if (Math.abs(p.z) > 0.08) thickDisk++;
-      assert.ok(r >= 0.2 && r <= 1.6);
+      assert.ok(r <= 1.82);
       disk++;
-      if (r < 0.7) insideDisk++;
+      diskZ2 += z * z;
+      if (r < 0.7) inner++;
+      if (r < 0.2) overlap++;
+      if (r > 0.45 && r < 1.5) {
+        // Remove an independent approximate logarithmic winding. A bar or a uniform disk fails.
+        const a = Math.atan2(y, x),
+          phase = 2 * (a - 4 * Math.log1p(r / 0.25));
+        windingX += Math.cos(phase);
+        windingY += Math.sin(phase);
+        fixedX += Math.cos(2 * a);
+        fixedY += Math.sin(2 * a);
+        if (Math.cos(phase - 0.85) < 0) interarm++;
+        band++;
+      }
     }
-    if (p.z !== 0) count++;
   }
-  assert.equal(core, 1365);
-  assert.equal(halo, 248);
-  assert.ok(
-    deepCore > 300 && thickDisk > 600,
-    "core and disk must have substantial real depth, not epsilon jitter",
-  );
-  assert.equal(disk, 2482);
-  assert.equal(count, 4095);
-  // Independent integrated exponential-disk CDF, not the bisection sampler.
-  const cumulative = (r) => 1 - (1 + r / 0.36) * Math.exp(-r / 0.36);
-  assert.ok(Math.abs(insideDisk / disk - cumulative(0.5) / cumulative(1.4)) < 0.05);
+  assert.deepEqual([bulge, halo, disk], [819, 143, 3133]);
+  assert.ok(overlap > 100, "disk enters the core without an artificial inner rim");
+  assert.ok(diskZ2 / disk > 0.001 && bulgeZ2 / bulge > (2 * diskZ2) / disk);
+  assert.ok(Math.hypot(windingX, windingY) > 0.32 * band);
+  assert.ok(Math.hypot(windingX, windingY) > 2 * Math.hypot(fixedX, fixedY));
+  assert.ok(interarm > 0.12 * band, "real stars remain between the arms");
+  const cumulative = (r) => 1 - (1 + r / 0.47) * Math.exp(-r / 0.47);
+  assert.ok(Math.abs(inner / disk - cumulative(0.7) / cumulative(1.82)) < 0.04);
   assert.deepEqual(bodies, makeGalaxyBodies(4096, 0x31c0ffee));
   assert.notDeepEqual(bodies, makeGalaxyBodies(4096, 1));
+  assert.ok(
+    Math.abs(bodies[1].position.y - 1.1827046559686794) < 1e-10,
+    "C++ and web use the same seed sequence",
+  );
 });
 
 test("P31 dolly passes through the core, retains perspective and does not move simulation bodies", () => {
@@ -102,9 +124,9 @@ test("P31 stellar color/size disclose core distance, speed brightness, mass and 
   const hot = { ...cold, velocity: { x: 1.3, y: 0, z: 0 } };
   const a = starStyle(cold, 2.5, 570, 1),
     b = starStyle(hot, 2.5, 570, 0);
-  assert.equal(a.red, 0.14);
+  assert.ok(a.blue > 2 * a.red);
   assert.equal(a.blue, 1);
-  assert.ok(Math.abs(b.red - 1) < 1e-12 && Math.abs(b.blue - 0.22) < 1e-12);
+  assert.ok(Math.abs(b.red - 1) < 1e-12 && b.blue < 0.65);
   assert.ok(b.intensity > a.intensity);
   assert.ok(starStyle(cold, 2, 570).radius > starStyle(cold, 4, 570).radius);
   assert.ok(starStyle({ ...cold, mass: 120 }, 2.5, 570).radius > a.radius);
@@ -126,7 +148,7 @@ test("P31 renderer reads every real body, preserves state and has no time/random
   const before = structuredClone(scene.bodies);
   const frame = createGalaxyRaster(800, 570);
   // A wide camera contains the entire halo; a closer camera legitimately clips.
-  scene.camera.distance = 4;
+  scene.camera.distance = 7.8;
   const stats = renderGalaxyRaster(frame, scene.bodies, scene.camera);
   assert.deepEqual(stats, { simulated: 4096, drawn: 4096 });
   assert.deepEqual(scene.bodies, before);
@@ -142,4 +164,45 @@ test("P31 renderer reads every real body, preserves state and has no time/random
     renderGalaxyRaster(frame, hidden, { yaw: 0, pitch: 0, distance: 2, x: 0, y: 0 }).drawn,
     0,
   );
+});
+
+test("Three camera views reveal the shape of the same snapshot, not three separate pictures", () => {
+  const scene = createGalaxy();
+  const raster = createGalaxyRaster(480, 320);
+  const aspect = (view) => {
+    assert.equal(renderGalaxyRaster(raster, scene.bodies, galaxyCameraView(view)).drawn, 4096);
+    const samples = [];
+    let weight = 0,
+      mx = 0,
+      my = 0;
+    for (let y = 0; y < raster.height; y += 2)
+      for (let x = 0; x < raster.width; x += 2) {
+        const i = (y * raster.width + x) * 4;
+        const w = Math.max(0, raster.pixels[i + 1] - 30);
+        if (w > 0) {
+          samples.push([x, y, w]);
+          weight += w;
+          mx += x * w;
+          my += y * w;
+        }
+      }
+    assert.ok(samples.length > 500);
+    mx /= weight;
+    my /= weight;
+    let xx = 0,
+      xy = 0,
+      yy = 0;
+    for (const [x, y, w] of samples) {
+      xx += w * (x - mx) ** 2;
+      xy += w * (x - mx) * (y - my);
+      yy += w * (y - my) ** 2;
+    }
+    const trace = xx + yy,
+      delta = Math.hypot(xx - yy, 2 * xy);
+    return Math.sqrt((trace + delta) / (trace - delta));
+  };
+  const face = aspect(1),
+    oblique = aspect(0),
+    edge = aspect(2);
+  assert.ok(face < 1.5 && oblique > face + 0.2 && edge > oblique * 1.8);
 });

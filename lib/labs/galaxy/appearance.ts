@@ -1,4 +1,5 @@
 import type { Body3D } from "../barnes-hut-nbody.ts";
+import { createLightField, type GalaxyLightField } from "./light-field.ts";
 
 export interface StarStyle {
   red: number;
@@ -7,12 +8,14 @@ export interface StarStyle {
   radius: number;
   intensity: number;
   haloRadius?: number;
+  diffuse?: number;
 }
 export interface GalaxyRaster {
   width: number;
   height: number;
   light: Float32Array;
   pixels: Uint8ClampedArray;
+  field: GalaxyLightField;
 }
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 
@@ -31,6 +34,7 @@ export function createGalaxyRaster(width: number, height: number): GalaxyRaster 
     height,
     light: new Float32Array(width * height * 3),
     pixels: new Uint8ClampedArray(width * height * 4),
+    field: createLightField(width, height),
   };
 }
 export function starStyle(
@@ -38,20 +42,25 @@ export function starStyle(
   depth: number,
   height: number,
   coreDistance = Math.hypot(body.position.x, body.position.y, body.position.z),
+  meanMass = 1,
 ): StarStyle {
   const speed = Math.hypot(body.velocity.x, body.velocity.y, body.velocity.z);
   const heat = clamp((speed - 0.35) / 0.95, 0, 1);
-  const radial = clamp(coreDistance / 0.75, 0, 1);
-  const warmth = 1 - radial * radial * (3 - 2 * radial);
-  const massScale = clamp(1 + 0.18 * Math.log1p(body.mass), 1, 1.9);
-  const perspective = clamp(2.5 / depth, 0.45, 2);
+  const radial = clamp((coreDistance - 0.12) / 0.8, 0, 1);
+  const t = radial * radial * (3 - 2 * radial);
+  const transition = 4 * t * (1 - t);
+  const rank = clamp((body.mass / meanMass - 0.7) / 0.6, 0, 1);
+  const bright = rank ** 5;
+  const perspective = clamp(4 / depth, 0.45, 2.8);
+  const radius = clamp(((0.43 + 0.94 * bright) * perspective * height) / 570, 0.4, 2.4);
   return {
-    red: 0.14 + 0.86 * warmth,
-    green: 0.38 + 0.35 * warmth,
-    blue: 1 - 0.78 * warmth,
-    radius: clamp((0.55 * massScale * perspective * height) / 570, 0.4, 1.8),
-    intensity: 0.35 + 0.35 * heat,
-    haloRadius: clamp((12 * perspective * height) / 570, 6, 24),
+    red: 1 - 0.63 * t + 0.07 * transition,
+    green: 0.72 - 0.17 * t - 0.07 * transition,
+    blue: 0.38 + 0.62 * t * (0.7 + 0.3 * t),
+    radius,
+    intensity: (0.25 + 0.15 * rank + 3.25 * bright) * (0.84 + 0.55 * heat),
+    haloRadius: clamp(radius * (2.8 + bright), 1.6, 7.4),
+    diffuse: 0.85 + 0.36 * rank + 0.17 * heat,
   };
 }
 // Linear additive light, with one finite splat per actual simulated body.

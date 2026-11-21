@@ -86,8 +86,8 @@ export default function GettingStartedPage() {
         <HighlightedCode
           language="text"
           code={[
-            "starter/             nơi bạn bắt đầu và tiếp tục viết code",
-            "checkpoints/01..06/  lời giải tham khảo ở cuối từng bài",
+            "starter/             bộ khung trước bài đầu tiên",
+            "checkpoints/         bản tham khảo sau mỗi bài; số bài tùy project",
             "final/               mã hoàn chỉnh của cả project",
             "tests/               kiểm thử phần code không cần mở cửa sổ",
             "CMakeLists.txt       mô tả các chương trình có thể build",
@@ -95,9 +95,12 @@ export default function GettingStartedPage() {
           ].join("\n")}
         />
         <p>
-          Hãy coi <code>starter/</code> là bản làm bài của bạn: sửa các tệp trong đó và tiếp tục
-          dùng target <code>project_1_starter</code> suốt project. Tên target không đổi dù chương
-          trình của bạn ngày càng hoàn thiện.
+          Ở Project 01, bạn viết trong <code>starter/</code> và dùng target{" "}
+          <code>project_1_starter</code> suốt học phần. Một số gói có bản làm bài riêng. Chẳng hạn ở{" "}
+          <Link href="/projects/perspective-point">Project 11</Link>, configure với{" "}
+          <code>-DCOURSE_WORKBOOK=ON</code> để tạo <code>work/</code> một lần, rồi build{" "}
+          <code>project_11_work</code>. CTest của cấu hình đó đọc mã bạn viết, không đọc lời giải.
+          Mỗi bài đều ghi đúng target; không cần tự sửa CMake để đổi nơi làm bài.
         </p>
         <p>
           Các thư mục <code>checkpoints/</code> và <code>final/</code> là bản đối chiếu. Đừng viết

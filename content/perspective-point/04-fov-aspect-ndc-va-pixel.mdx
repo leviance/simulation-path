@@ -1,10 +1,11 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 # Chọn FOV và hình dạng viewport
 
 ## Vấn đề cần giải quyết
 
-Bạn đã thấy điểm tiến về tâm khi đi xa. Nhưng vì sao camera ở bài trước lại dùng focal scale bằng 1? Nếu muốn thấy một vùng rộng hơn mà không di chuyển camera, ta cần thay đổi góc nhìn, gọi là field of view (FOV).
+Bạn đang đứng yên trước một đốm đèn. Đổi sang ống kính góc rộng, đèn trông gần tâm ảnh hơn, dù chẳng có gì trong cảnh vừa di chuyển. Ở bài 3 ta đã biết tác dụng của khoảng cách. Lần này hãy giữ nguyên điểm và camera, chỉ thay ống kính.
 
 Bài này nối góc FOV với công thức chiếu và xử lý cả trường hợp viewport rộng hoặc vuông. Ta phải tính lại phép chiếu cho hình dạng mới, không kéo dãn ảnh đã vẽ.
 
@@ -36,17 +37,17 @@ $$
 
 ## Viết code từng bước
 
-Tiếp tục sửa **starter/include** và **starter/src**, giữ lại mã đã hoàn thành ở bài trước. Tiêu đề code block ghi đường dẫn tính từ thư mục Starter. Nếu bài yêu cầu thay một hàm, hãy thay hàm cũ, không dán thêm một bản trùng tên.
+Mở lại thư mục `work/` của bài trước. Các đường dẫn như `include/lab.hpp` dưới đây đều tính từ **work/**. Configure lại sẽ không ghi đè phần bạn đã viết.
 
-Build và chạy đúng mã bạn vừa viết:
+Trước khi kéo thanh FOV, ghi lại `camera point`. Sau khi kéo, dòng đó phải giữ nguyên; chỉ NDC, pixel và kích thước nhìn thấy thay đổi. Kéo mép cửa sổ là một thí nghiệm **khác**: ở đây ứng dụng có chủ ý giữ nguyên bảng vẽ logic.
 
-```powershell title="Chạy mã đang học trong Starter"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_11_starter --parallel 2
-.\build\Debug\project_11_starter.exe
+```powershell title="Chạy chương trình đang viết (Windows, Visual Studio)"
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
+cmake --build build-work --config Debug --target project_11_work --parallel 1
+.\build-work\Debug\project_11_work.exe
 ```
 
-**Checkpoint 04 là bản tham khảo sau bài này**, không phải nơi tự nhận thay đổi từ Starter. Khi cần đối chiếu, mở checkpoints/04 hoặc build riêng target project_11_checkpoint_4; lệnh đó chạy mã mẫu, không kiểm chứng phần bạn vừa sửa.
+`checkpoints/04` là bản tham khảo sau bài này. Khi muốn thử phần mình vừa sửa, hãy chạy `project_11_work`, không chạy checkpoint.
 
 ### Bước 1 — Đổi góc mở thành focal scale
 
@@ -60,6 +61,7 @@ struct PerspectiveLens {
 };
 ```
 
+{/* snippet include/lab.hpp#fov-scale */}
 ```cpp title="include/lab.hpp — dùng tangent của nửa góc"
 inline double verticalFocalScale(const PerspectiveLens& lens) {
     return 1.0 / std::tan(lens.verticalFovRadians * 0.5);
@@ -101,6 +103,26 @@ inline Viewport viewportFor(const Scene& scene) {
     return {};
 }
 ```
+
+### Tự ghép trong `work/`
+
+Các đoạn trên giải thích phần mới. Khi viết, mở từng tệp dưới đây để thấy chỗ cần sửa trong **bản của bài trước**. Đoạn nào đã gõ rồi thì chỉ đối chiếu, không chèn thêm lần nữa.
+
+Dùng nửa góc mở theo chiều dọc để tính tiêu cự. Đổi NDC sang vị trí có tính cả gốc viewport.
+
+<CourseWorkFile project="11" step={4} path="include/lab.hpp" />
+
+Dùng cùng tiêu cự cho tâm đốm sáng và bán kính của nó.
+
+<CourseWorkFile project="11" step={4} path="include/view.hpp" />
+
+Thêm phím đổi ống kính và khung nhìn; không động tới world point.
+
+<CourseWorkFile project="11" step={4} path="src/main.cpp" />
+
+Hiện FOV và aspect thật để phân biệt hai lần thử.
+
+<CourseWorkFile project="11" step={4} path="include/presentation.hpp" />
 
 ## Ghép các phần lại
 
@@ -156,7 +178,7 @@ if (!text(renderer, 16, 746, value)) {
 }
 ```
 
-Build lại project_11_starter. Khi sửa nhiều nơi, hãy kiểm từng đường đi: phím sửa scene.lens → projectPerspective đổi NDC → renderScene vẽ ảnh mới → HUD hiện đúng lens.
+Build lại `project_11_work`. Khi sửa nhiều nơi, hãy kiểm từng đường đi: phím sửa scene.lens → projectPerspective đổi NDC → renderScene vẽ ảnh mới → HUD hiện đúng lens.
 
 Trong SDL, +/− thay FOV, V chuyển 16:9 → 4:3 → 1:1. Trong Canvas dùng Vertical FOV và Aspect. Cả ba viewport có cùng tâm (550,400), nhưng kích thước khác nhau. Khi thử số, nhớ focalPixels còn phụ thuộc chiều cao.
 

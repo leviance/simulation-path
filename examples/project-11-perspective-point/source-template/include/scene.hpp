@@ -10,6 +10,9 @@ struct Scene {
     int aspect = 0;
     bool paused = true;
     bool debug = true;
+#if LAB_CHECKPOINT >= 8
+    bool measureDepth = false;
+#endif
     double elapsed = 0.0;
 };
 

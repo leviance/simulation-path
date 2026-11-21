@@ -35,6 +35,24 @@ void knownProjection() {
     check(close(translated.x, 2.0) && close(translated.y, 3.0) && close(translated.z, 6.0), "world minus camera");
 }
 
+void depthRuler() {
+    // Camera ở Z=2: điểm tại world Z=6 nằm cách camera 4 đơn vị, không phải 6.
+    const lab::Camera3D camera{{3.0, -1.0, 2.0}};
+    const lab::Viewport viewport{10.0, 20.0, 800.0, 600.0};
+    lab::PerspectiveLens lens;
+    lens.verticalFovRadians = lab::kPi * 0.5;
+    const auto reading = lab::measureDoubleDepth({4.0, -0.5, 6.0}, camera, lens, viewport);
+    check(reading.has_value(), "both measurements visible");
+    if (reading) {
+        check(close(reading->first.x, 485.0) && close(reading->first.y, 282.5), "A in shifted viewport");
+        check(close(reading->second.x, 447.5) && close(reading->second.y, 301.25), "B doubles camera depth, not world Z");
+        check(close(reading->firstOffset, std::hypot(75.0, 37.5)) && close(reading->secondOffset, reading->firstOffset * 0.5), "ruler measures from optical center");
+    }
+    const auto centered = lab::measureDoubleDepth({3.0, -1.0, 6.0}, camera, lens, viewport);
+    check(centered && close(centered->firstOffset, 0.0) && close(centered->secondOffset, 0.0), "on axis both offsets are zero");
+    check(!lab::measureDoubleDepth({4.0, -0.5, 11.0}, camera, lens, viewport), "no second reading beyond far");
+}
+
 void rejectionCases() {
     const lab::Camera3D camera{};
     const lab::PerspectiveLens lens{};
@@ -156,6 +174,7 @@ void timeAndInput() {
 
 int main() {
     knownProjection();
+    depthRuler();
     rejectionCases();
     inverseAndAspect();
     clippingAndPixels();

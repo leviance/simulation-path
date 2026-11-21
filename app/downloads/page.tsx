@@ -73,8 +73,11 @@ export default function DownloadsPage() {
         </header>
         <ol>
           <li>
-            <b>Viết trong starter</b>
-            <span>Đây là bản làm bài của bạn. Build lại cùng một target sau mỗi thay đổi.</span>
+            <b>Viết trong bản làm bài của bạn</b>
+            <span>
+              Project 01 dùng <code>starter/</code>. Với gói có workbook như Project 11, CMake tạo{" "}
+              <code>work/</code> để bạn sửa riêng. Dùng target ghi trong bài sau mỗi thay đổi.
+            </span>
           </li>
           <li>
             <b>Đối chiếu checkpoint</b>

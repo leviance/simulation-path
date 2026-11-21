@@ -222,7 +222,7 @@ function validateLab(project, lab) {
 }
 
 function needsCanvas(lab) {
-  return !lab.native || Object.keys(lab.modes).some((mode) => !lab.native.lessons[mode]);
+  return !lab.native || lab.native.withDemo === true || Object.keys(lab.modes).some((mode) => !lab.native.lessons[mode]);
 }
 
 const roadmapModule = await evaluateTypeScript(path.join("course", "roadmap.ts"));

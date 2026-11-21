@@ -5,8 +5,11 @@ import test from "node:test";
 import { loadProjectCatalog, workspace } from "../scripts/project-catalog.mjs";
 import { snapshot, replayLesson, workPaths } from "../scripts/voxel-workbook-replay.mjs";
 import { isContiguousCodeExcerpt } from "../scripts/code-snippets.mjs";
+import { workbookOption } from "../lib/voxel-workbook.ts";
 
-for (const project of loadProjectCatalog().filter((p) => /^5[2-7]$/.test(p.id))) {
+for (const project of loadProjectCatalog().filter(
+  (p) => workbookOption(p.id) === "COURSE_WORKBOOK",
+)) {
   test(
     "A learner can reconstruct every file of Project " + project.id + " from the authored lessons",
     () => {

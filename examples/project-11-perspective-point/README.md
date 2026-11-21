@@ -1,6 +1,6 @@
 # Project 11 — Điểm sáng bay trong không gian
 
-Tự chiếu một point 3D xuống framebuffer bằng perspective. Đây là ứng dụng C++/SDL3 độc lập, không cần website hoặc Canvas để chạy.
+Ở Project 10, la bàn 3D dùng một bộ chiếu có sẵn. Lần này bạn tự viết nó. Chương trình C++/SDL3 chạy độc lập: một đốm sáng, một đường chạy, bốn cổng bằng nhau. Bạn sẽ kiểm được cả hình trước mắt lẫn pixel chính xác, không cần website để chạy.
 
 Bạn sẽ thấy một điểm sáng giữa lưới mặt phẳng và bốn khung world có cùng kích thước ở depth 2/4/8/12. Point di chuyển trên cả ba trục, có thể bay theo thời gian, dừng để đo, kéo ở depth cố định và xem ở chế độ sạch không có debug.
 
@@ -14,38 +14,38 @@ Giữ camera cố định và giữ X/Y của điểm, tăng camera-space Z củ
 
 C++20 compiler; Visual Studio 2022 trên Windows, GCC hoặc Clang trên Linux/macOS. CMake tối thiểu 3.24 và Git. CMake FetchContent lấy SDL **3.4.8**, link qua SDL3::SDL3. Lần configure đầu cần mạng. Các gói hệ thống của SDL trên Linux được giải thích ở Getting Started của giáo trình.
 
-## Build và chạy
+## Xem trước sản phẩm trên Windows
 
-Chạy trong thư mục có CMakeLists.txt:
-
-```powershell
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 30
-.\build\Debug\project_11_final.exe
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 30
-```
-
-Với generator single-config như Ninja:
-
-```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_CHECKPOINTS=ON
-cmake --build build --parallel 2
-ctest --test-dir build --output-on-failure --timeout 30
-./build/project_11_final
-```
-
-Mặc định chỉ build final và tests. BUILD_CHECKPOINTS=ON thêm starter và tám checkpoint độc lập. Target project_11_checkpoint_1 … project_11_checkpoint_8 chạy các bản tham khảo sau mỗi bài. Chúng không tự nhận mã bạn sửa trong Starter.
-
-Khi học từ ZIP, viết tiếp trong starter/include và starter/src, sau đó build/run đúng target:
+Mở terminal trong thư mục chứa `CMakeLists.txt`. Mặc định chỉ cần build target final; không cần dịch cả tám checkpoint để xem thử.
 
 ```powershell
-cmake --build build --config Debug --target project_11_starter --parallel 2
-.\build\Debug\project_11_starter.exe
+cmake -S . -B build-final
+cmake --build build-final --config Release --target project_11_final --parallel 1
+.\build-final\Release\project_11_final.exe
 ```
 
-Sau khi hoàn thành tám bài, đổi dòng target_include_directories(project_11_tests PRIVATE final/include) trong CMakeLists.txt của bản ZIP thành target_include_directories(project_11_tests PRIVATE starter/include). Configure lại và build cả project_11_starter lẫn project_11_tests rồi chạy CTest để kiểm chính mã đã học. Nếu giữ final/include, CTest chỉ kiểm bản mẫu final; Starter ở các bài đầu chưa đủ hàm để chạy toàn bộ tests cuối project.
+Nhấn **M**. Đốm màu hổ phách là đèn A, vòng rỗng B là ảnh của điểm có cùng X/Y nhưng ở xa gấp đôi so với camera. Đo độ lệch từ tâm ảnh, không lấy tọa độ pixel chia hai. Bấm **F** để bỏ lớp đo mà vẫn thấy cảnh.
+
+## Tự làm từ khung ban đầu
+
+```powershell
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
+cmake --build build-work --config Debug --target project_11_work --parallel 1
+.\build-work\Debug\project_11_work.exe
+```
+
+Lần configure đầu, CMake sao `starter/` thành `work/`. Mỗi bài chỉ rõ từng chỗ sửa trong `work/include` và `work/src`; chạy lại lệnh build sau mỗi bài. Configure lại không ghi đè bài làm. `checkpoints/01` đến `checkpoints/08` là đáp án riêng từng chặng, còn `final/` là toàn bộ chương trình. Muốn biên dịch một đáp án riêng, bật `-DBUILD_CHECKPOINTS=ON` rồi chọn target như `project_11_checkpoint_3`.
+
+Sau bài 8, giữ `COURSE_WORKBOOK=ON` và kiểm mã bạn viết, không cần sửa CMake:
+
+```powershell
+cmake --build build-work --config Debug --target project_11_tests --parallel 1
+ctest --test-dir build-work -C Debug --output-on-failure --timeout 30
+cmake --build build-work --config Release --target project_11_tests --parallel 1
+ctest --test-dir build-work -C Release --output-on-failure --timeout 30
+```
+
+Trên Linux/macOS với Ninja, configure bằng `cmake -S . -B build-work -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCOURSE_WORKBOOK=ON`, build `project_11_work` rồi chạy `./build-work/project_11_work`. Với generator một cấu hình, muốn kiểm Release hãy configure sang một thư mục build khác.
 
 ## Hành trình tám bài
 
@@ -62,10 +62,11 @@ Sau khi hoàn thành tám bài, đổi dòng target_include_directories(project_
 
 - WASD: X/Y; Q/E: giảm/tăng Z. Giữ phím đi 2 world/s, hướng chéo được normalize.
 - J/L: camera X; I/K: camera Y; U/O: camera Z (bài 2+).
-- +/−: giảm/tăng vertical FOV, giới hạn 25°–110°. V: viewport 16:9, 4:3, 1:1 (bài 4+).
+- +/−: thu hẹp/mở rộng vertical FOV, giới hạn 25°–110°. V: viewport 16:9, 4:3, 1:1 (bài 4+).
 - [ / ]: near 0.1–2; ; / dấu nháy đơn: far 8–24 (bài 5+).
 - Space: chạy/dừng quỹ đạo; N: tiến 0.1s khi paused (bài 6+).
 - Kéo gần marker visible: giữ camera depth và offset chỗ nắm (bài 7+).
+- M: dừng để đo hai độ sâu; nhấn lần nữa để cất thước. A hoặc B nằm ngoài vùng nhìn thì không hiện số đo.
 - F: ẩn/hiện HUD, axes, crosshair; vẫn giữ lưới và khung 3D (bài 8).
 - F1 mặc định; F2 xa gấp đôi; F3 trước near; F4 sau camera; F5 vượt far; F6 ngoài góc nhìn.
 - R reset, Esc thoát.
@@ -97,7 +98,7 @@ Chạy executable với --smoke để mở hidden window, render vài frame, th�
 - src/main.cpp: init/input/lifecycle/present/cleanup.
 - tests/tests.cpp: correctness không cần window.
 
-Trong repository giáo trình, source-template là nguồn chuẩn. starter/checkpoints/final được sinh; không sửa output rồi chép ngược. Quy tắc đó dành cho người phát triển giáo trình. Trong ZIP tải về, Starter là bản làm việc của người học; hãy sửa Starter theo hướng dẫn bên trên.
+Trong repository giáo trình, source-template là nguồn chuẩn. starter/checkpoints/final được sinh; không sửa output rồi chép ngược. Quy tắc đó dành cho người phát triển giáo trình. Trong ZIP tải về, hãy giữ nguyên `starter/` và sửa bản riêng trong `work/` theo các bước bên trên.
 
 Camera chưa xoay, marker là ký hiệu đĩa của một point, scene wireframe chưa có che khuất. Những phần này được mở rộng ở các project sau.
 

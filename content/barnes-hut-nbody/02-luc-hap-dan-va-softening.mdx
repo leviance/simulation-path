@@ -1,30 +1,26 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 # Một vật thể hút vật thể khác như thế nào?
 
 ## Vấn đề cần giải quyết
 
-Đĩa sao đã hiện ra, nhưng chưa có nguyên nhân khiến nó chuyển động. Ta bắt đầu bằng một câu hỏi nhỏ: một source body gây gia tốc gì cho một target body? Viết đúng phép tính này trước sẽ giúp kiểm cả direct solver lẫn Barnes–Hut bằng những ca tính được bằng tay.
+Chọn một ngôi sao ngoài rìa đĩa. Nếu chỉ xét sức hút của vật nặng ở tâm, mũi tên gia tốc của ngôi sao phải chỉ về đâu? Ta sẽ trả lời cho đúng một cặp trước; chưa cần cộng lực của cả thiên hà.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Lực hướng từ target về source. Vì tính gia tốc a=F/m_target, mass của target triệt tiêu; sourceMass vẫn còn. Gọi r=source−target, ta dùng Plummer softening:
+Nối vị trí đích với vị trí nguồn bằng `displacement = sourcePosition - targetPosition`. Với $\mathbf r$ là vector đó, gia tốc do nguồn gây ra là $\mathbf a=Gm\mathbf r/(\lVert\mathbf r\rVert^2+\epsilon^2)^{3/2}$. Khối lượng $m$ là của **nguồn**: trong phép chia lực cho khối lượng của vật được kéo, khối lượng của vật đó đã triệt tiêu.
 
-$$
-\mathbf a=Gm_s\frac{\mathbf r}{(\|\mathbf r\|^2+\epsilon^2)^{3/2}}.
-$$
-
-Epsilon có đơn vị độ dài. Nó thay potential ở cự ly gần; không phải tham số sửa integrator và không phải radius cutoff. Nguồn xa vẫn tác dụng lực. Khi position trùng nhau và epsilon>0, displacement bằng 0 nên gia tốc hữu hạn bằng 0.
-
-Checkpoint 02 vẽ vector của một cặp lên scene đứng yên. Đừng chạy cả thiên hà để đoán dấu của một công thức. Với target tại x=−1, source tại x=1, sourceMass=3, G=1 và epsilon=0,1, thành phần X phải là 6/(4,01)^(3/2).
+$\epsilon$ (softening) làm lực bớt gắt khi hai sao tiến rất gần nhau. Nó không tạo thêm một lực đẩy và cũng không ấn định tốc độ chạy mô phỏng.
 
 <InteractiveLab demo="barnes-hut-nbody" mode="nbody-pair-force" />
 
 ## Viết code từng bước
 
-### Tính gia tốc từ một nguồn
+### Tính từ đầu mũi tên đến độ dài
 
-```cpp title="include/lab.hpp — Tính gia tốc từ một nguồn"
+{/* snippet include/lab.hpp#pair-force */}
+```cpp title="include/lab.hpp — Gia tốc do một vật gây ra"
 inline Vec3 softenedAcceleration(
     const Vec3& targetPosition,
     const Vec3& sourcePosition,
@@ -44,11 +40,11 @@ inline Vec3 softenedAcceleration(
 }
 ```
 
-displacement giữ hướng; softenedDistanceSquared giữ độ dài bình phương. Nhân với G·sourceMass/(r²+epsilon²)^(3/2) cho đơn vị length/time². Không normalize vector rồi vô tình làm mất một lũy thừa khoảng cách.
+`displacement` giữ hướng hút. Mẫu số chứa bình phương khoảng cách để khỏi phải chuẩn hóa một vector có thể bằng 0. Khi hai tọa độ trùng nhau và `epsilon` dương, tích cuối bằng vector 0, không phải một hướng bất kỳ.
 
-### Lấy dữ liệu từ state đang mở
+### Dùng đúng cặp đang quan sát
 
-```cpp title="include/simulation.hpp — Lấy dữ liệu từ state đang mở"
+```cpp title="include/simulation.hpp — Lấy vật nguồn và vật đích trong mô phỏng"
 inline Vec3 pairAccelerationForSelected(const Simulation& simulation) {
     const Body& target = simulation.bodies[simulation.selected];
     const Body& source = simulation.bodies[0];
@@ -56,11 +52,11 @@ inline Vec3 pairAccelerationForSelected(const Simulation& simulation) {
 }
 ```
 
-Target là body được chọn, source là body 0. Hàm không biết pixel hay camera. Đây là điểm nối giúp helper không bị bỏ rời khỏi ứng dụng.
+Chương trình lấy thân đang được chọn làm đích và thân đầu tiên làm nguồn. Xem bằng cách chọn một sao khác tâm; nếu chọn chính vật tâm thì không thể mong thấy mũi tên có độ dài dương.
 
-### Gọi phép tính trong đường vẽ
+### Đưa vector ra màn hình
 
-```cpp title="include/presentation.hpp — Gọi phép tính trong đường vẽ"
+```cpp title="include/presentation.hpp — Đặt kết quả tính lực vào khung hình"
 inline void drawScene(std::span<std::uint32_t> pixels, int width, int height, const lab::Simulation& simulation, std::vector<StarLight>& light) {
     drawBodies(pixels, width, height, simulation.bodies, simulation.camera, light);
     drawTrails(pixels, width, height, simulation);
@@ -69,35 +65,43 @@ inline void drawScene(std::span<std::uint32_t> pixels, int width, int height, co
 }
 ```
 
-Ở checkpoint 02, drawScene gọi pairAccelerationForSelected rồi drawForceArrow. Mũi tên có chiều dài chuẩn hóa để dễ nhìn; số pixel của nó không đại diện cho norm acceleration. Đọc vector số để so độ lớn.
+Hàm vẽ đọc vị trí hiện tại. Việc vẽ mũi tên chưa hề thay đổi vận tốc; màu sáng của sao cũng không xuất hiện trong công thức lực.
+
+### Tự ghép trong `work/`
+
+Thêm hàm tính lực cặp vào `work/include/lab.hpp`, ngay nơi có các phép toán trên `Vec3`. Ưu tiên kiểm hướng và dữ liệu đầu vào trước khi xem hình.
+
+<CourseWorkFile project="31" step={2} path="include/lab.hpp" />
+
+Nối hàm vừa viết vào `work/include/simulation.hpp` bằng chỉ số sao đang chọn và các tham số mô phỏng.
+
+<CourseWorkFile project="31" step={2} path="include/simulation.hpp" />
+
+Trong `work/include/presentation.hpp`, đưa vector trả về cho lớp vẽ mũi tên. Giữ nguyên đường vẽ các sao.
+
+<CourseWorkFile project="31" step={2} path="include/presentation.hpp" />
 
 ## Ghép các phần lại
 
-Build checkpoint 02, chọn target khác central body. Preset hai/ba vật giúp nhìn hướng lực rõ hơn một đám sao. Dự đoán: tăng sourceMass ba lần thì acceleration tăng bao nhiêu? Nếu chỉ tăng mass target thì sao?
+Giữ nguyên `work/` của bài 01 và build lại target dưới đây. Đóng băng thời gian, đổi sao đang chọn và bật lớp quan sát. Thay đổi ở bài này phải xuất hiện ở **hướng gia tốc**, không phải ở số sao hay hình dạng đĩa.
 
-Hàm pure có thể kiểm mà không mở window. tests/tests.cpp dùng fixture độc lập để kiểm cùng công thức; CTest mặc định kiểm source final, không phải một khẳng định rằng checkpoint đang học đã có mọi chức năng final.
-
-```bash title="Terminal — checkpoint 02"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_31_checkpoint_2
+```sh title="Terminal — chạy phần vừa viết trong work/"
+cmake --build build-work --config Release --target project_31_work --parallel 1
+.\build-work\Release\project_31_work.exe
 ```
-
-Trên Windows chạy ./build/Debug/project_31_checkpoint_2.exe; với Ninja/macOS/Linux, executable nằm trực tiếp trong build. Toàn bộ source và phần so sánh với bài trước ở cuối trang.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đổi source−target thành target−source rồi dự đoán hướng gia tốc ở hệ hai vật. Mũi tên sẽ quay sai hướng. Khôi phục hiệu tọa độ trước khi thử tiếp.
-2. Thay lũy thừa 3/2 trong mẫu bằng 1 rồi so lực khi tăng khoảng cách gấp đôi ở cự ly lớn. Quy luật giảm không còn inverse-square. Khôi phục công thức và kiểm lại fixture hai vật.
+Đổi phép trừ thành `targetPosition - sourcePosition`. Độ dài gần như không đổi nhưng mũi tên sẽ chỉ ra ngoài: đó là lực đẩy. Đừng sửa lỗi bằng cách lật hình chiếu; trả hai toán hạng về đúng trật tự.
 
 ## Tự kiểm tra kết quả
 
-- Fixture hai vật khớp tính tay với absolute tolerance 10⁻¹².
-- Tăng source mass ba lần làm gia tốc tăng ba lần; đổi target mass không đổi gia tốc do nguồn ấy.
-- Position trùng và epsilon>0 không tạo NaN/Inf.
-- Xoay camera không đổi vector gia tốc trong world space.
+- Với nguồn ở `x = 1` và vật đích ở `x = 0`, thành phần gia tốc theo x dương.
+- Giữ nguyên nguồn và hai vị trí: đổi khối lượng vật đích không làm kết quả thay đổi; nhân đôi khối lượng nguồn thì gia tốc tăng gấp đôi.
+- Hai vật trùng tọa độ không sinh `NaN`. Thí nghiệm vẫn cho phép đổi camera khi thời gian đứng yên.
 
 ## Bài tập mở rộng
 
-Đặt ba nguồn trên các trục rồi cộng gia tốc bằng tay. Chọn bố trí có hai thành phần triệt tiêu để dùng làm fixture ở bài 03.
+Thử hai cự ly lớn hơn nhiều so với $\epsilon$, trong đó cự ly sau gấp đôi cự ly trước. Độ dài gia tốc thay đổi gần bao nhiêu lần? Hãy dự đoán trước rồi mới tính.
 
-Bài tiếp theo: [Cộng tất cả lực và giữ một lời giải đối chứng](/projects/barnes-hut-nbody/03-direct-n-body-o-n-binh-phuong).
+Học tiếp: [Cộng tất cả lực và giữ một lời giải đối chứng](/projects/barnes-hut-nbody/03-direct-n-body-o-n-binh-phuong).

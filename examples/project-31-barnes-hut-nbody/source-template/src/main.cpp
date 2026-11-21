@@ -8,6 +8,8 @@ int main(int argc, char** argv) {
     bool smoke = false;
     bool workflow = false;
     bool benchmark = false;
+    const char* capturePath = nullptr;
+    int view = 0;
     for (int index = 1; index < argc; ++index) {
         if (std::strcmp(argv[index], "--smoke") == 0) {
             smoke = true;
@@ -16,6 +18,16 @@ int main(int argc, char** argv) {
             workflow = true;
         } else if (std::strcmp(argv[index], "--benchmark") == 0) {
             benchmark = true;
+        } else if (std::strcmp(argv[index], "--capture") == 0 && index + 1 < argc) {
+            capturePath = argv[++index];
+        } else if (std::strcmp(argv[index], "--view") == 0 && index + 1 < argc) {
+            const std::string_view angle = argv[++index];
+            if (angle == "face") view = 1;
+            else if (angle == "edge") view = 2;
+            else if (angle != "oblique") {
+                std::cerr << "Expected --view oblique, face or edge\n";
+                return EXIT_FAILURE;
+            }
         } else {
             std::cerr << "Unknown argument: " << argv[index] << '\n';
             return EXIT_FAILURE;
@@ -48,7 +60,9 @@ int main(int argc, char** argv) {
         std::cerr << SDL_GetError() << '\n';
         return EXIT_FAILURE;
     }
-    SDL_Window* window = SDL_CreateWindow("Project 31 | 3D Barnes-Hut galaxy", 1120, 820, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    if (capturePath || smoke) flags |= SDL_WINDOW_HIDDEN;
+    SDL_Window* window = SDL_CreateWindow("Project 31 | 3D Barnes-Hut galaxy", 1120, 820, flags);
     if (!window) {
         std::cerr << SDL_GetError() << '\n';
         SDL_Quit();
@@ -73,7 +87,7 @@ int main(int argc, char** argv) {
     SDL_SetRenderVSync(renderer, 1);
     int result = EXIT_SUCCESS;
     try {
-        result = project31::runApplication(window, renderer, texture, smoke, workflow);
+        result = project31::runApplication(window, renderer, texture, smoke, workflow, capturePath, view);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         result = EXIT_FAILURE;

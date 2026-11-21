@@ -26,7 +26,7 @@ test("P31 perspective uses aspect exactly once and keeps camera separate from bo
     point = { x: 1, y: 0, z: 0 };
   const first = projectGalaxy(point, camera, 400, 400),
     wide = projectGalaxy(point, camera, 800, 400);
-  const expected = 200 / Math.tan(Math.PI / 6) / 2;
+  const expected = 200 / Math.tan(0.62 / 2) / 2;
   assert.ok(Math.abs(first.x - 200 - expected) < 1e-10);
   assert.ok(Math.abs(wide.x - 400 - expected) < 1e-10);
   assert.equal(first.y, 188);
@@ -53,7 +53,9 @@ test("P31 independent two/three-body gravity fixtures, weighted aggregates and d
   }));
   const bounded = buildMassOctree(same);
   assert.ok(bounded.maximumObservedDepth <= 16);
-  assert.deepEqual(barnesHutAcceleration(bounded, same, 17, 1.2, 1, 0.1).acceleration, {
+  const coincidentForce = barnesHutAcceleration(bounded, same, 17, 1.2, 1, 0.1);
+  assert.equal(coincidentForce.exactInteractions, same.length - 1);
+  assert.deepEqual(coincidentForce.acceleration, {
     x: 0,
     y: 0,
     z: 0,

@@ -78,6 +78,29 @@ export function projectPerspective(
     status: Math.abs(ndc.x) <= 1 && Math.abs(ndc.y) <= 1 ? "visible" : "outside",
   };
 }
+// Two actual forward projections, with the camera and lens unchanged.
+export function measureDoubleDepth(
+  point: Vec3,
+  camera: { position: Vec3 },
+  lens: PointLens,
+  viewport: PointViewport,
+) {
+  const first = projectPerspective(point, camera, lens, viewport);
+  if (first.status !== "visible" || !first.screen) return null;
+  const deeper = { ...first.cameraPoint, z: 2 * first.cameraPoint.z };
+  const second = projectPerspective(cameraToWorld(deeper, camera), camera, lens, viewport);
+  if (second.status !== "visible" || !second.screen) return null;
+
+  const cx = viewport.x + viewport.width / 2;
+  const cy = viewport.y + viewport.height / 2;
+  return {
+    first: first.screen,
+    second: second.screen,
+    firstOffset: Math.hypot(first.screen.x - cx, first.screen.y - cy),
+    secondOffset: Math.hypot(second.screen.x - cx, second.screen.y - cy),
+  };
+}
+
 export function screenToCameraAtDepth(
   screen: Point2,
   depth: number,

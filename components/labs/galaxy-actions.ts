@@ -5,7 +5,7 @@ import {
   validateGalaxy,
   type GalaxyScene,
 } from "../../lib/labs/galaxy/scene.ts";
-import { dollyGalaxyCamera } from "../../lib/labs/galaxy/projection.ts";
+import { dollyGalaxyCamera, galaxyCameraView } from "../../lib/labs/galaxy/projection.ts";
 import type { GalaxyJob } from "@/lib/labs/galaxy/jobs";
 import type { GalaxyAction } from "./galaxy-controls";
 
@@ -61,8 +61,9 @@ export function performGalaxyAction(
     }
     return;
   }
-  if (action === "camera") {
-    current.camera = { yaw: 0.15, pitch: -0.85, distance: 2.6, x: 0, y: 0 };
+  if (action === "camera" || action === "view") {
+    release();
+    current.camera = galaxyCameraView(action === "view" ? value : 0);
     publish();
     return;
   }

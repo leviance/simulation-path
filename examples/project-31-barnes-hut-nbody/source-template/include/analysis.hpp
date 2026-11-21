@@ -7,6 +7,7 @@ namespace lab {
 // Checkpoint 8: theta sweep so lực xấp xỉ với direct oracle trên cùng target set.
 #if LAB_CHECKPOINT >= 8
 // [snippet:AccuracyRow]
+// [snippet accuracy-row]
 struct AccuracyRow {
     double theta{};
     double meanRelativeError{};
@@ -16,6 +17,7 @@ struct AccuracyRow {
     double normalizedRmsError{};
 };
 
+// [/snippet accuracy-row]
 // [/snippet:AccuracyRow]
 
 // [snippet:measureThetaAccuracy]

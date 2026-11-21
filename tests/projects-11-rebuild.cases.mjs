@@ -65,7 +65,9 @@ test("Project 11 rebuild has eight teachable checkpoints with literal four-space
       file + " needs observable experiments",
     );
     assert.doesNotMatch(mdx, /Checkpoint đang xây|TODO|lorem ipsum/);
-    assert.match(mdx, /--target project_11_starter --parallel 2/);
+    assert.match(mdx, /--target project_11_work --parallel 1/);
+    assert.match(mdx, /-DCOURSE_WORKBOOK=ON/);
+    assert.doesNotMatch(mdx, /\bstarter\/(?:include|src)\b/);
     assert.match(mdx, /bản tham khảo sau bài này/);
     for (const role of [
       "Vấn đề cần giải quyết",
@@ -206,27 +208,27 @@ test("Project 11 rebuild teaches declarations, call sites and testing the learne
     "const auto cancelDrag",
   ])
     assert.ok((await lesson(7)).includes(declaration), declaration);
-  assert.match(
-    await lesson(8),
-    /target_include_directories\(project_11_tests PRIVATE starter\/include\)/,
-  );
+  assert.match(await lesson(8), /ctest --test-dir build-work -C Debug/);
   assert.match(await lesson(8), /point.screen && close\(point.screen->x, 485.0\)/);
 });
 
 test("Project 11 rebuild renders all eight routes and complete runnable source", async () => {
   const overview = await render("/projects/perspective-point");
   assert.equal(overview.status, 200);
-  assert.match(await overview.text(), /Thử thách|thử tự làm/i);
+  const overviewHtml = await overview.text();
+  assert.match(overviewHtml, /Thử thách|thử tự làm/i);
+  assert.match(overviewHtml, /field-notes\/perspective-point\/piste\.png/);
   for (const slug of lessons) {
     const response = await render("/projects/perspective-point/" + slug);
     assert.equal(response.status, 200);
     const html = await response.text();
     assert.match(html, /data-theme="one-dark-pro"/);
     assert.doesNotMatch(html, /Checkpoint đang xây/);
-    assert.ok(html.includes("project_11_starter"), slug + " must show the learner target");
+    assert.ok(html.includes("project_11_work"), slug + " must show the learner target");
     assert.ok(html.includes("bản tham khảo sau bài này"), slug + " must distinguish the reference");
   }
   const html = await (await render("/projects/perspective-point/" + lessons.at(-1))).text();
+  assert.match(html, /field-notes\/perspective-point\/depth-ruler\.png/);
   assert.match(html, /Toàn bộ mã nguồn của dự án/);
   for (const file of [
     "include/lab.hpp",
@@ -250,8 +252,5 @@ test("Project 11 rebuild renders all eight routes and complete runnable source",
     assert.ok(html.includes(label), label);
   assert.match(html, /projects\/rotating-triangle/);
   assert.match(html, /project-11-perspective-point\.zip/);
-  assert.match(
-    html.replace(/<[^>]*>/g, ""),
-    /target_include_directories\(project_11_tests PRIVATE starter\/include\)/,
-  );
+  assert.match(html.replace(/<[^>]*>/g, ""), /ctest --test-dir build-work -C Debug/);
 });

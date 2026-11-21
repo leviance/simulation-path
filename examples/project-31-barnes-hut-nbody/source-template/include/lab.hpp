@@ -4,6 +4,8 @@
 #define LAB_CHECKPOINT 10
 #endif
 
+#include "galaxy-seed.hpp"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -57,12 +59,14 @@ inline bool finiteVector(const Vec3& vector) {
 }
 
 // [snippet:Body]
+// [snippet body-state]
 struct Body {
     Vec3 position{};
     Vec3 velocity{};
     double mass{1.0};
 };
 
+// [/snippet body-state]
 // [/snippet:Body]
 
 class XorShift32 {
@@ -100,89 +104,18 @@ inline std::vector<Body> makeGalaxyBodies(std::size_t count, std::uint32_t seed)
     bodies.reserve(safeCount);
     bodies.push_back({{}, {}, 120.0});
 
-    // Nghịch đảo CDF của đĩa có mật độ giảm theo exp(-r / scale).
-    // Số vòng chia đôi cố định: không có rejection loop có thể chạy vô hạn.
-    const auto diskRadius = [](double sample) {
-        constexpr double scale = 0.36;
-        constexpr double maximum = 1.4;
-        const double limit = 1.0 - (1.0 + maximum / scale) * std::exp(-maximum / scale);
-        double low = 0;
-        double high = maximum;
-        for (int iteration = 0; iteration < 16; ++iteration) {
-            const double middle = (low + high) * 0.5;
-            const double cumulative = 1.0 - (1.0 + middle / scale) * std::exp(-middle / scale);
-            if (cumulative < sample * limit) {
-                low = middle;
-            } else {
-                high = middle;
-            }
-        }
-        return 0.2 + (low + high) * 0.5;
-    };
-
-    for (std::size_t index = 1; index < safeCount; ++index) {
-        // Đây là điều kiện đầu, không phải quỹ đạo được áp đặt mỗi frame.
-        // Một phần ba số sao tạo lõi ellipsoid; halo và đĩa đều có thể tích XYZ.
-        // Các nhánh chỉ mô tả phân bố ban đầu, không ép sao quay theo đường có sẵn.
-        const bool bulge = index % 3 == 0;
-        const bool halo = !bulge && index % 11 == 0;
-        const double radialSample = random.unit();
-        double radius = diskRadius(radialSample);
-        if (bulge) {
-            radius = 0.06 + std::pow(radialSample, 1.1) * 0.55;
-        } else if (halo) {
-            radius = 0.5 + radialSample * 0.9;
-        }
-        const double angularSample = random.unit();
-        const double scatter = random.unit();
-        double angle = 0;
-        if (bulge || halo) {
-            angle = angularSample * 6.283185307179586;
-        } else if (angularSample < 0.22) {
-            // Đĩa nền giữa các nhánh, không để hai dải rời như cánh quạt.
-            angle = angularSample / 0.22 * 6.283185307179586;
-        } else {
-            const bool firstArm = angularSample < 0.64;
-            double winding = 2.6;
-            double phase = 3.7;
-            if (firstArm) {
-                winding = 3.4;
-                phase = 0.0;
-            }
-            angle = phase + winding * std::log((radius + 0.12) / 0.32);
-            angle += 0.14 * std::sin(radius * 8.0 + phase);
-            angle += (scatter - 0.5) * (0.22 + 0.35 * radius);
-            if (angularSample > 0.90) {
-                angle += 0.3 + 0.3 * radius;
-            }
-        }
-        const double heightSample = random.unit() * 2.0 - 1.0;
-        double planarRadius = radius;
-        double thickness = 0.28 * heightSample * std::abs(heightSample) * (1.3 - 0.35 * radius);
-        if (bulge || halo) {
-            planarRadius = radius * std::sqrt(1.0 - heightSample * heightSample);
-            thickness = radius * heightSample;
-            if (bulge) {
-                thickness *= 0.85;
-            }
-        }
-        // Reduced units: G=0.001, central mass=120, disk mass approximately 120.
-        // Increasing N refines the disk instead of increasing its total mass.
+    for (std::size_t id = 1; id < safeCount; ++id) {
+        const SeedPoint point = sampleGalaxyPoint(id, random);
+        const double r = point.speedRadius;
         const double mass = (0.7 + random.unit() * 0.6) * 120.0 / double(safeCount - 1);
-        const double enclosedMass = 120.0 + 120.0 * std::min(1.0, radius * radius);
-        const double orbitalSpeed = std::sqrt(0.001 * enclosedMass / radius);
-        const double speedJitter = 0.92 + random.unit() * 0.16;
-        double verticalSpeedScale = 0.06;
-        if (bulge || halo) {
-            verticalSpeedScale = 0.5;
-        }
+        // Xấp xỉ vận tốc tiếp tuyến ban đầu; từ bước sau solver tự tính lực.
+        const double enclosedMass = 120.0 + 120.0 * std::min(1.0, r * r);
+        const double speed = std::sqrt(0.001 * enclosedMass / r) * (0.92 + 0.16 * random.unit());
+        const double cosine = std::cos(point.angle);
+        const double sine = std::sin(point.angle);
         bodies.push_back({
-            {std::cos(angle) * planarRadius, std::sin(angle) * planarRadius, thickness},
-            {
-                -std::sin(angle) * orbitalSpeed * speedJitter,
-                std::cos(angle) * orbitalSpeed * speedJitter,
-                (random.unit() - 0.5) * verticalSpeedScale,
-            },
+            {cosine * point.planarRadius, sine * point.planarRadius, point.height},
+            {-sine * speed, cosine * speed, (random.unit() - 0.5) * point.verticalSpread},
             mass,
         });
     }
@@ -207,13 +140,28 @@ inline std::vector<Body> makeGalaxyBodies(std::size_t count, std::uint32_t seed)
 
 struct OrbitCamera {
     Vec3 target{};
-    double yaw{0.15};
-    double pitch{-0.85};
-    double distance{2.6};
-    double fieldOfViewRadians{1.0471975512};
+    double yaw{-0.30};
+    double pitch{-0.97};
+    double distance{4.85};
+    double fieldOfViewRadians{0.62};
     double aspect{1.0};
     double nearPlane{0.1};
 };
+
+// Chỉ đổi điểm quan sát; không tạo lại snapshot đang đo.
+inline OrbitCamera galaxyView(int view) {
+    OrbitCamera camera{};
+    if (view == 1) {
+        camera.yaw = 0.0;
+        camera.pitch = 0.0;
+        camera.distance = 6.35;
+    } else if (view == 2) {
+        camera.yaw = 0.0;
+        camera.pitch = 1.5707963267948966;
+        camera.distance = 4.40;
+    }
+    return camera;
+}
 
 struct ProjectedPoint {
     double x{};
@@ -291,6 +239,7 @@ inline Vec3 totalMomentum(std::span<const Body> bodies) {
 // Checkpoint 2: một nguồn khối lượng tạo gia tốc hấp dẫn có softening.
 #if LAB_CHECKPOINT >= 2
 // [snippet:softenedAcceleration]
+// [snippet pair-force]
 inline Vec3 softenedAcceleration(
     const Vec3& targetPosition,
     const Vec3& sourcePosition,
@@ -309,6 +258,7 @@ inline Vec3 softenedAcceleration(
     return displacement * (gravitationalConstant * sourceMass * inverseDistanceCubed);
 }
 
+// [/snippet pair-force]
 // [/snippet:softenedAcceleration]
 #endif
 
@@ -326,6 +276,7 @@ struct AccelerationResult {
 };
 
 // [snippet:directAcceleration]
+// [snippet direct-target]
 inline AccelerationResult directAcceleration(
     std::span<const Body> bodies,
     std::size_t targetIndex,
@@ -352,6 +303,7 @@ inline AccelerationResult directAcceleration(
     return result;
 }
 
+// [/snippet direct-target]
 // [/snippet:directAcceleration]
 
 // [snippet:directAccelerations]
@@ -416,6 +368,7 @@ inline FixedStepPlan planFixedSteps(
 }
 
 // [snippet:integrateSymplecticEuler]
+// [snippet kick-drift]
 inline void integrateSymplecticEuler(
     std::vector<Body>& bodies,
     std::span<const Vec3> accelerations,
@@ -430,6 +383,7 @@ inline void integrateSymplecticEuler(
     }
 }
 
+// [/snippet kick-drift]
 // [/snippet:integrateSymplecticEuler]
 #endif
 

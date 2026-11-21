@@ -84,6 +84,7 @@ struct BarnesHutConfig {
 };
 
 // [snippet:BarnesHutNode]
+// [snippet tree-node]
 struct BarnesHutNode {
     Bounds3D bounds{};
     int depth{};
@@ -106,6 +107,7 @@ struct BarnesHutNode {
     }
 };
 
+// [/snippet tree-node]
 // [/snippet:BarnesHutNode]
 
 struct BarnesHutTree {
@@ -250,11 +252,13 @@ inline BarnesHutTree buildMassOctree(
 // Checkpoint 6: dùng opening criterion s/d < theta cho node không chứa target.
 #if LAB_CHECKPOINT >= 6
 // [snippet:ForceTrace]
+// [snippet force-trace]
 struct ForceTrace {
     std::vector<std::size_t> opened{};
     std::vector<std::size_t> accepted{};
 };
 
+// [/snippet force-trace]
 // [/snippet:ForceTrace]
 
 // [snippet:accumulateBarnesHutNode]
@@ -397,6 +401,7 @@ inline std::vector<Vec3> barnesHutAccelerations(
 // Checkpoint 7: inspector độc lập kiểm storage, child bounds và aggregate mass.
 #if LAB_CHECKPOINT >= 7
 // [snippet:BarnesHutTopologyReport]
+// [snippet topology-report]
 struct BarnesHutTopologyReport {
     bool everyBodyStoredOnce{true};
     bool internalNodesEmpty{true};
@@ -407,6 +412,7 @@ struct BarnesHutTopologyReport {
     bool statisticsMatch{true};
 };
 
+// [/snippet topology-report]
 // [/snippet:BarnesHutTopologyReport]
 
 inline bool nearlyEqual(double a, double b, double tolerance = 1.0e-9) {

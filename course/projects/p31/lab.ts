@@ -1,11 +1,43 @@
 import type { ProjectLabMeta } from "../../labs/types";
 
 const lab = {
+  native: {
+    directory: "/field-notes/barnes-hut",
+    withDemo: true,
+    overview: ["oblique", "face", "edge"],
+    lessons: { "nbody-scene": ["face", "edge"], "nbody-validation": ["oblique", "edge"] },
+    takes: {
+      oblique: {
+        title: "Một thiên hà ở góc nhìn nghiêng",
+        source: "C++/SDL3 · Release · F1",
+        poster: "oblique.png",
+        alt: "Lõi sáng màu kem nhô lên khỏi đĩa sao; những nhánh lam bạc uốn quanh lõi rồi thưa dần về rìa.",
+        caption:
+          "Bản C++ đang dừng ở bước 0. Tất cả ánh sáng trong cảnh đều đến từ 4.096 vật thể mà bộ giải sẽ cập nhật khi nhấn N.",
+      },
+      face: {
+        title: "Xoắn ở đâu? Hãy nhìn từ trên xuống",
+        source: "C++/SDL3 · cùng snapshot · F2",
+        poster: "face.png",
+        alt: "Nhìn vuông góc với đĩa: hai nhánh khác nhau về độ sáng, có đoạn rẽ nhánh và vẫn có sao giữa các nhánh.",
+        caption:
+          "Lần theo một dải sao từ sát lõi ra ngoài. Dải đổi hướng theo bán kính chứ không tỏa thẳng như nan quạt.",
+      },
+      edge: {
+        title: "Nếu đĩa chỉ là một tấm phẳng?",
+        source: "C++/SDL3 · cùng snapshot · F3",
+        poster: "edge.png",
+        alt: "Nhìn sát cạnh, đĩa thành một dải sáng mảnh; giữa dải có khối phình và vài sao nằm cao hơn hẳn.",
+        caption:
+          "Không có bước vật lý nào giữa ba ảnh. Thứ làm lõi dày và quầng sao nổi trên mặt đĩa là tọa độ Z, không phải một hình nền khác.",
+      },
+    },
+  },
   base: {
     label: "3D GRAVITY · BARNES–HUT LAB",
-    title: "Một đĩa sao, hai cách tính lực",
+    title: "Thiên hà xoắn nhìn từ ba phía",
     description:
-      "4.096 vật thể với gravity thật. Chọn target, quan sát các node opened/accepted, đo force error và tách ảnh hưởng của timestep; không dùng animation định sẵn.",
+      "Nhìn từ trên để tìm các nhánh xoắn, rồi nhìn ngang để thấy lõi nhô khỏi đĩa. Tiến một bước và bật lớp kiểm tra: Barnes–Hut đã gộp những ngôi sao nào khi tính lực lên ngôi sao bạn chọn?",
   },
   modes: {
     "nbody-scene": {

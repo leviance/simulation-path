@@ -38,17 +38,44 @@ inline const char* statusText(ProjectionStatus status) {
     }
 }
 #endif
-inline bool presentFramebuffer(SDL_Renderer* renderer, SDL_Texture* texture, const Scene& scene) {
+inline bool finishFrame(SDL_Renderer* renderer, const char* capturePath) {
+    // Đọc chính khung đã vẽ, trước khi SDL đổi back buffer.
+    if (capturePath) {
+        SDL_Surface* frame = SDL_RenderReadPixels(renderer, nullptr);
+        if (!frame) {
+            return false;
+        }
+        const bool saved = SDL_SavePNG(frame, capturePath);
+        SDL_DestroySurface(frame);
+        if (!saved) {
+            return false;
+        }
+    }
+    return SDL_RenderPresent(renderer);
+}
+
+inline bool presentFramebuffer(SDL_Renderer* renderer, SDL_Texture* texture, const Scene& scene, const char* capturePath = nullptr) {
     // Letterbox phải dùng màu nền, không dùng lại màu chữ của frame trước.
     if (!SDL_SetRenderDrawColor(renderer, 17, 24, 43, 255) || !SDL_RenderClear(renderer) || !SDL_RenderTexture(renderer, texture, nullptr, nullptr) || !SDL_SetRenderDrawColor(renderer, 225, 232, 250, 255)) {
         return false;
     }
 #if LAB_CHECKPOINT >= 8
     if (!scene.debug) {
-        return SDL_RenderPresent(renderer);
+        return finishFrame(renderer, capturePath);
     }
 #endif
-    if (!text(renderer, 16, 14, "PROJECT 11 | WASD: XY, Q/E: Z | IJKL U/O: camera | +/- FOV | V aspect | R reset | Esc quit") || !text(renderer, 16, 34, "F1 default, F2 far, F3 near, F4 behind, F5 beyond-far, F6 outside | [ ] near, ; ' far")) {
+    const char* controls = "PROJECT 11 | WASD: XY, Q/E: Z | R: reset | Esc: quit";
+#if LAB_CHECKPOINT >= 2
+    controls = "PROJECT 11 | WASD: XY, Q/E: Z | IJKL U/O: move camera | R: reset | Esc: quit";
+#endif
+#if LAB_CHECKPOINT >= 4
+    controls = "PROJECT 11 | WASD Q/E: light | IJKL U/O: camera | +/-: lens | V: aspect | R: reset | Esc: quit";
+#endif
+    const char* experiment = "F1 / F2: compare the same X/Y at depths 4 and 8";
+#if LAB_CHECKPOINT >= 5
+    experiment = "F1 / F2: compare depths | F3 near, F4 behind, F5 beyond far, F6 outside | [ ] near, ; ' far";
+#endif
+    if (!text(renderer, 16, 14, controls) || !text(renderer, 16, 34, experiment)) {
         return false;
     }
     char value[230]{};
@@ -92,6 +119,21 @@ inline bool presentFramebuffer(SDL_Renderer* renderer, SDL_Texture* texture, con
         return false;
     }
 #endif
-    return SDL_RenderPresent(renderer);
+#if LAB_CHECKPOINT >= 8
+    const char* guide = "M: compare two depths | solid A = point, ring B = same X/Y at twice camera Z";
+    if (scene.measureDepth) {
+        const auto reading = measureDoubleDepth(scene.point, scene.camera, scene.lens, viewportFor(scene));
+        if (reading) {
+            std::snprintf(value, sizeof(value), "Distance from center | A: %.2f px at Z %.2f | B: %.2f px at Z %.2f | M: hide ruler", reading->firstOffset, projected.cameraPoint.z, reading->secondOffset, 2.0 * projected.cameraPoint.z);
+            guide = value;
+        } else {
+            guide = "Cannot measure: A and B must both be visible. F1: reset | M: hide ruler";
+        }
+    }
+    if (!text(renderer, 16, 705, guide)) {
+        return false;
+    }
+#endif
+    return finishFrame(renderer, capturePath);
 }
 } // namespace lab

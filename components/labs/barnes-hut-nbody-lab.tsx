@@ -231,7 +231,7 @@ function Galaxy({ mode }: { mode?: string }) {
         dy = y - active.y;
       if (tool === "orbit") {
         camera.yaw += dx * 0.006;
-        camera.pitch = Math.max(-1.4, Math.min(1.4, camera.pitch + dy * 0.006));
+        camera.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, camera.pitch + dy * 0.006));
       } else {
         const panScale = Math.max(0.3, Math.abs(camera.distance));
         camera.x -= (dx * panScale) / size.height;
@@ -288,14 +288,15 @@ function Galaxy({ mode }: { mode?: string }) {
       act("cancel");
       publish();
     } else if (k === "r") act("reset");
+    else if (["f1", "f2", "f3"].includes(k)) act("view", Number(k[1]) - 1);
     else if (k === "home") act("camera");
     else if (k === "arrowleft" || k === "arrowright") {
       current.camera.yaw += k === "arrowleft" ? -0.08 : 0.08;
       publish();
     } else if (k === "arrowup" || k === "arrowdown") {
       current.camera.pitch = Math.max(
-        -1.4,
-        Math.min(1.4, current.camera.pitch + (k === "arrowup" ? -0.08 : 0.08)),
+        -Math.PI / 2,
+        Math.min(Math.PI / 2, current.camera.pitch + (k === "arrowup" ? -0.08 : 0.08)),
       );
       publish();
     } else if (["q", "z", "w", "s"].includes(k)) {
@@ -361,16 +362,16 @@ function Galaxy({ mode }: { mode?: string }) {
       <p id={helpId}>
         Kéo để đổi góc nhìn, chọn Pan để dịch camera; nhấp gần một body để theo dõi. Phím mũi tên
         xoay; cuộn chuột, W/S hoặc Z/Q tiến/lùi xuyên qua thiên hà. Home đặt lại camera, R đặt lại
-        preset. {stage >= 4 && "Space chạy/dừng, N tiến đúng một bước."}{" "}
+        preset. F1/F2/F3 lần lượt nhìn nghiêng, từ trên và ngang cạnh đĩa.{" "}
+        {stage >= 4 && "Space chạy/dừng, N tiến đúng một bước."}{" "}
         {stage >= 8 && "T đo theta; Escape hủy tác vụ."} Tab rời Canvas. Camera không đổi state vật
         lý.
       </p>
       <p>
-        Vàng gần lõi → xanh ở ngoài: khoảng cách tới khối lượng trung tâm gần nhất, từ 0 đến 0,75
-        length unit. Kích thước đốm sáng phụ thuộc mass và độ sâu, không phải bán kính sao thật. Mỗi
-        đốm sáng ứng với một body; không thêm sao nền giả. Trails theo dõi 24 ID trải đều toàn hệ,
-        giữ 64 snapshot. Lõi và hai nhánh xoắn là điều kiện đầu; khi chạy, gravity solver quyết định
-        chuyển động.
+        Nhìn từ trên để lần theo từng nhánh sao, rồi nhìn ngang: đĩa hẹp lại nhưng lõi vẫn dày. Màu
+        ấm chỉ vùng gần tâm, màu lam chỉ vùng xa hơn; đây không phải nhiệt độ sao. Mỗi điểm sáng lấy
+        vị trí từ một vật thể thật. Khi nhiều điểm ở gần nhau trên ảnh, ánh sáng của chúng cộng lại
+        thành dải. Bật lớp kiểm tra để thấy vệt quỹ đạo và ngôi sao đang chọn.
       </p>
       <GalaxyReadout scene={scene} force={force} />
       <p>

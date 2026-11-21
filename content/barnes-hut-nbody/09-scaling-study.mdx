@@ -1,26 +1,26 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 # Đo chi phí thật của hai cách tính lực
 
 ## Vấn đề cần giải quyết
 
-Barnes–Hut đọc ít nguồn hơn chưa chắc nhanh hơn. Dựng cây, duyệt node và quản lý dữ liệu cũng tốn thời gian. Ta sẽ đo đúng phần công việc cần so, giữ kết quả lực có thể quan sát và công bố cả những ca cây không có lợi.
+“Ít phép tính hơn” không đồng nghĩa với “chạy nhanh hơn trên máy tôi”. Với 256 vật, chi phí dựng và duyệt cây đôi khi còn đắt hơn cách cộng thẳng. Ta đo cả hai cách ở 256, 1.024 và 4.096 vật trước khi đưa ra kết luận.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Một benchmark công bằng giữ cùng bodies, seed, theta, epsilon và số target. Bản C++ đo full force pass ở N=256/1.024/4.096; Canvas đo 256/512/1.024 để giữ phản hồi. Cả hai đều không dùng số đo JavaScript để suy ra thời gian C++.
+Một lượt đo phải tính gia tốc cho **tất cả** sao trên cùng một trạng thái. Giữ nguyên seed, `epsilon` và `theta`. Bỏ lượt đầu cho máy làm nóng, giữ năm lượt tiếp theo và đọc trung vị cùng khoảng nhỏ nhất–lớn nhất. Thời gian duyệt cây và thời gian dựng cây được ghi riêng: muốn biết chi phí cả một bước, đừng bỏ quên khoản dựng.
 
-Tách ba thứ: tree build, force kernel và render. Clock bao từng lời gọi tính lực; thời gian chờ frame không được cộng vào kernel. Bỏ một warm-up, lấy median cùng min/max của năm mẫu. Direct work của full pass vẫn phải đúng N(N−1).
-
-Số lần tính nguồn không phải milliseconds. Cây có thể giảm work nhưng vẫn chậm ở N nhỏ; CPU, build configuration và cost truy cập dữ liệu đều ảnh hưởng. Kết quả không đủ để kết luận một solver luôn thắng.
+Con số $N(N-1)$ là số đóng góp trực tiếp phải xét, không phải số micro giây. Vẽ nhiều ánh sáng hay thu nhỏ cửa sổ ảnh hưởng FPS, nhưng không phải lý do để sửa phép đo chỉ dành cho solver.
 
 <InteractiveLab demo="barnes-hut-nbody" mode="nbody-scaling" />
 
 ## Viết code từng bước
 
-### Định nghĩa hàng kết quả đủ thông tin
+### Giữ thời gian, khối lượng công việc và chi phí dựng cây riêng
 
-```cpp title="include/benchmark.hpp — Định nghĩa hàng kết quả đủ thông tin"
+{/* snippet include/benchmark.hpp#runtime-row */}
+```cpp title="include/benchmark.hpp — Một hàng kết quả cho một cỡ hệ"
 struct RuntimeRow {
     std::size_t count{};
     double directMedian{};
@@ -36,162 +36,87 @@ struct RuntimeRow {
 };
 ```
 
-Median không đi một mình: có min/max, buildMicroseconds, work của từng mode và checksum. Điều này cho phép đọc thời gian cạnh workload thay vì nhìn một con số tách rời.
+`directMedian` và `treeMedian` cùng đo một lượt tính lực. `buildMicroseconds` là một khoản riêng, còn `directWork` và `treeWork` chỉ đếm công việc.
 
-### Đo nhiều pass với tiến độ hữu hạn
+### Cho hai cách tính đọc đúng một tập sao
 
-```cpp title="include/benchmark.hpp — Đo nhiều pass với tiến độ hữu hạn"
-struct RuntimeJob {
-    std::vector<Body> bodies{};
-    BarnesHutTree tree{};
-    std::vector<RuntimeRow> rows{};
-    std::array<double, 5> directTimes{};
-    std::array<double, 5> treeTimes{};
-    std::size_t target{};
-    int sizeIndex{};
-    int sample{};
-    int method{};
-    double elapsedMicroseconds{};
-    double checksum{};
-    std::size_t work{};
-    std::size_t directWork{};
-    double theta{0.5};
-    double epsilon{0.02};
-    bool active{};
-    bool timedOut{};
-    std::chrono::steady_clock::time_point deadline{};
-
-    void prepareSize() {
-        constexpr std::array<std::size_t, 3> counts{256, 1024, 4096};
-        bodies = makeGalaxyBodies(counts[std::size_t(sizeIndex)], galaxySeed);
-        tree = buildMassOctree(bodies);
-        sample = 0;
-        method = 0;
-        target = 0;
-        checksum = 0;
-        work = 0;
-        elapsedMicroseconds = 0;
-    }
-
-    void start(double selectedTheta, double selectedEpsilon) {
-        *this = {};
-        theta = selectedTheta;
-        epsilon = selectedEpsilon;
-        active = true;
-        deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-        prepareSize();
-    }
-
-    void tick() {
-        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(6);
-        while (active && std::chrono::steady_clock::now() < until) {
-            if (std::chrono::steady_clock::now() >= deadline) {
-                active = false;
-                timedOut = true;
-                return;
-            }
-            const auto started = std::chrono::steady_clock::now();
-            AccelerationResult force{};
-            if (method == 0) {
-                force = directAcceleration(bodies, target, gravity, epsilon);
-            } else {
-                force = barnesHutAcceleration(tree, bodies, target, theta, gravity, epsilon);
-            }
-            elapsedMicroseconds += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();
-            checksum += force.acceleration.x + force.acceleration.y + force.acceleration.z;
-            work += force.metrics.exactInteractions + force.metrics.approximatedNodes;
-            ++target;
-            if (target < bodies.size()) {
-                continue;
-            }
-            if (sample > 0) {
-                if (method == 0) {
-                    directTimes[std::size_t(sample - 1)] = elapsedMicroseconds;
-                } else {
-                    treeTimes[std::size_t(sample - 1)] = elapsedMicroseconds;
-                }
-            }
-            if (method == 0) {
-                directWork = work;
-            }
-            ++method;
-            if (method == 2) {
-                method = 0;
-                ++sample;
-            }
-            if (sample == 6) {
-                std::sort(directTimes.begin(), directTimes.end());
-                std::sort(treeTimes.begin(), treeTimes.end());
-                RuntimeRow row{};
-                row.count = bodies.size();
-                row.directMedian = directTimes[2];
-                row.directMinimum = directTimes[0];
-                row.directMaximum = directTimes[4];
-                row.treeMedian = treeTimes[2];
-                row.treeMinimum = treeTimes[0];
-                row.treeMaximum = treeTimes[4];
-                row.buildMicroseconds = tree.rebuildMicroseconds;
-                row.checksum = checksum;
-                row.directWork = directWork;
-                row.treeWork = work;
-                rows.push_back(row);
-                ++sizeIndex;
-                if (sizeIndex == 3) {
-                    active = false;
-                    return;
-                }
-                prepareSize();
-            }
-            target = 0;
-            elapsedMicroseconds = 0;
-            checksum = 0;
-            work = 0;
-        }
-    }
-};
+```cpp title="include/benchmark.hpp — Chuẩn bị cỡ hệ mới và làm sạch bộ đếm"
+void prepareSize() {
+    constexpr std::array<std::size_t, 3> counts{256, 1024, 4096};
+    bodies = makeGalaxyBodies(counts[std::size_t(sizeIndex)], galaxySeed);
+    tree = buildMassOctree(bodies);
+    sample = 0;
+    method = 0;
+    target = 0;
+    checksum = 0;
+    work = 0;
+    elapsedMicroseconds = 0;
+}
 ```
 
-Job giữ sizeIndex, sample, method và target giữa các lượt tick. Mỗi target đọc cùng dataset ở hai mode; sau warm-up mới ghi mẫu. Output acceleration đi vào checksum để compiler không xem kernel là công việc thừa.
+Chương trình tạo các sao bằng cùng seed cho cả hai phương pháp ở một cỡ hệ. Không đo cả thời gian tạo dữ liệu vào hàm lực. Tăng N là lấy mẫu dày hơn, không nhân tổng khối lượng theo N.
 
-### Khởi động từ event loop, không chờ ngay tại đây
+### Đo rồi mới cộng dồn kết quả
 
-```cpp title="include/application.hpp — Khởi động từ event loop, không chờ ngay tại đây"
-                else if (key == SDLK_B) {
-                    cancel();
-                    runtime.start(simulation.theta, simulation.epsilon);
-                }
+```cpp title="include/benchmark.hpp — Đo riêng phép tính lực trên một vật"
+const auto started = std::chrono::steady_clock::now();
+AccelerationResult force{};
+if (method == 0) {
+    force = directAcceleration(bodies, target, gravity, epsilon);
+} else {
+    force = barnesHutAcceleration(tree, bodies, target, theta, gravity, epsilon);
+}
+elapsedMicroseconds += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();
+checksum += force.acceleration.x + force.acceleration.y + force.acceleration.z;
+work += force.metrics.exactInteractions + force.metrics.approximatedNodes;
+++target;
 ```
 
-B chỉ tạo RuntimeJob rồi trả quyền điều khiển. tick được gọi ở các lượt sau. Người dùng có thể pause hoặc cancel giữa các batch; camera vẫn hoạt động.
+`checksum` dùng kết quả số, giúp nhận biết phép tính không bị bỏ đi. Hai solver xấp xỉ khác nhau nên checksum không bắt buộc bằng nhau. Chất lượng xấp xỉ đã có phép đo riêng ở bài 08. `B` chỉ khởi động công việc; không khóa vòng xử lý sự kiện để chờ.
+
+### Tự ghép trong `work/`
+
+Trong `work/include/analysis.hpp`, thêm các hàm phục vụ khảo sát cỡ hệ. Phân biệt bộ đếm thao tác với đồng hồ.
+
+<CourseWorkFile project="31" step={9} path="include/analysis.hpp" />
+
+Trong `work/include/benchmark.hpp`, viết bộ đo: một lượt làm nóng, năm lượt lấy số, hai phương pháp dùng cùng các sao, và một hạn thời gian rõ ràng.
+
+<CourseWorkFile project="31" step={9} path="include/benchmark.hpp" />
+
+Trong `work/include/render.hpp`, thêm nơi hiển thị bảng cho từng cỡ N. Nêu rõ đơn vị thay vì gắn nhãn chung là tốc độ.
+
+<CourseWorkFile project="31" step={9} path="include/render.hpp" />
+
+Trong `work/include/application.hpp`, nối phím `B` với bộ đo và gọi tiếp từng lượt từ event loop.
+
+<CourseWorkFile project="31" step={9} path="include/application.hpp" />
+
+Trong `work/src/main.cpp`, nối chế độ benchmark hữu hạn để còn có thể đo không cần tự bấm phím. Không thêm vòng lặp vô hạn thứ hai.
+
+<CourseWorkFile project="31" step={9} path="src/main.cpp" />
 
 ## Ghép các phần lại
 
-Build Release trước khi đọc runtime, nhưng vẫn chạy correctness ở cả Debug/Release. Bấm B ở C++ hoặc Chạy scaling study trên Canvas. Không đổi seed giữa Direct và BH; nếu report dừng ở deadline 30 giây, ghi chưa hoàn tất, không điền một timing giả cho phần thiếu.
+Dùng cấu hình **Release**. Nhấn `B` một lần, đọc các hàng đã hoàn tất và khả năng dao động ở cùng N. Nếu hết hạn trước hàng cuối, ghi rõ thiếu dữ liệu tại N đó; đừng để chương trình đo lặp hoặc bịa một giá trị vào chỗ trống.
 
-Đường force error ở bài 08 và bảng runtime ở đây là hai thí nghiệm liên quan nhưng khác nhau. Một theta nhanh hơn chỉ có ý nghĩa sau khi bạn biết sai số của nó trên workload cần dùng.
-
-```bash title="Terminal — checkpoint 09"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_31_checkpoint_9
+```sh title="Terminal — chạy phần vừa viết trong work/"
+cmake --build build-work --config Release --target project_31_work --parallel 1
+.\build-work\Release\project_31_work.exe
 ```
-
-Trên Windows chạy ./build/Debug/project_31_checkpoint_9.exe; với Ninja/macOS/Linux, executable nằm trực tiếp trong build. Toàn bộ source và phần so sánh với bài trước ở cuối trang.
 
 ## Thử làm sai để hiểu đúng
 
-1. Đặt timer quanh cả thao tác click, các frame chờ và render. Thay kích thước cửa sổ: runtime có thể đổi dù kernel không đổi, vì phép đo đã lẫn chi phí. Khôi phục timer cho đúng phạm vi.
-2. Chỉ lấy một pass lạnh rồi so với median có warm-up. Một mẫu thiếu ổn định không đủ xếp hạng thuật toán. Trở lại cùng dữ liệu, warm-up và số lần lặp trước khi kết luận.
+So một lần chạy Debug của direct với một lần chạy Release của cây. Phép so đó lẫn cả hai khác biệt. Đo lại cùng cấu hình, cùng N, cùng tập sao rồi mới bàn đến điểm giao chi phí.
 
 ## Tự kiểm tra kết quả
 
-- C++/Canvas ghi riêng N, seed, theta/epsilon và đơn vị thời gian.
-- Direct full pass có N(N−1) work; BH work là exact+aggregate, không phải visitedNodes.
-- Có warm-up, năm mẫu, median/min/max và tree build riêng.
-- Job có tiến độ, dừng được; report timeout không được coi là đã đo đủ.
-- Không assert thứ hạng runtime phụ thuộc phần cứng.
+- Với N = 256 thì một lượt trực tiếp có 65.280 đóng góp; ở N = 4.096 con số là 16.773.120.
+- Bảng phân biệt thời gian dựng cây, trung vị duyệt cây và biên dao động. Không ghi FPS đồ họa thành tốc độ giải lực.
+- Có thể dừng/hủy phép đo; chỉ các hàng đã hoàn tất mới dùng làm bằng chứng.
 
 ## Bài tập mở rộng
 
-Giữ một ca N nhỏ mà BH không nhanh hơn Direct và giải thích chi phí gây ra nó. Project 32 tiếp tục hỏi dữ liệu nằm trong bộ nhớ thế nào; không dùng tối ưu layout để bỏ reference force.
+Với một hàng đã đo, tính hai tỉ số: trực tiếp/duyệt cây và trực tiếp/(dựng + duyệt cây). Tỉ số nào có ích hơn nếu ứng dụng phải dựng lại cây sau **mỗi** bước?
 
-Bài tiếp theo: [Theo dõi năng lượng và tách sai số theo dt](/projects/barnes-hut-nbody/10-hoan-thien-barnes-hut-n-body).
+Học tiếp: [Theo dõi năng lượng và tách sai số theo dt](/projects/barnes-hut-nbody/10-hoan-thien-barnes-hut-n-body).

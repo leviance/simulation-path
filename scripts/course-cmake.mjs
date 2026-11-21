@@ -1,8 +1,9 @@
+import { workbookOption } from "../lib/voxel-workbook.ts";
+
 export function courseCmake(project, { hasSnapshotShaders = false } = {}) {
   const projectNumber = Number(project.id);
-  const voxel = project.sourceSeries === "voxel-expedition";
-  const hasWorkbook = voxel || (projectNumber >= 52 && projectNumber <= 57);
-  const workOption = voxel ? "VOXEL_WORKBOOK" : "COURSE_WORKBOOK";
+  const workOption = workbookOption(project.id);
+  const hasWorkbook = workOption !== null;
   // Seed the learner's tree once; a second configure must never overwrite their edits.
   const workbook = hasWorkbook
     ? `

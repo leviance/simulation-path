@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { readFileSync, readdirSync } from "node:fs";
 import { voxelWorkEdits } from "../lib/voxel-work-edits.ts";
+import { workbookOption } from "../lib/voxel-workbook.ts";
 
 export const textAt = (dir, file) =>
   readFileSync(path.join(dir, file), "utf8").replaceAll("\r", "").trimEnd();
@@ -9,7 +10,7 @@ export const textAt = (dir, file) =>
 // Read the ordered instructions in the lesson, not changedPaths or the final file list.
 export function workPaths(mdx, project, step) {
   const body = mdx.split("## Viết code từng bước")[1].split("## Ghép các phần lại")[0];
-  if (/^5[2-7]$/.test(project)) {
+  if (workbookOption(project) === "COURSE_WORKBOOK") {
     const tags = [
       ...body.matchAll(/<CourseWorkFile project="(\d\d)" step=\{(\d+)\} path="([\w./-]+)"\s*\/>/g),
     ];

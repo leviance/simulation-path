@@ -14,15 +14,14 @@ import {
 import { loadProjectCatalog, workspace } from "./project-catalog.mjs";
 import { installShutdownHandlers, ProcessSupervisor } from "./process-supervisor.mjs";
 import { replayLesson, snapshot, textAt, workPaths } from "./voxel-workbook-replay.mjs";
+import { workbookOption } from "../lib/voxel-workbook.ts";
 
 const [id, sdlDirectory] = process.argv.slice(2);
-const science = /^5[2-7]$/.test(id);
-const project = loadProjectCatalog().find(
-  (p) => p.id === id && (science || p.sourceSeries === "voxel-expedition"),
-);
+const option = workbookOption(id);
+const project = loadProjectCatalog().find((p) => p.id === id && option);
 if (!project || !sdlDirectory || !existsSync(path.join(sdlDirectory, "SDL3Config.cmake")))
   throw Error(
-    "Usage: node --experimental-strip-types scripts/verify-voxel-workbook.mjs <52..64> <installed SDL3 3.4.8 CMake directory>",
+    "Usage: node --experimental-strip-types scripts/verify-voxel-workbook.mjs <11|31|52..64> <installed SDL3 3.4.8 CMake directory>",
   );
 const sdl = realpathSync(sdlDirectory);
 const archive = path.join(workspace, "public", "downloads", project.sourceDirectory + ".zip");
@@ -68,7 +67,7 @@ const configure = (dir, conf) =>
       ".",
       "-B",
       dir,
-      science ? "-DCOURSE_WORKBOOK=ON" : "-DVOXEL_WORKBOOK=ON",
+      "-D" + option + "=ON",
       "-DCOURSE_USE_INSTALLED_SDL3=ON",
       "-DSDL3_DIR=" + sdl,
       "-DCMAKE_BUILD_TYPE=" + conf,
@@ -101,9 +100,10 @@ try {
   await build("build-work", "Release", "_work");
   const flags = ["52", "53", "54"].includes(id) ? ["--frames", "3"] : ["--smoke"];
   if (id === "53" || id === "54") flags.push("--hidden");
-  const observed = science
-    ? /SDL smoke PASS|Completed 3 frame|"frames":3|frames=3/
-    : /PASS native frame:/;
+  const observed =
+    option === "COURSE_WORKBOOK"
+      ? /SDL smoke PASS|Completed 3 frame|"frames":3|frames=3/
+      : /PASS native frame:/;
   assert.match(await run(app, flags, "starter", 15000), observed);
   for (const [index, file] of lessons.entries()) {
     const step = index + 1;
@@ -137,22 +137,42 @@ try {
       /100% tests passed/,
     );
   }
-  if (id === "58") {
-    const surface = path.join(workDir, "include/trail/surface.hpp");
-    const good = readFileSync(surface, "utf8"),
-      bad = good.replace("face < 6", "face < 5");
+  const mistake = {
+    11: [
+      "include/lab.hpp",
+      "cameraPoint.x / cameraPoint.z",
+      "cameraPoint.x",
+      "wrong perspective divisor",
+    ],
+    31: [
+      "include/tree.hpp",
+      "if (sourceIndex == targetIndex)",
+      "if (false)",
+      "counting the target as its own source",
+    ],
+    58: ["include/trail/surface.hpp", "face < 6", "face < 5", "five-sided cube"],
+  }[id];
+  if (mistake) {
+    // Only corrupt the disposable learner copy; keep the bundled solution as an independent control.
+    const [file, expected, incorrect, label] = mistake;
+    const targetFile = path.join(workDir, file);
+    const good = readFileSync(targetFile, "utf8");
+    const bad = good.replace(expected, incorrect);
     assert.notEqual(bad, good);
-    writeFileSync(surface, bad);
+    writeFileSync(targetFile, bad);
     await build("build-work", "Release", "_tests");
     const rejected = await run(
       "ctest",
       ["--test-dir", "build-work", "-C", "Release", "--output-on-failure", "--timeout", "30"],
-      "reject five-sided cube",
+      "reject " + label,
       40_000,
       [8],
     );
     assert.match(rejected, /0% tests passed/);
-    console.log("58: five-face error in work/ rejected; bundled final/ unchanged.");
+    if (id === "11") assert.match(rejected, /FAIL: independent analytic pixel/);
+    if (id === "31") assert.match(rejected, /FAIL: skip exactly one target ID/);
+    assert.equal(textAt(path.join(scratch, "final"), file), good.trimEnd().replaceAll("\r", ""));
+    console.log(id + ": " + label + " in work/ rejected; bundled final/ unchanged.");
   }
   console.log(id + ": learner builds and Debug/Release CTest passed.");
 } finally {

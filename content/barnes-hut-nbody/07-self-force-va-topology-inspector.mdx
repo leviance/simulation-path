@@ -1,24 +1,24 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 # Tìm self-force và lỗi cấu trúc cây
 
 ## Vấn đề cần giải quyết
 
-Một cây vẽ đẹp vẫn có thể giữ body hai lần hoặc cộng mass sai ở lá. Một thiên hà chuyển động được cũng chưa chứng minh traversal không tự tác động. Ta cần những phép kiểm có đáp án, trước khi xem runtime.
+Có hai kiểu lỗi trông giống nhau: sao bị tự hút, hoặc một sao được chèn hai lần vào cây nên hút mọi sao khác mạnh gấp đôi. Kéo camera nhìn các hộp không đủ để phân biệt. Ta sẽ kiểm lần lượt chỗ lưu ID, quan hệ cha–con và tổng khối lượng.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Inspector không gọi traversal để tự chứng minh traversal đúng. Nó đọc storage và aggregates, đối chiếu leaf với bodies thật, kiểm bounds/quan hệ cha con và đếm số lần mỗi index xuất hiện. Cây này được cấp phát theo thứ tự cha trước con: child phải có index lớn hơn parent, sâu hơn một mức và có đúng một cha.
-
-Không được chỉ kiểm root mass bằng tổng child mass: nếu cùng một giá trị sai được lan từ leaf lên root, phép kiểm đó vẫn xanh. Leaf cần một reference độc lập là các body thực trong bucket. COM của leaf có mass khác nhau cũng phải được kiểm.
+Bắt đầu với điều kiện có thể kiểm mà không cần ảnh: mỗi ID xuất hiện đúng một lần trong toàn bộ các lá; ô trong không giữ ID; chỉ số con hợp lệ và hộp con nằm đúng phần tám của cha. Sau đó mới đem tâm khối và khối lượng so với phép cộng từ dưới lên. Những phép kiểm này nói về **cấu trúc**, không thay thế phép đối chiếu gia tốc.
 
 <InteractiveLab demo="barnes-hut-nbody" mode="nbody-self-force" />
 
 ## Viết code từng bước
 
-### Giữ tên cho từng loại lỗi
+### Đặt tên riêng cho từng lỗi
 
-```cpp title="include/tree.hpp — Giữ tên cho từng loại lỗi"
+{/* snippet include/tree.hpp#topology-report */}
+```cpp title="include/tree.hpp — Một báo cáo, nhiều điều kiện độc lập"
 struct BarnesHutTopologyReport {
     bool everyBodyStoredOnce{true};
     bool internalNodesEmpty{true};
@@ -30,141 +30,71 @@ struct BarnesHutTopologyReport {
 };
 ```
 
-Không nén mọi kết quả thành một boolean từ đầu. Storage, child indices/bounds, mass, center of mass và statistics là các hợp đồng khác nhau; tên lỗi giúp biết cần mở phần source nào.
+Báo cáo tách “ID bị trùng” khỏi “tâm khối sai”. Nhờ vậy khi phím kiểm trả lỗi, ta biết nên dò hàm chèn, hàm chia ô hay phép cộng có trọng số.
 
-### Kiểm cấu trúc mà không duyệt theo cạnh hỏng
+### Đếm từng ID ở lá và chặn chỉ số hỏng
 
-```cpp title="include/tree.hpp — Kiểm cấu trúc mà không duyệt theo cạnh hỏng"
-inline BarnesHutTopologyReport inspectMassOctree(
-    const BarnesHutTree& tree,
-    std::span<const Body> bodies
-) {
-    BarnesHutTopologyReport report{};
-    std::vector<int> insertionCounts(bodies.size(), 0);
-    std::vector<int> parentCounts(tree.nodes.size(), 0);
-    std::size_t leaves = 0;
-    std::size_t internalNodes = 0;
-    for (std::size_t nodeIndex = 0; nodeIndex < tree.nodes.size(); ++nodeIndex) {
-        const BarnesHutNode& node = tree.nodes[nodeIndex];
-        if (node.isLeaf()) {
-            ++leaves;
-            double leafMass = 0;
-            Vec3 weightedPosition{};
-            for (const std::size_t bodyIndex : node.bodyIndices) {
-                if (bodyIndex >= bodies.size()) {
-                    report.childIndicesValid = false;
-                } else {
-                    ++insertionCounts[bodyIndex];
-                    leafMass += bodies[bodyIndex].mass;
-                    weightedPosition += bodies[bodyIndex].position * bodies[bodyIndex].mass;
-                    report.childBoundsValid = report.childBoundsValid && pointInsideBounds(bodies[bodyIndex].position, node.bounds);
-                }
-            }
-            report.aggregateMassValid = report.aggregateMassValid && nearlyEqual(leafMass, node.totalMass);
-            if (leafMass > 0) {
-                report.centerOfMassValid = report.centerOfMassValid && length(weightedPosition / leafMass - node.centerOfMass) <= 1e-9;
-            }
-            continue;
-        }
-
-        ++internalNodes;
-        report.internalNodesEmpty = report.internalNodesEmpty && node.bodyIndices.empty();
-        double childMass = 0.0;
-        Vec3 weightedCenter{};
-        for (int octant = 0; octant < 8; ++octant) {
-            const std::size_t childIndex = node.children[octant];
-            if (childIndex >= tree.nodes.size()) {
-                report.childIndicesValid = false;
-                continue;
-            }
-            const BarnesHutNode& child = tree.nodes[childIndex];
-            ++parentCounts[childIndex];
-            report.childIndicesValid = report.childIndicesValid && childIndex > nodeIndex && child.depth == node.depth + 1;
-            report.childBoundsValid = report.childBoundsValid &&
-                sameBounds(child.bounds, barnesHutChildBounds(node.bounds, octant));
-            childMass += child.totalMass;
-            weightedCenter += child.centerOfMass * child.totalMass;
-        }
-        report.aggregateMassValid =
-            report.aggregateMassValid && nearlyEqual(childMass, node.totalMass);
-        if (childMass > 0.0) {
-            report.centerOfMassValid = report.centerOfMassValid &&
-                length(weightedCenter / childMass - node.centerOfMass) <= 1.0e-9;
-        }
+```cpp title="include/tree.hpp — Chỉ đọc ngôi sao nếu ID hợp lệ"
+for (const std::size_t bodyIndex : node.bodyIndices) {
+    if (bodyIndex >= bodies.size()) {
+        report.childIndicesValid = false;
+    } else {
+        ++insertionCounts[bodyIndex];
+        leafMass += bodies[bodyIndex].mass;
+        weightedPosition += bodies[bodyIndex].position * bodies[bodyIndex].mass;
+        report.childBoundsValid = report.childBoundsValid && pointInsideBounds(bodies[bodyIndex].position, node.bounds);
     }
-    report.everyBodyStoredOnce = std::all_of(
-        insertionCounts.begin(),
-        insertionCounts.end(),
-        [](int count) {
-            return count == 1;
-        }
-    );
-    for (std::size_t index = 0; index < parentCounts.size(); ++index) {
-        int expected = 1;
-        if (index == 0) {
-            expected = 0;
-        }
-        report.childIndicesValid = report.childIndicesValid && parentCounts[index] == expected;
-    }
-    report.statisticsMatch = leaves == tree.leafCount &&
-        internalNodes == tree.internalNodeCount &&
-        leaves + internalNodes == tree.nodes.size();
-    return report;
 }
 ```
 
-Inspector đi tuyến tính qua vector nodes. Nó không recurse theo một cạnh có thể tạo chu trình. parentCounts và điều kiện childIndex>nodeIndex phát hiện cạnh ngược hoặc node không có cha; leaf được đối chiếu mass/COM bằng body thật.
+Bộ đếm nằm ngoài node: trùng ID ở **hai lá khác nhau** vẫn bị phát hiện. Kiểm biên trước khi đọc `bodies[bodyIndex]` để trình kiểm tra không tự gây lỗi truy cập.
 
-### Dùng fixture để buộc lỗi lộ ra
+### Đặt cây cạnh dữ liệu gốc
 
-```cpp title="tests/tests.cpp — Dùng fixture để buộc lỗi lộ ra"
-void testMassOctreeTopology() {
-    const std::vector<lab::Body> bodies = lab::makeGalaxyBodies(512, 0x31c0ffeeU);
-    const lab::BarnesHutTree tree = lab::buildMassOctree(bodies);
-    const lab::BarnesHutTopologyReport report = lab::inspectMassOctree(tree, bodies);
-    check(report.everyBodyStoredOnce, "each body index appears in exactly one leaf");
-    check(report.internalNodesEmpty, "internal nodes do not retain body indices");
-    check(report.childIndicesValid, "every child index points to an existing node");
-    check(report.childBoundsValid, "child bounds match their octant bits");
-    check(report.aggregateMassValid, "each internal mass equals the sum of child masses");
-    check(report.centerOfMassValid, "each center of mass is a mass-weighted child average");
-    check(report.statisticsMatch, "stored topology matches reported tree statistics");
-    check(
-        near(tree.nodes[0].totalMass, lab::totalMass(bodies)),
-        "root aggregate mass equals total system mass"
-    );
-}
+```cpp title="tests/tests.cpp — Các điều kiện kiểm trong chương trình C++"
+check(report.everyBodyStoredOnce, "each body index appears in exactly one leaf");
+check(report.internalNodesEmpty, "internal nodes do not retain body indices");
+check(report.childIndicesValid, "every child index points to an existing node");
+check(report.childBoundsValid, "child bounds match their octant bits");
+check(report.aggregateMassValid, "each internal mass equals the sum of child masses");
+check(report.centerOfMassValid, "each center of mass is a mass-weighted child average");
+check(report.statisticsMatch, "stored topology matches reported tree statistics");
 ```
 
-Tests đặt cạnh nhau invariant storage và aggregate. Hãy bổ sung fixture tính tay với mass khác nhau; không chỉ dùng hàng trăm body cùng mass rồi xem mọi cờ đều true. CTest mặc định build final/include nên vẫn chạy được toàn bộ tests ở cuối khóa.
+Những dòng trên nằm trong bộ test đi kèm, không phải mã bạn phải gõ thêm vào vòng vẽ. Khi tự tạo một cây lỗi, nhớ so cả tổng khối lượng và số lượt xuất hiện; tổng khối lượng đúng không đủ bảo đảm từng ID ở đúng nơi.
+
+### Tự ghép trong `work/`
+
+Trong `work/include/tree.hpp`, thêm báo cáo và vòng kiểm cây. Kiểm chỉ số trước khi đi vào con; lỗi trong cây không được làm hỏng luôn lệnh chẩn đoán.
+
+<CourseWorkFile project="31" step={7} path="include/tree.hpp" />
+
+Trong `work/include/application.hpp`, nối phím `V` để chạy trình kiểm trên cây hiện tại và đưa từng kết quả ra thông báo.
+
+<CourseWorkFile project="31" step={7} path="include/application.hpp" />
 
 ## Ghép các phần lại
 
-Ở C++, V chạy inspector và đưa từng nhóm kết quả lên dòng trạng thái. Canvas có nút Kiểm cây và self-force. Fixture một body kiểm force bằng 0, còn fixture hai/ba body kiểm số cụ thể. Những phép kiểm này không thay cho việc thử input, camera và pause trên cửa sổ thật.
+Build, chạy hệ nhỏ và bấm `V`. Đổi seed/preset, bước thêm một nhịp rồi kiểm lại. Nếu báo cáo hợp lệ nhưng mũi tên lực sai, quay lại điều kiện nhận ô ở bài 06 thay vì tiếp tục thay đổi cách vẽ hộp.
 
-Trước khi chạy, dự đoán inspector nào sẽ báo lỗi nếu sửa mass của một leaf nhưng không sửa root. Sau đó dự đoán trường hợp sửa cả leaf lẫn tổ tiên cùng một lượng.
-
-```bash title="Terminal — checkpoint 07"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_31_checkpoint_7
+```sh title="Terminal — chạy phần vừa viết trong work/"
+cmake --build build-work --config Release --target project_31_work --parallel 1
+.\build-work\Release\project_31_work.exe
 ```
-
-Trên Windows chạy ./build/Debug/project_31_checkpoint_7.exe; với Ninja/macOS/Linux, executable nằm trực tiếp trong build. Toàn bộ source và phần so sánh với bài trước ở cuối trang.
 
 ## Thử làm sai để hiểu đúng
 
-1. Trong bản tree dùng riêng cho test, tăng totalMass ở leaf thêm 100. Kiểm inspector có đối chiếu leaf với bodies gốc, thay vì chỉ so parent với children rồi bỏ sót lỗi lan lên. Khôi phục dữ liệu đúng sau test.
-2. Cho một child index trỏ về parent rồi chỉ chạy inspector có giới hạn duyệt. Nó phải báo cycle và kết thúc. Không gọi force traversal trên cây cố ý hỏng; khôi phục index trước khi trở lại mô phỏng.
+Tạo một bản sao nhỏ của cây và lặp một ID ở lá. Kiểm `everyBodyStoredOnce` phải báo sai. Với bản sao khác, sửa một chỉ số con thành ngoài phạm vi: `childIndicesValid` phải báo sai mà phép kiểm vẫn kết thúc. Đừng sửa trực tiếp cây dùng để tính lực cho lần chạy kế tiếp.
 
 ## Tự kiểm tra kết quả
 
-- Fixture mass/COM khác nhau khớp tính tay trong tolerance công bố.
-- Sửa leaf mass, duplicate body index hoặc child index làm đúng cờ kiểm tra chuyển false.
-- Inspector kết thúc với cạnh tự trỏ, không recurse theo đồ thị hỏng.
-- 256 position trùng nhau kết thúc trong giới hạn depth và không sinh NaN/self-force.
+- Phím `V` phân biệt điều kiện đúng/sai trên một cây đã dựng.
+- Một sao riêng lẻ có gia tốc bằng 0. Ở hệ nhiều sao, ô chứa vật đích không bao giờ được thay bằng nguồn tổng.
+- Đặt 256 sao khác ID ở cùng một vị trí. Gia tốc bằng 0 chưa đủ để biết bạn đã bỏ đúng sao: lực tự thân ở đây cũng bằng 0. Với một sao được chọn, bộ đếm phải báo **255** nguồn tính trực tiếp, không phải 256 hay 0.
+- Tâm khối lệch, ID trùng và liên kết con hỏng có thể được thử riêng, không cần chờ quỹ đạo trông bất thường.
 
 ## Bài tập mở rộng
 
-Viết ca một body bị thiếu khỏi mọi leaf và ca một child có hai parent. Kiểm report cho biết vấn đề cấu trúc, không chỉ báo một sai số lực rất lớn.
+Tạo ví dụ ba sao bằng nhau sao cho đánh tráo vị trí hai ID không làm thay đổi tổng khối lượng ở gốc. Điều kiện nào vẫn giúp phát hiện một sao bị chèn sang hộp sai?
 
-Bài tiếp theo: [Đo sai số lực trên cùng một snapshot](/projects/barnes-hut-nbody/08-theta-accuracy-sweep).
+Học tiếp: [Đo sai số lực trên cùng một snapshot](/projects/barnes-hut-nbody/08-theta-accuracy-sweep).

@@ -19,6 +19,9 @@ inline void drawTrails(std::span<std::uint32_t> pixels, int width, int height, c
 // [snippet:drawScene]
 inline void drawScene(std::span<std::uint32_t> pixels, int width, int height, const lab::Simulation& simulation, std::vector<StarLight>& light) {
     drawBodies(pixels, width, height, simulation.bodies, simulation.camera, light);
+#if LAB_CHECKPOINT >= 10
+    if (!simulation.debug) return;
+#endif
     drawTrails(pixels, width, height, simulation);
 #if LAB_CHECKPOINT >= 6
     if (simulation.debug) {
@@ -60,8 +63,25 @@ inline void drawHud(SDL_Renderer* renderer, const lab::Simulation& simulation) {
     if (simulation.direct) {
         solver = "Direct";
     }
+#if LAB_CHECKPOINT >= 10
+    if (!simulation.debug) {
+        SDL_SetRenderDrawColor(renderer, 113, 145, 182, 255);
+        SDL_RenderDebugText(renderer, 26, 592, "FIELD NOTES   /   31                       GRAVITATIONAL SYSTEMS  /  3D");
+        SDL_SetRenderDrawColor(renderer, 241, 226, 202, 255);
+        SDL_SetRenderScale(renderer, 2, 2);
+        SDL_RenderDebugText(renderer, 13, 309, "Barnes-Hut  /  Stellar disk");
+        SDL_SetRenderScale(renderer, 1, 1);
+        SDL_SetRenderDrawColor(renderer, 182, 200, 222, 255);
+        SDL_RenderDebugTextFormat(renderer, 26, 657, "%zu bodies   |   %s   |   step %zu   |   theta %.2f   |   %s   |   selected: #%zu", simulation.bodies.size(), solver, simulation.steps, simulation.theta, motion, simulation.selected);
+        SDL_RenderDebugText(renderer, 26, 710, "F1  Oblique       F2  Face-on       F3  Edge-on       |       Drag to orbit / scroll or W,S to fly");
+        SDL_RenderDebugText(renderer, 26, 736, "Space  Run / pause       N  One step       F  Inspect tree and forces       Home  Return to overview");
+        SDL_RenderDebugText(renderer, 26, 800, simulation.notice.c_str());
+        SDL_RenderDebugText(renderer, 26, 774, "1  Stellar disk    2  Encounter    3  Binary    4  Reference (256)    5  Three bodies");
+        return;
+    }
+#endif
     SDL_RenderDebugTextFormat(renderer, 12, 586, "N=%zu step=%zu t=%.6f dt=%.6f theta=%.2f eps=%.3f | %s | solver=%s", simulation.bodies.size(), simulation.steps, simulation.time, simulation.dt, simulation.theta, simulation.epsilon, motion, solver);
-    SDL_RenderDebugText(renderer, 12, 606, "XYZ / G=0.001 | gold core -> blue: radius 0..0.75 | size: log mass / depth | yellow ring: target");
+    SDL_RenderDebugText(renderer, 12, 606, "XYZ / G=0.001 | warm center -> cool disk: radius proxy | size: log mass / depth | yellow ring: target");
     SDL_RenderDebugTextFormat(renderer, 12, 626, "Camera dolly %.3f (can cross 0) | trails: 24 IDs / 64 samples | debug: opened blue, accepted gold", simulation.camera.distance);
 #if LAB_CHECKPOINT >= 3
     const auto direct = lab::directAcceleration(simulation.bodies, simulation.selected, lab::gravity, simulation.epsilon);

@@ -7,13 +7,13 @@ const project = {
     "Project 10 — Vec3 và hệ trục 3D",
   ],
   summary:
-    "Tự chiếu một điểm 3D lên màn hình, điều khiển bằng WASD/QE và cho điểm bay giữa những khung cảnh có chiều sâu thật.",
+    "Cho một đốm sáng bay qua bốn cổng giống nhau. Bạn tự tính nó hiện ở pixel nào, rồi đo xem điều gì đổi khi đẩy nó ra xa gấp đôi.",
   challenge: {
     timebox: "180–240 phút",
     mission:
-      "Tự xây dựng một mô phỏng SDL3 có một điểm sáng chuyển động trong không gian 3D. Viết phép chiếu perspective, tự xử lý near/far và cho người xem đổi FOV để cảm nhận khoảng cách.",
+      "Dựng một đường chạy có bốn cổng. Đặt một đốm sáng lệch sang phải rồi giữ E để đẩy nó ra xa. Làm sao cho nó nhích về giữa ảnh mà không vẽ sẵn đường đi bằng pixel? Hãy thử tự làm trước khi mở bài 1.",
     outcome:
-      "Viewport là phần chính của cửa sổ: điểm sáng bay giữa lưới và bốn khung 3D cùng kích thước. Có điều khiển tay, quỹ đạo thời gian, kéo điểm ở depth cố định và nút tắt debug để xem cảnh sạch.",
+      "Bạn thấy đèn bay giữa các cổng, dừng nó ở bất kỳ đâu rồi kéo ngang mà không đổi độ sâu. Tắt chữ vẫn đọc được khoảng cách nhờ mặt đường. Bật thước để đối chiếu vị trí bạn vừa đoán với kết quả của chương trình.",
     requirements: [
       "Vẽ marker từ framebuffer chạy được, nối WASD/QE với X/Y/Z bằng delta time; chuyển động chéo không nhanh hơn.",
       "Camera nhìn theo +Z, Y lên trên; world point và camera point là hai biến riêng.",
@@ -33,6 +33,7 @@ const project = {
     definitionOfDone: [
       "FOV 90°, viewport (10,20,800,600), P=(1,0.5,4) chiếu tới (485,282.5); Z=8 tới (447.5,301.25).",
       "FOV rộng hơn làm displacement giảm; đổi aspect giữ đúng focal theo chiều dọc.",
+      "Vòng B nằm giữa tâm ảnh và đèn A khi chỉ nhân đôi Z tính từ camera. Nếu B vượt far thì báo không đo được, không đánh dấu sai ở tâm.",
       "Z≤0, 0<Z<near, Z>far và NaN/Inf không đi vào phép chia/rasterizer. Near/far chính xác vẫn được nhận.",
       "Round-trip dưới 10⁻⁹ cho điểm visible ở nhiều FOV/aspect/depth; lỗi không xác định không được coi là zero.",
       "Input tay tạm dừng quỹ đạo; thả chuột nhận mẫu cuối; blur/resize/reset đổi state không giữ capture cũ.",

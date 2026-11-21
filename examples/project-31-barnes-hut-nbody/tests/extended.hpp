@@ -12,7 +12,10 @@ void testProductContract() {
     std::vector<lab::Body> coincident(256, {{}, {}, 1});
     const auto bounded = lab::buildMassOctree(coincident);
     check(bounded.maximumObservedDepth <= 16, "coincident tree respects depth bound");
-    check(lab::length(lab::barnesHutAcceleration(bounded, coincident, 17, 1.2, 1, 0.1).acceleration) == 0, "coincident finite zero acceleration");
+    const auto coincidentForce = lab::barnesHutAcceleration(bounded, coincident, 17, 1.2, 1, 0.1);
+    check(lab::length(coincidentForce.acceleration) == 0, "coincident finite zero acceleration");
+    // Gia tốc vẫn bằng 0 nếu lỡ cộng cả chính mình. Vì thế phải đếm nguồn, không chỉ so vector.
+    check(coincidentForce.metrics.exactInteractions == coincident.size() - 1, "skip exactly one target ID among coincident bodies");
     auto corrupt = bounded;
     corrupt.nodes.back().totalMass += 100;
     check(!lab::inspectMassOctree(corrupt, coincident).aggregateMassValid, "inspector checks leaf mass against actual bodies");

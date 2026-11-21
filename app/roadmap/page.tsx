@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "@/components/app-link";
+import { RoadmapLearningRoutes } from "@/components/roadmap-learning-routes";
 import { courseParts, currentProjects, projects, revisedProjects } from "@/lib/course";
 
 export const metadata: Metadata = {
@@ -64,6 +65,7 @@ export default function RoadmapPage() {
           </span>
         </div>
       </header>
+      <RoadmapLearningRoutes />
       <div className="roadmap-layout">
         <aside className="roadmap-jump">
           <b>{courseParts.length} CHẶNG</b>

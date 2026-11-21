@@ -43,15 +43,19 @@ struct Viewport {
     double height = 585.0;
 };
 #if LAB_CHECKPOINT >= 1
+// [snippet preview-xy]
 inline Vec2 previewPoint(Vec3 point) {
     return {point.x * 70.0, point.y * 70.0};
 }
+// [/snippet preview-xy]
 #endif
 #if LAB_CHECKPOINT >= 2
 // Camera nhìn theo +Z, Y lên trên và chưa xoay: chỉ cần đổi gốc.
+// [snippet camera-origin]
 inline Vec3 worldToCamera(Vec3 worldPoint, const Camera3D& camera) {
     return {worldPoint.x - camera.position.x, worldPoint.y - camera.position.y, worldPoint.z - camera.position.z};
 }
+// [/snippet camera-origin]
 
 inline Vec3 cameraToWorld(Vec3 point, const Camera3D& camera) {
     return {point.x + camera.position.x, point.y + camera.position.y, point.z + camera.position.z};
@@ -59,9 +63,11 @@ inline Vec3 cameraToWorld(Vec3 point, const Camera3D& camera) {
 #endif
 #if LAB_CHECKPOINT >= 3
 // Chỉ gọi sau khi xác nhận depth nằm trong [near, far].
+// [snippet divide]
 inline Vec2 perspectiveDivide(Vec3 cameraPoint) {
     return {cameraPoint.x / cameraPoint.z, cameraPoint.y / cameraPoint.z};
 }
+// [/snippet divide]
 enum class ProjectionStatus {
     Visible,
     BehindCamera,
@@ -85,9 +91,11 @@ inline bool validLens(const PerspectiveLens& lens, const Viewport& viewport) {
 }
 #endif
 #if LAB_CHECKPOINT >= 4
+// [snippet fov-scale]
 inline double verticalFocalScale(const PerspectiveLens& lens) {
     return 1.0 / std::tan(lens.verticalFovRadians * 0.5);
 }
+// [/snippet fov-scale]
 
 inline Vec2 cameraToNdc(Vec3 cameraPoint, const PerspectiveLens& lens, double aspectRatio) {
     const Vec2 divided = perspectiveDivide(cameraPoint);
@@ -101,9 +109,11 @@ inline Vec2 ndcToScreen(Vec2 ndc, const Viewport& viewport) {
 }
 #endif
 #if LAB_CHECKPOINT >= 3
+// [snippet ndc-limits]
 inline bool isInsideNdc(Vec2 ndc) {
     return std::abs(ndc.x) <= 1.0 && std::abs(ndc.y) <= 1.0;
 }
+// [/snippet ndc-limits]
 
 inline ProjectionResult projectPerspective(Vec3 worldPoint, const Camera3D& camera, const PerspectiveLens& lens, const Viewport& viewport) {
     ProjectionResult result;
@@ -194,9 +204,11 @@ inline bool clipDepth(Vec3& start, Vec3& end, const PerspectiveLens& lens) {
 }
 #endif
 #if LAB_CHECKPOINT >= 6
+// [snippet flight]
 inline Vec3 flightPoint(double timeSeconds) {
     return {std::sin(0.9 * timeSeconds) * 2.2, std::cos(1.3 * timeSeconds) * 1.3, 6.0 + std::sin(0.55 * timeSeconds) * 4.0};
 }
+// [/snippet flight]
 
 inline double advanceFlightTime(double current, double deltaTime) {
     if (!std::isfinite(current) || !std::isfinite(deltaTime) || deltaTime <= 0.0) {
@@ -207,6 +219,7 @@ inline double advanceFlightTime(double current, double deltaTime) {
 #endif
 #if LAB_CHECKPOINT >= 7
 // Một screen point là một tia; cần depth mới chọn được duy nhất một điểm.
+// [snippet drag-plane]
 inline std::optional<Vec3> screenToCameraAtDepth(Vec2 screen, double depth, const PerspectiveLens& lens, const Viewport& viewport) {
     if (!validLens(lens, viewport) || !std::isfinite(screen.x) || !std::isfinite(screen.y) || !std::isfinite(depth) || depth < lens.nearPlane || depth > lens.farPlane) {
         return std::nullopt;
@@ -220,8 +233,39 @@ inline std::optional<Vec3> screenToCameraAtDepth(Vec2 screen, double depth, cons
     }
     return point;
 }
+// [/snippet drag-plane]
 #endif
 #if LAB_CHECKPOINT >= 8
+struct DepthMeasurement {
+    Vec2 first;
+    Vec2 second;
+    double firstOffset;
+    double secondOffset;
+};
+
+// Đo trên ảnh thật, không lấy kết quả A rồi chia hai để "dự đoán" kết quả B.
+// [snippet depth-ruler]
+inline std::optional<DepthMeasurement> measureDoubleDepth(Vec3 point, const Camera3D& camera, const PerspectiveLens& lens, const Viewport& viewport) {
+    const auto first = projectPerspective(point, camera, lens, viewport);
+    if (first.status != ProjectionStatus::Visible || !first.screen) {
+        return std::nullopt;
+    }
+
+    Vec3 deeper = first.cameraPoint;
+    deeper.z *= 2.0;
+    const auto second = projectPerspective(cameraToWorld(deeper, camera), camera, lens, viewport);
+    if (second.status != ProjectionStatus::Visible || !second.screen) {
+        return std::nullopt;
+    }
+
+    const Vec2 center{viewport.x + viewport.width * 0.5, viewport.y + viewport.height * 0.5};
+    const double firstOffset = std::hypot(first.screen->x - center.x, first.screen->y - center.y);
+    const double secondOffset = std::hypot(second.screen->x - center.x, second.screen->y - center.y);
+    return DepthMeasurement{*first.screen, *second.screen, firstOffset, secondOffset};
+}
+// [/snippet depth-ruler]
+
+// [snippet round-trip]
 inline std::optional<double> projectionRoundTripError(Vec3 point, const Camera3D& camera, const PerspectiveLens& lens, const Viewport& viewport) {
     const ProjectionResult projected = projectPerspective(point, camera, lens, viewport);
     if (projected.status != ProjectionStatus::Visible || !projected.screen) {
@@ -233,5 +277,6 @@ inline std::optional<double> projectionRoundTripError(Vec3 point, const Camera3D
     }
     return std::hypot(restored->x - projected.cameraPoint.x, restored->y - projected.cameraPoint.y, restored->z - projected.cameraPoint.z);
 }
+// [/snippet round-trip]
 #endif
 } // namespace lab

@@ -7,14 +7,33 @@
 #include <string_view>
 
 int main(int argc, char** argv) {
-    const bool smoke = argc > 1 && std::string_view(argv[1]) == "--smoke";
+    bool smoke = false;
+    const char* capturePath = nullptr;
+#if LAB_CHECKPOINT >= 8
+    bool startWithRuler = false;
+#endif
+    for (int i = 1; i < argc; ++i) {
+        const std::string_view argument = argv[i];
+        if (argument == "--smoke") {
+            smoke = true;
+        } else if (argument == "--capture" && i + 1 < argc) {
+            capturePath = argv[++i];
+#if LAB_CHECKPOINT >= 8
+        } else if (argument == "--ruler") {
+            startWithRuler = true;
+#endif
+        } else {
+            std::cerr << "Unknown or incomplete option: " << argument << '\n';
+            return EXIT_FAILURE;
+        }
+    }
     // Khởi tạo SDL và bảng logic cố định; resize/HiDPI chỉ đổi presentation.
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::cerr << SDL_GetError() << '\n';
         return EXIT_FAILURE;
     }
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-    if (smoke) {
+    if (smoke || capturePath) {
         flags |= SDL_WINDOW_HIDDEN;
     }
     SDL_Window* window = SDL_CreateWindow("Project 11 - Perspective Point", 1100, 800, flags);
@@ -48,6 +67,9 @@ int main(int argc, char** argv) {
 
     lab::Framebuffer image;
     lab::Scene scene;
+#if LAB_CHECKPOINT >= 8
+    scene.measureDepth = startWithRuler;
+#endif
     bool running = true;
     bool failed = false;
     bool dirty = true;
@@ -177,6 +199,11 @@ int main(int argc, char** argv) {
                 if (event.key.key == SDLK_F && !event.key.repeat) {
                     scene.debug = !scene.debug;
                 }
+                if (event.key.key == SDLK_M && !event.key.repeat) {
+                    scene.measureDepth = !(scene.measureDepth && scene.debug);
+                    scene.debug = true;
+                    scene.paused = true;
+                }
 #endif
             }
 #if LAB_CHECKPOINT >= 7
@@ -281,12 +308,15 @@ int main(int argc, char** argv) {
         }
         if (dirty) {
             lab::renderScene(image, scene);
-            if (!SDL_UpdateTexture(texture, nullptr, image.pixels.data(), lab::Framebuffer::width * static_cast<int>(sizeof(std::uint32_t))) || !lab::presentFramebuffer(renderer, texture, scene)) {
+            if (!SDL_UpdateTexture(texture, nullptr, image.pixels.data(), lab::Framebuffer::width * static_cast<int>(sizeof(std::uint32_t))) || !lab::presentFramebuffer(renderer, texture, scene, capturePath)) {
                 std::cerr << SDL_GetError() << '\n';
                 failed = true;
                 break;
             }
             dirty = false;
+            if (capturePath) {
+                running = false;
+            }
         }
         SDL_Delay(16);
     }
@@ -300,6 +330,9 @@ int main(int argc, char** argv) {
     SDL_Quit();
     if (failed) {
         return EXIT_FAILURE;
+    }
+    if (smoke) {
+        std::cout << "SDL smoke PASS: " << frames << " frames\n";
     }
     return EXIT_SUCCESS;
 }

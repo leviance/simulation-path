@@ -1,3 +1,4 @@
+import { galaxyCameraView } from "./projection.ts";
 import {
   makeGalaxyBodies,
   buildMassOctree,
@@ -132,7 +133,7 @@ export function createGalaxy(stage = 10, preset = 0): GalaxyScene {
     preset,
     bodies,
     tree: buildMassOctree(bodies),
-    camera: { yaw: 0.15, pitch: -0.85, distance: 2.6, x: 0, y: 0 },
+    camera: galaxyCameraView(),
     theta: 0.5,
     epsilon: 0.02,
     dt: 1 / 240,

@@ -1,10 +1,11 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 # Kéo điểm mà không làm mất depth
 
 ## Vấn đề cần giải quyết
 
-Điểm sáng đã xuất hiện ở đúng vị trí. Bây giờ ta muốn nhấn chuột lên nó và kéo sang chỗ khác. Chuột chỉ cho hai tọa độ màn hình, trong khi vị trí cần sửa lại có ba tọa độ. Ta phải chọn thêm một điều kiện mới tìm được đáp án duy nhất.
+Hai chiếc cổng ở xa gần khác nhau có thể che lên cùng một pixel. Vậy khi bạn nắm đốm sáng bằng chuột, chương trình nên đặt nó ở đâu trong không gian? Chỉ tọa độ chuột thì chưa đủ. Ta sẽ mượn thêm một con số mà chương trình biết chắc: độ sâu của đốm sáng ngay lúc bạn nhấn xuống.
 
 Hãy nhớ tia ở bài 3: nhiều điểm trên cùng tia từ camera đều có chung ảnh trên màn hình. Trong bài này, điều kiện được chọn là giữ nguyên độ sâu của điểm lúc bắt đầu kéo.
 
@@ -28,20 +29,21 @@ Nhấn lên mép marker không được làm tâm nhảy đến chuột. Lưu gr
 
 ## Viết code từng bước
 
-Tiếp tục sửa **starter/include** và **starter/src**, giữ lại mã đã hoàn thành ở bài trước. Tiêu đề code block ghi đường dẫn tính từ thư mục Starter. Nếu bài yêu cầu thay một hàm, hãy thay hàm cũ, không dán thêm một bản trùng tên.
+Mở lại thư mục `work/` của bài trước. Các đường dẫn như `include/lab.hpp` dưới đây đều tính từ **work/**. Configure lại sẽ không ghi đè phần bạn đã viết.
 
-Build và chạy đúng mã bạn vừa viết:
+Thử nắm ở mép, không phải chính giữa đốm sáng. Nếu nó giật vào dưới con trỏ ngay khi nhấn, phép chiếu có thể vẫn đúng; cái bị mất là khoảng cách giữa chỗ nắm và tâm đốm sáng. Lưu riêng khoảng cách này và Z ban đầu.
 
-```powershell title="Chạy mã đang học trong Starter"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_11_starter --parallel 2
-.\build\Debug\project_11_starter.exe
+```powershell title="Chạy chương trình đang viết (Windows, Visual Studio)"
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
+cmake --build build-work --config Debug --target project_11_work --parallel 1
+.\build-work\Debug\project_11_work.exe
 ```
 
-**Checkpoint 07 là bản tham khảo sau bài này**, không phải nơi tự nhận thay đổi từ Starter. Khi cần đối chiếu, mở checkpoints/07 hoặc build riêng target project_11_checkpoint_7; lệnh đó chạy mã mẫu, không kiểm chứng phần bạn vừa sửa.
+`checkpoints/07` là bản tham khảo sau bài này. Khi muốn thử phần mình vừa sửa, hãy chạy `project_11_work`, không chạy checkpoint.
 
 ### Bước 1 — Viết inverse với depth bắt buộc
 
+{/* snippet include/lab.hpp#drag-plane */}
 ```cpp title="include/lab.hpp — chọn một điểm trên tia tại depth đã biết"
 inline std::optional<Vec3> screenToCameraAtDepth(Vec2 screen, double depth, const PerspectiveLens& lens, const Viewport& viewport) {
     if (!validLens(lens, viewport) || !std::isfinite(screen.x) || !std::isfinite(screen.y) || !std::isfinite(depth) || depth < lens.nearPlane || depth > lens.farPlane) {
@@ -135,6 +137,18 @@ SDL_ConvertEventToRenderCoordinates đổi vị trí từ window/HiDPI/letterbox
 
 Canvas dùng cùng inverse, nhưng pointerId và setPointerCapture của trình duyệt thay SDL_MouseID. Đừng nhân DPR vào mouse thêm lần nữa: DPR chỉ dành cho backing buffer.
 
+### Tự ghép trong `work/`
+
+Các đoạn trên giải thích phần mới. Khi viết, mở từng tệp dưới đây để thấy chỗ cần sửa trong **bản của bài trước**. Đoạn nào đã gõ rồi thì chỉ đối chiếu, không chèn thêm lần nữa.
+
+Đi từ pixel về NDC rồi tìm điểm trên mặt phẳng Z đã chọn.
+
+<CourseWorkFile project="11" step={7} path="include/lab.hpp" />
+
+Chỉ bắt đầu kéo khi nhấn trúng; giữ người sở hữu thao tác, vị trí nắm và độ sâu cho tới khi thả.
+
+<CourseWorkFile project="11" step={7} path="src/main.cpp" />
+
 ## Ghép các phần lại
 
 Còn ba chỗ phải gọi cancelDrag để state cũ không sống quá lâu:
@@ -155,7 +169,7 @@ if (event.type == SDL_EVENT_WINDOW_RESIZED || event.type == SDL_EVENT_WINDOW_PIX
 
 Ngay khi bắt đầu kéo, paused=true và dirty=true: HUD phải hiện PAUSED kể cả khi bạn mới nhấn giữ mà chưa di chuyển chuột. Trong Canvas, phím N/nút tiến một bước cũng nhả capture trước khi đặt point theo quỹ đạo; mẫu thả của thao tác cũ không được ghi đè bước mới.
 
-Build lại project_11_starter, pause, nhấn lệch tâm marker khoảng 10 pixel rồi kéo. Marker phải giữ khoảng lệch đó và giữ nguyên cameraDepth. Nhấn lên nền không làm điểm nhảy.
+Build lại `project_11_work`, pause, nhấn lệch tâm marker khoảng 10 pixel rồi kéo. Marker phải giữ khoảng lệch đó và giữ nguyên cameraDepth. Nhấn lên nền không làm điểm nhảy.
 
 Blur/hidden/resize, reset, preset và input thay camera/lens đều hủy capture. Nếu không hủy, thao tác cũ có thể tiếp tục dùng cameraDepth hoặc offset đã lỗi thời. Trong Canvas, đổi bất kỳ slider/preset nào cũng kết thúc drag; phím Tab vẫn ra khỏi Canvas bình thường.
 

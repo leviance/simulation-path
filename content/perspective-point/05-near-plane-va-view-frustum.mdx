@@ -1,10 +1,11 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 # Chặn điểm không thể nhìn thấy
 
 ## Vấn đề cần giải quyết
 
-Đến đây ta đã chiếu được một điểm, đổi FOV và thay hình dạng viewport. Giờ hãy đưa điểm về sát camera: nếu cứ chia cho Z, vị trí trên màn hình có thể lớn tới mức không còn dùng để vẽ được.
+Ta sắp dựng bốn cổng giống hệt nhau trên một đoạn đường. Chỉ cần nhìn kích thước của chúng, bạn sẽ đoán được cổng nào ở gần. Nhưng có một cái bẫy: nếu một đầu vạch sàn lọt ra sau camera, có nên xóa luôn cả vạch không? Làm vậy, sàn sẽ biến mất ngay dưới chân người xem.
 
 Các nhánh kiểm tra ở bài 3 đã ngăn trường hợp đó. Bài này ta sẽ kiểm chứng từng nhánh, rồi giải quyết một bài toán mới: **một đoạn thẳng có đầu nằm ngoài vùng nhìn thì có phải bỏ cả đoạn không?** Từ cách cắt đoạn đó, ta mới dựng thêm lưới sàn và bốn khung 3D để điểm sáng có cảnh nền đối chiếu.
 
@@ -27,17 +28,17 @@ Với behind/near/far/invalid, screen và NDC chưa tồn tại. Với outside, 
 
 ## Viết code từng bước
 
-Tiếp tục sửa **starter/include** và **starter/src**, giữ lại mã đã hoàn thành ở bài trước. Tiêu đề code block ghi đường dẫn tính từ thư mục Starter. Nếu bài yêu cầu thay một hàm, hãy thay hàm cũ, không dán thêm một bản trùng tên.
+Mở lại thư mục `work/` của bài trước. Các đường dẫn như `include/lab.hpp` dưới đây đều tính từ **work/**. Configure lại sẽ không ghi đè phần bạn đã viết.
 
-Build và chạy đúng mã bạn vừa viết:
+Ta có hai việc khác nhau: bỏ một **điểm** không thể thấy và giữ lại phần còn nhìn thấy của một **đoạn thẳng**. Hãy thử với một vạch sàn duy nhất trước khi nhân nó thành lưới. Cả bốn cổng sẽ dùng cùng một hàm vẽ đoạn ấy.
 
-```powershell title="Chạy mã đang học trong Starter"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_11_starter --parallel 2
-.\build\Debug\project_11_starter.exe
+```powershell title="Chạy chương trình đang viết (Windows, Visual Studio)"
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
+cmake --build build-work --config Debug --target project_11_work --parallel 1
+.\build-work\Debug\project_11_work.exe
 ```
 
-**Checkpoint 05 là bản tham khảo sau bài này**, không phải nơi tự nhận thay đổi từ Starter. Khi cần đối chiếu, mở checkpoints/05 hoặc build riêng target project_11_checkpoint_5; lệnh đó chạy mã mẫu, không kiểm chứng phần bạn vừa sửa.
+`checkpoints/05` là bản tham khảo sau bài này. Khi muốn thử phần mình vừa sửa, hãy chạy `project_11_work`, không chạy checkpoint.
 
 ### Bước 1 — Đọc kết quả trước khi quyết định vẽ
 
@@ -75,6 +76,7 @@ if (cameraPoint.z > lens.farPlane) {
 
 Behind khác before-near: Z âm nghĩa là điểm nằm sau camera; Z dương nhưng nhỏ hơn near nghĩa là điểm vẫn ở phía trước, chỉ là quá gần. Tương tự, vượt far khác ra ngoài cạnh trái/phải của ảnh. Hai loại lỗi cần hai phép kiểm khác nhau.
 
+{/* snippet include/lab.hpp#ndc-limits */}
 ```cpp title="include/lab.hpp — hai biên góc nhìn trong NDC"
 inline bool isInsideNdc(Vec2 ndc) {
     return std::abs(ndc.x) <= 1.0 && std::abs(ndc.y) <= 1.0;
@@ -132,11 +134,34 @@ inline bool clipDepth(Vec3& start, Vec3& end, const PerspectiveLens& lens) {
 
 DepthPlane ghi rõ hai thông tin: vị trí mặt phẳng và chiều được giữ lại. Near dùng direction=+1, far dùng direction=−1. Cả hai đầu mút nằm ngoài cùng một phía thì bỏ. Nếu chỉ một đầu mút nằm ngoài, thay nó bằng giao điểm. Gán Z của giao điểm đúng bằng plane.depth để tránh sai số rất nhỏ khiến guard loại nhầm điểm vừa cắt.
 
-Guard đầu hàm cũng kiểm near/far: NaN không làm phép so sánh `<` trả true, nên chỉ kiểm hai đầu mút là chưa đủ. Hàm trả false khi không thể tạo đoạn hữu hạn; caller không dùng lại đoạn đó để vẽ.
+Ngay đầu hàm phải kiểm cả hai giới hạn `near` và `far`. Nếu một giới hạn là NaN, phép so sánh `<` sẽ không phát hiện được nó. Khi hàm trả `false`, bỏ qua đoạn này và vẽ tiếp đoạn kế bên.
 
 ### Bước 4 — Chiếu một đoạn thẳng, rồi ghép thành cảnh nền
 
-clipScreen và drawLine đã có trong Starter. Thêm hai hàm dưới vào view.hpp, **trước renderScene**. line3D nhận hai đầu mút world; chỉ sau khi đổi về camera và cắt depth, ta mới được phép chiếu chúng:
+Bạn đã có `clipScreen` và `drawLine` trong khung ban đầu. Trong `work/include/view.hpp`, viết `drawScreenSegment` để hai hàm đó làm việc với nhau. Hàm nhận tọa độ **đã chiếu**: nó cắt ở mép khung trước, rồi mới làm tròn về chỉ số pixel. Ở khung rộng 800 px, cạnh hình học có thể là x=800, nhưng chỉ số cuối chỉ là 799.
+
+```cpp title="include/view.hpp — từ đoạn trên ảnh tới pixel hợp lệ"
+inline void drawScreenSegment(Framebuffer& image, Vec2 from, Vec2 to, const Viewport& viewport, std::uint32_t color) {
+    if (!clipScreen(from, to, viewport)) {
+        return;
+    }
+    // Biên phải và biên dưới là tọa độ hình học, không phải chỉ số pixel cuối.
+    const double left = std::max(0.0, std::ceil(viewport.x));
+    const double top = std::max(0.0, std::ceil(viewport.y));
+    const double right = std::min(static_cast<double>(Framebuffer::width - 1), std::ceil(viewport.x + viewport.width) - 1.0);
+    const double bottom = std::min(static_cast<double>(Framebuffer::height - 1), std::ceil(viewport.y + viewport.height) - 1.0);
+    if (right < left || bottom < top) {
+        return;
+    }
+    const int x0 = static_cast<int>(std::lround(std::clamp(from.x, left, right)));
+    const int y0 = static_cast<int>(std::lround(std::clamp(from.y, top, bottom)));
+    const int x1 = static_cast<int>(std::lround(std::clamp(to.x, left, right)));
+    const int y1 = static_cast<int>(std::lround(std::clamp(to.y, top, bottom)));
+    drawLine(image, x0, y0, x1, y1, color);
+}
+```
+
+Bây giờ đặt `line3D` trước `renderScene`. Hai đầu **đầu vào** vẫn ở trong không gian 3D. Đổi chúng về hệ camera, cắt phần nằm ngoài khoảng độ sâu, rồi chiếu phần còn lại. Vì đã trừ vị trí camera một lần, bước chiếu ở đây dùng camera tại gốc:
 
 ```cpp title="include/view.hpp — giữ phần đoạn nhìn thấy được"
 inline void line3D(Framebuffer& image, Vec3 start, Vec3 end, const Scene& scene, std::uint32_t color) {
@@ -152,12 +177,7 @@ inline void line3D(Framebuffer& image, Vec3 start, Vec3 end, const Scene& scene,
     if (!a.screen || !b.screen) {
         return;
     }
-    Vec2 from = *a.screen;
-    Vec2 to = *b.screen;
-    if (!clipScreen(from, to, viewport)) {
-        return;
-    }
-    drawLine(image, static_cast<int>(std::lround(from.x)), static_cast<int>(std::lround(from.y)), static_cast<int>(std::lround(to.x)), static_cast<int>(std::lround(to.y)), color);
+    drawScreenSegment(image, *a.screen, *b.screen, viewport, color);
 }
 ```
 
@@ -165,34 +185,86 @@ Vì start/end đã ở camera space, hai lời gọi projectPerspective dùng ca
 
 ```cpp title="include/view.hpp — lưới sàn và bốn khung cùng kích thước"
 inline void drawDepthScene(Framebuffer& image, const Scene& scene) {
-    // Các đường này là hình học 3D thật, không phải lưới 2D dán sau marker.
+    constexpr std::uint32_t rail = 0x426474FFu;
+    constexpr std::uint32_t reflector = 0x75C9D1FFu;
+
+    // Mỗi ô sàn rộng một đơn vị. Cả vạch giữa lẫn hai mép đường đều nằm trên sàn.
     for (int x = -4; x <= 4; ++x) {
         const double position = static_cast<double>(x);
-        line3D(image, {position, -1.5, 1.0}, {position, -1.5, 16.0}, scene, kGrid);
+        line3D(image, {position, kRunwayFloor, 1.0}, {position, kRunwayFloor, 16.0}, scene, kGrid);
     }
     for (int z = 1; z <= 16; ++z) {
         const double depth = static_cast<double>(z);
-        line3D(image, {-4.0, -1.5, depth}, {4.0, -1.5, depth}, scene, kGrid);
+        line3D(image, {-4.0, kRunwayFloor, depth}, {4.0, kRunwayFloor, depth}, scene, kGrid);
+        if (z < 16) {
+            line3D(image, {0.0, kRunwayFloor, depth}, {0.0, kRunwayFloor, depth + 0.45}, scene, kGhost);
+        }
     }
-    // Bốn khung cùng kích thước world, xa dần về +Z.
+    for (double side : {-1.0, 1.0}) {
+        const double edge = side * 1.90;
+        line3D(image, {edge, kRunwayFloor, 1.0}, {edge, kRunwayFloor, 16.0}, scene, rail);
+    }
+
+    // Dựng cùng một cổng bốn lần: chỉ thay Z, không tự thu nhỏ cổng ở xa.
     for (double z : {2.0, 4.0, 8.0, 12.0}) {
-        line3D(image, {-3.0, -1.5, z}, {-3.0, 2.0, z}, scene, kGhost);
-        line3D(image, {-3.0, 2.0, z}, {3.0, 2.0, z}, scene, kGhost);
-        line3D(image, {3.0, 2.0, z}, {3.0, -1.5, z}, scene, kGhost);
+        line3D(image, {-1.55, 1.10, z}, {1.55, 1.10, z}, scene, kGhost);
+        for (double side : {-1.0, 1.0}) {
+            const double post = side * 1.90;
+            const double shoulder = side * 1.55;
+            line3D(image, {post, kRunwayFloor, z}, {post, 0.75, z}, scene, kGhost);
+            line3D(image, {post, 0.75, z}, {shoulder, 1.10, z}, scene, reflector);
+            line3D(image, {post, kRunwayFloor, z}, {side * 1.63, kRunwayFloor, z}, scene, reflector);
+        }
     }
+
+    // Đặt bộ trục ở chân cổng thứ hai: nhìn được cả trục Z vì nó lệch trục nhìn.
     if (scene.debug) {
-        line3D(image, {-2.0, 0.0, 4.0}, {2.0, 0.0, 4.0}, scene, kAxisX);
-        line3D(image, {0.0, -1.5, 4.0}, {0.0, 2.0, 4.0}, scene, kShape);
-        line3D(image, {0.0, 0.0, 1.0}, {0.0, 0.0, 16.0}, scene, kAxisY);
+        const Vec3 foot{-1.90, kRunwayFloor, 4.0};
+        line3D(image, foot, {-1.35, kRunwayFloor, 4.0}, scene, kAxisX);
+        line3D(image, foot, {-1.90, kRunwayFloor + 0.55, 4.0}, scene, kAxisY);
+        line3D(image, foot, {-1.90, kRunwayFloor, 4.55}, scene, kAxisZ);
     }
 }
 ```
 
-Vòng lặp đầu vẽ đường dọc sàn, vòng thứ hai vẽ đường ngang. Ba cạnh của mỗi khung có cùng tọa độ X/Y; chỉ Z thay đổi. Chúng thu nhỏ dần vì cùng đi qua phép chia cho Z, không phải vì ta vẽ sẵn bốn hình chữ nhật có kích thước pixel khác nhau.
+Vòng lặp đầu vẽ đường dọc sàn, vòng thứ hai vẽ đường ngang. Các chân cổng, vai vát và thanh ngang giữ nguyên tọa độ X/Y ở cả bốn cổng; chỉ Z thay đổi. Chúng thu nhỏ dần vì cùng đi qua phép chia cho Z, không phải vì ta vẽ sẵn bốn hình chữ nhật có kích thước pixel khác nhau.
+
+### Tự ghép trong `work/`
+
+Các đoạn trên giải thích phần mới. Khi viết, mở từng tệp dưới đây để thấy chỗ cần sửa trong **bản của bài trước**. Đoạn nào đã gõ rồi thì chỉ đối chiếu, không chèn thêm lần nữa.
+
+Cắt đoạn theo hai mặt phẳng giới hạn độ sâu; giữ phần nằm giữa chúng.
+
+<CourseWorkFile project="11" step={5} path="include/lab.hpp" />
+
+Chiếu hai đầu đã cắt, kẻ vạch sàn rồi dựng cùng một cổng ở bốn vị trí. Đường dóng dưới đèn chỉ xuất hiện khi xem số đo.
+
+<CourseWorkFile project="11" step={5} path="include/view.hpp" />
+
+Ghi chú sáu tình huống mẫu và hai cặp phím chỉnh vùng nhìn.
+
+<CourseWorkFile project="11" step={5} path="include/presentation.hpp" />
+
+Nối phím chỉnh near/far. Làm đốm sáng biến mất rồi kiểm xem mặt đường có còn không.
+
+<CourseWorkFile project="11" step={5} path="src/main.cpp" />
 
 ## Ghép các phần lại
 
-Trong renderScene, thêm drawDepthScene ngay trước phép chiếu điểm. Vẽ nền trước, vẽ marker sau để đường lưới không tô đè lên điểm sáng:
+Đặt `kRunwayFloor = -1.5` như trong phần sửa của `view.hpp`. Từ đèn, kẻ một đường dóng thẳng xuống sàn để người xem phân biệt đèn đang ở cao hay ở xa: chân đường dóng giữ nguyên X và Z, chỉ đổi Y. Đây là dấu để đọc vị trí, không phải một chiếc bóng được tính bằng ánh sáng.
+
+```cpp title="include/view.hpp — chân đèn trên mặt đường"
+inline void drawPlumbLine(Framebuffer& image, const Scene& scene) {
+    // Chân đường dóng giữ nguyên X và Z của đèn; chỉ thay Y bằng cao độ mặt sàn.
+    const Vec3 foot{scene.point.x, kRunwayFloor, scene.point.z};
+    constexpr std::uint32_t guide = 0x967B55FFu;
+    line3D(image, scene.point, foot, scene, guide);
+    line3D(image, {foot.x - 0.10, foot.y, foot.z}, {foot.x + 0.10, foot.y, foot.z}, scene, guide);
+    line3D(image, {foot.x, foot.y, foot.z - 0.10}, {foot.x, foot.y, foot.z + 0.10}, scene, guide);
+}
+```
+
+Trong `renderScene`, vẽ sàn và cổng trước, sau đó mới chiếu đèn, vẽ đường dóng nếu bật debug và đặt đốm sáng lên trên. Thứ tự này giúp vạch đường không tô đè lên đèn:
 
 ```cpp title="include/view.hpp — gọi cảnh nền trước marker"
 drawDepthScene(image, scene);
@@ -220,7 +292,7 @@ if (event.key.key == SDLK_APOSTROPHE) {
 }
 ```
 
-Build lại project_11_starter rồi thử F1–F6: mặc định visible, xa gấp đôi vẫn visible, trước near, sau camera, vượt far và ngoài góc nhìn. Canvas có cùng sáu preset. Các phím [ và ] chỉnh near trong [0.1,2]; ; và dấu nháy đơn chỉnh far trong [8,24].
+Build lại `project_11_work` rồi thử F1–F6: mặc định visible, xa gấp đôi vẫn visible, trước near, sau camera, vượt far và ngoài góc nhìn. Canvas có cùng sáu preset. Các phím [ và ] chỉnh near trong [0.1,2]; ; và dấu nháy đơn chỉnh far trong [8,24].
 
 Chỉ điểm sáng bị loại; nền vẫn vẽ phần còn trong frustum. Đừng xóa cả scene khi point không visible. HUD hiển thị nguyên status, NDC/pixel “undefined” nếu chưa chia; nhờ đó ta phân biệt “marker không xuất hiện” với “renderer bị hỏng”.
 

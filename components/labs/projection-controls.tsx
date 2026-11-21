@@ -12,6 +12,7 @@ interface ProjectionControlsProps {
   togglePause: () => void;
   step: () => void;
   toggleDebug: () => void;
+  toggleMeasure: () => void;
   editPoint: (axis: keyof Vec3, value: number) => void;
   editCamera: (axis: keyof Vec3, value: number) => void;
   editLens: (key: keyof PointLens, value: number) => void;
@@ -26,6 +27,7 @@ export function ProjectionControls({
   togglePause,
   step,
   toggleDebug,
+  toggleMeasure,
   editPoint,
   editCamera,
   editLens,
@@ -39,13 +41,13 @@ export function ProjectionControls({
           <option value="" disabled>
             Chọn thí nghiệm
           </option>
-          {["Mặc định", "Xa gấp đôi", "Trước near", "Sau camera", "Vượt far", "Ngoài khung"].map(
-            (name, i) => (
+          {["Mặc định", "Xa gấp đôi", "Trước near", "Sau camera", "Vượt far", "Ngoài khung"]
+            .slice(0, stage < 3 ? 2 : 6)
+            .map((name, i) => (
               <option key={i} value={i}>
                 {name}
               </option>
-            ),
-          )}
+            ))}
         </select>
       </label>
       {(["x", "y", "z"] as const).map((axis) => (
@@ -137,9 +139,14 @@ export function ProjectionControls({
         </>
       )}
       {stage >= 8 && (
-        <button aria-pressed={scene.debug} onClick={toggleDebug}>
-          {scene.debug ? "Ẩn debug" : "Hiện debug"}
-        </button>
+        <>
+          <button aria-pressed={scene.measureDepth && scene.debug} onClick={toggleMeasure}>
+            Đo ở hai độ sâu
+          </button>
+          <button aria-pressed={scene.debug} onClick={toggleDebug}>
+            {scene.debug ? "Ẩn debug" : "Hiện debug"}
+          </button>
+        </>
       )}
       <button onClick={() => reset()}>Đặt lại</button>
     </div>

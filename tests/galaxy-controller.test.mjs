@@ -11,7 +11,7 @@ import {
 import { startGalaxyJob } from "../lib/labs/galaxy/jobs.ts";
 import * as measurementRuntime from "../lib/labs/galaxy/jobs.ts";
 import { pickGalaxy } from "../components/labs/galaxy-view.ts";
-import { dollyGalaxyCamera } from "../lib/labs/galaxy/projection.ts";
+import { dollyGalaxyCamera, galaxyCameraView } from "../lib/labs/galaxy/projection.ts";
 import { performGalaxyAction, disposeGalaxy } from "../components/labs/galaxy-actions.ts";
 const file = "barnes-hut-nbody-lab.tsx";
 
@@ -92,6 +92,7 @@ test("P31 actual controller keeps target/camera edits separate from physics and 
     startGalaxyJob,
     performGalaxyAction,
     dollyGalaxyCamera,
+    galaxyCameraView,
     requestEpoch: { current: 0 },
     mounted: { current: true },
     jobsRuntime: { current: measurementRuntime },
@@ -200,6 +201,7 @@ test("P31 actual keyboard preserves browser shortcuts, gates lessons and dispose
     release: () => {},
     act: (...args) => calls.push(args),
     dollyGalaxyCamera,
+    galaxyCameraView,
     publish: () => {},
   });
   const event = (key, extra = {}) => ({
@@ -303,6 +305,7 @@ test("P31 actual wheel handler supports dolly, preserves browser zoom and remove
     size: { height: 570 },
     release() {},
     dollyGalaxyCamera,
+    galaxyCameraView,
     publish: () => published++,
   });
   const cleanup = effect();

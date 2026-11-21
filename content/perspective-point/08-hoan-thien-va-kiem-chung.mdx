@@ -1,12 +1,13 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 # Hoàn thiện demo và kiểm chứng
 
 ## Vấn đề cần giải quyết
 
-Hãy cho điểm bay, tạm dừng rồi kéo nó tới một vị trí khác. Nếu các thao tác đều chạy, ta đã có sản phẩm để xem thử. Nhưng nhìn bằng mắt vẫn khó phát hiện một dấu trừ sai hay việc quên cộng viewport origin.
+Bạn sẽ mang hàm chiếu sang bài tam giác xoay. Trước khi dùng nó ba lần cho ba đỉnh, hãy thử chứng minh nó đúng với **một** điểm. Đừng vội nhìn các con số: chọn nơi đốm sáng sẽ xuất hiện nếu đưa nó ra xa gấp đôi, rồi mới bật thước để kiểm tra dự đoán.
 
-Bài cuối sẽ thêm chế độ ẩn thông tin debug để quan sát cảnh, sau đó kiểm công thức bằng một ví dụ tính tay. Cuối bài có toàn bộ mã nguồn chạy độc lập; bạn cũng sẽ biết cách chạy tests trên chính Starter mình vừa viết, thay vì chỉ kiểm bản mẫu.
+Bài cuối sẽ thêm chế độ ẩn thông tin debug để quan sát cảnh, sau đó kiểm công thức bằng một ví dụ tính tay. Cuối bài có toàn bộ mã nguồn chạy độc lập; bạn cũng sẽ biết cách chạy tests trên chính những file mình vừa viết trong `work/`, thay vì chỉ kiểm bản mẫu.
 
 ## Hiểu ý tưởng trước khi viết code
 
@@ -27,23 +28,23 @@ Lỗi round-trip chỉ có nghĩa khi point visible và inverse có kết quả.
 
 ## Viết code từng bước
 
-Tiếp tục sửa **starter/include** và **starter/src**, giữ lại mã đã hoàn thành ở bài trước. Tiêu đề code block ghi đường dẫn tính từ thư mục Starter. Nếu bài yêu cầu thay một hàm, hãy thay hàm cũ, không dán thêm một bản trùng tên.
+Mở lại thư mục `work/` của bài trước. Các đường dẫn như `include/lab.hpp` dưới đây đều tính từ **work/**. Configure lại sẽ không ghi đè phần bạn đã viết.
 
-Build và chạy đúng mã bạn vừa viết:
+Tách ảnh để ngắm khỏi lớp dùng để đo. Phím F tắt các dấu phụ. Phím M dừng chuyển động và bật thước: A là đốm sáng thật; vòng rỗng B đánh dấu nơi nó **sẽ** xuất hiện ở độ sâu gấp đôi. B không phải đốm sáng thứ hai trong cảnh.
 
-```powershell title="Chạy mã đang học trong Starter"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_11_starter --parallel 2
-.\build\Debug\project_11_starter.exe
+```powershell title="Chạy chương trình đang viết (Windows, Visual Studio)"
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
+cmake --build build-work --config Debug --target project_11_work --parallel 1
+.\build-work\Debug\project_11_work.exe
 ```
 
-**Checkpoint 08 là bản tham khảo sau bài này**, không phải nơi tự nhận thay đổi từ Starter. Khi cần đối chiếu, mở checkpoints/08 hoặc build riêng target project_11_checkpoint_8; lệnh đó chạy mã mẫu, không kiểm chứng phần bạn vừa sửa.
+`checkpoints/08` là bản tham khảo sau bài này. Khi muốn thử phần mình vừa sửa, hãy chạy `project_11_work`, không chạy checkpoint.
 
 ### Bước 1 — Tắt debug mà vẫn giữ cảnh 3D
 
 ```cpp title="include/presentation.hpp — HUD chỉ là lớp bổ sung"
 if (!scene.debug) {
-    return SDL_RenderPresent(renderer);
+    return finishFrame(renderer, capturePath);
 }
 ```
 
@@ -84,6 +85,7 @@ Tests còn kiểm near/far chính xác, invalid FOV/viewport/NaN, giao điểm c
 
 ### Bước 3 — Bổ sung round-trip, không lạm dụng nó
 
+{/* snippet include/lab.hpp#round-trip */}
 ```cpp title="include/lab.hpp — không báo lỗi bằng zero khi phép đo chưa xác định"
 inline std::optional<double> projectionRoundTripError(Vec3 point, const Camera3D& camera, const PerspectiveLens& lens, const Viewport& viewport) {
     const ProjectionResult projected = projectPerspective(point, camera, lens, viewport);
@@ -100,45 +102,85 @@ inline std::optional<double> projectionRoundTripError(Vec3 point, const Camera3D
 
 Chạy trên nhiều FOV, aspect và depth hợp lệ. Mục tiêu error nhỏ hơn 10⁻⁹ world; nó bổ sung cho numeric oracle, không thay thế oracle.
 
+### Bước 4 — Hai lần chiếu, một phép đo
+
+Lấy A từ kết quả chiếu hiện tại. Tạo B bằng cách nhân đôi **Z tính từ camera**, giữ X và Y, rồi đưa B qua đúng hàm chiếu đã dùng cho A. Vì tâm ảnh không nhất thiết là (0,0), phải trừ tâm trước khi đo. Không cần tính tỉ số: khi đèn nằm trên trục nhìn thì cả hai khoảng cách đều bằng 0.
+
+{/* snippet include/lab.hpp#depth-ruler */}
+```cpp title="include/lab.hpp — đo khoảng cách từ tâm tới hai ảnh"
+inline std::optional<DepthMeasurement> measureDoubleDepth(Vec3 point, const Camera3D& camera, const PerspectiveLens& lens, const Viewport& viewport) {
+    const auto first = projectPerspective(point, camera, lens, viewport);
+    if (first.status != ProjectionStatus::Visible || !first.screen) {
+        return std::nullopt;
+    }
+
+    Vec3 deeper = first.cameraPoint;
+    deeper.z *= 2.0;
+    const auto second = projectPerspective(cameraToWorld(deeper, camera), camera, lens, viewport);
+    if (second.status != ProjectionStatus::Visible || !second.screen) {
+        return std::nullopt;
+    }
+
+    const Vec2 center{viewport.x + viewport.width * 0.5, viewport.y + viewport.height * 0.5};
+    const double firstOffset = std::hypot(first.screen->x - center.x, first.screen->y - center.y);
+    const double secondOffset = std::hypot(second.screen->x - center.x, second.screen->y - center.y);
+    return DepthMeasurement{*first.screen, *second.screen, firstOffset, secondOffset};
+}
+```
+
+Trong bài kiểm số ở trên, tâm là (410,320). Đo lần lượt hai đoạn (75,−37.5) và (37.5,−18.75): độ dài xấp xỉ 83.85 và 41.93 px. Nếu B đã vượt mặt phẳng xa, hãy trả về `std::nullopt`; một kết quả không đo được khác với một khoảng cách bằng 0.
+
+### Tự ghép trong `work/`
+
+Các đoạn trên giải thích phần mới. Khi viết, mở từng tệp dưới đây để thấy chỗ cần sửa trong **bản của bài trước**. Đoạn nào đã gõ rồi thì chỉ đối chiếu, không chèn thêm lần nữa.
+
+Chiếu A và B riêng rẽ, đo từ tâm viewport; không lấy kết quả A chia hai để làm đáp án B.
+
+<CourseWorkFile project="11" step={8} path="include/lab.hpp" />
+
+Lưu trạng thái bật thước riêng với trạng thái chạy quỹ đạo.
+
+<CourseWorkFile project="11" step={8} path="include/scene.hpp" />
+
+Chỉ dựng vòng B nếu cả hai vị trí đều nhìn thấy. Tắt debug phải giữ nguyên cổng và đèn.
+
+<CourseWorkFile project="11" step={8} path="include/view.hpp" />
+
+Ghi hai khoảng cách theo pixel. Nếu không đo được, cho biết vì sao.
+
+<CourseWorkFile project="11" step={8} path="include/presentation.hpp" />
+
+Nối phím M với thước, phím F với lớp thông tin; vẫn kéo được đốm sáng sau khi đo.
+
+<CourseWorkFile project="11" step={8} path="src/main.cpp" />
+
 ## Ghép các phần lại
 
-**Project 11 đã hoàn chỉnh.** Scene có point 3D thật, perspective tự viết, cảnh nền world, WASD/QE, camera tịnh tiến, FOV/aspect, near/far, quỹ đạo, pause/step/reset/preset, kéo chuột và clean/debug mode.
+### Chạy bản bạn vừa viết
 
-ZIP chứa README, CMakeLists.txt, starter, tám checkpoint, final và tests. Phần **Toàn bộ mã nguồn của dự án** phía dưới hiển thị đủ file, không chỉ một hàm rời. CMake dùng C++20, khóa SDL 3.4.8 và link SDL3::SDL3. Mặc định build target final; bật BUILD_CHECKPOINTS khi học từng bước.
+Bấm F1 rồi M (Canvas: **Đo ở hai độ sâu**). Đốm màu hổ phách là A; nhìn dọc đường thước từ tâm ảnh đến A, bạn sẽ gặp vòng B ở giữa. Kéo đèn ra sát trục nhìn: cả hai dấu dồn về tâm. Tăng Z cho tới khi B vượt `far`: vòng phải biến mất, không được nhảy về góc cửa sổ.
 
-```powershell title="Build tất cả target và kiểm chứng hai cấu hình"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 30
-.\build\Debug\project_11_final.exe
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 30
-.\build\Release\project_11_final.exe
+```powershell title="Kiểm chính work/ ở cả hai cấu hình"
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
+cmake --build build-work --config Debug --target project_11_work project_11_tests --parallel 1
+ctest --test-dir build-work -C Debug --output-on-failure --timeout 30
+cmake --build build-work --config Release --target project_11_work project_11_tests --parallel 1
+ctest --test-dir build-work -C Release --output-on-failure --timeout 30
 ```
 
-### Kiểm tra đúng mã bạn đã viết
+Không cần đổi đường dẫn include trong CMake. Với `COURSE_WORKBOOK=ON`, CTest biên dịch bằng `work/include`. Bộ test đầy đủ dùng các hàm của bài 8, nên chỉ chạy nó khi đã hoàn tất bước này.
 
-CTest mặc định dùng final/include để kiểm bản mẫu đi kèm ZIP. Kết quả đó **không chứng minh Starter của bạn đúng**. Khi Starter đã hoàn thành đủ tám bài, mở CMakeLists.txt trong thư mục ZIP đã giải nén và đổi đúng dòng include của target tests:
+### Mở bản hoàn chỉnh để đối chiếu
 
-```cmake title="CMakeLists.txt — chạy tests với mã đang học"
-target_include_directories(project_11_tests PRIVATE starter/include)
+Phần **Toàn bộ mã nguồn của dự án** ở cuối trang và thư mục `final/` trong [ZIP Project 11](/downloads/project-11-perspective-point.zip) đều chứa ứng dụng C++ hoàn chỉnh. Để chạy mẫu trên Windows, dùng một thư mục build riêng:
+
+```powershell title="Chạy bản final đi cùng ZIP"
+cmake -S . -B build-final
+cmake --build build-final --config Release --target project_11_final --parallel 1
+.\build-final\Release\project_11_final.exe
 ```
 
-Dòng cũ kết thúc bằng final/include. Không đổi include của các target khác. Configure lại rồi build cả Starter lẫn tests:
-
-```powershell title="Kiểm chứng Starter ở Debug và Release"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_11_starter project_11_tests --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 30
-cmake --build build --config Release --target project_11_starter project_11_tests --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 30
-```
-
-Ở các bài đầu, Starter chưa có đủ hàm để dùng toàn bộ tests cuối project; hãy kiểm bằng các quan sát trong bài. Sau bài 8, test phải chạy trực tiếp trên Starter. Muốn kiểm lại bản mẫu final, đổi include về final/include và configure lại.
-
-Không cần tự viết lại các file từ trí nhớ: final là bản hoàn chỉnh. lab.hpp giữ math/guard/inverse, scene.hpp giữ state/quỹ đạo/preset, framebuffer.hpp và view.hpp vẽ CPU, presentation.hpp đưa texture/chữ lên SDL, main.cpp quản lý input/lifecycle. Canvas không thay executable này.
-
-Giới hạn có chủ ý: camera chưa xoay, marker là đĩa biểu diễn một point chứ không phải sphere mesh, scene wireframe chưa xử lý che khuất. Window resize letterbox bảng logic, V/Aspect mới đổi hình dạng viewport thật. Các giới hạn này không làm mất phép chiếu x/z,y/z đã tự xây.
+Đừng vội thêm camera xoay hay Z-buffer. Bài này đã trả lời xong câu hỏi *một điểm hiện ở đâu*. Bài 12 sẽ xoay ba đỉnh trong không gian rồi đưa **từng đỉnh** qua cùng hàm chiếu; khi ấy mới cần bàn đến hình của tam giác.
 
 ## Thử làm sai để hiểu đúng
 
@@ -150,14 +192,13 @@ Giới hạn có chủ ý: camera chưa xoay, marker là đĩa biểu diễn m�
 
 ## Tự kiểm tra kết quả
 
-- Numeric oracle đúng ở FOV90°, viewport origin khác 0; tăng depth gấp đôi giảm displacement một nửa.
-- Depth/lens/viewport invalid không tới rasterizer; near/far boundary đúng.
-- Round-trip được kiểm nhiều lens/aspect/depth, không tự báo zero cho điểm bị loại.
-- Ảnh CPU clean vẫn có grid và marker; behind không vẽ marker.
-- Cùng elapsed cho cùng quỹ đạo; manual input dừng auto, dt stall có cap.
+- Với FOV 90° và viewport lệch gốc, A nằm ở (485, 282.5), B ở (447.5, 301.25). B nằm giữa tâm và A, không phải giữa góc cửa sổ và A.
+- Đặt đèn đúng trên mặt phẳng gần hoặc xa: vẫn thấy nó nếu X/Y nằm trong khung. Đặt sau camera: không vẽ nó.
+- Chiếu rồi dựng ngược điểm ở nhiều góc nhìn. Một điểm bị loại phải báo “không xác định”, không được báo sai số bằng 0.
+- Tắt debug vẫn thấy đèn và mặt đường. Khi chỉnh đèn bằng tay, đồng hồ phải dừng.
 - Starter, tám checkpoint, final và tests build Debug/Release; CTest chạy không cần window.
-- Hidden --smoke kiểm init/present/resize/thoát, không thay kiểm thử mouse/keyboard/DPI trực tiếp.
-- QA desktop còn cần thả chuột ngoài, mất focus, chuyển bài, reduced-motion và reload; không khẳng định đã kiểm nếu chưa mở server.
+- Chọn điểm trên trục: A và B đều cách tâm 0 px. Chọn điểm mà B vượt `far`: phải thấy “không đo được”.
+- Thử kéo rồi thả ngoài cửa sổ; khi quay lại, đốm sáng không còn đi theo chuột.
 
 ## Bài tập mở rộng
 

@@ -5,9 +5,10 @@
 #include <string_view>
 
 namespace project31 {
-inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* texture, bool smoke, bool workflow) {
+inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Texture* texture, bool smoke, bool workflow, const char* capturePath, int view) {
     lab::Simulation simulation{};
     simulation.reset();
+    simulation.camera = lab::galaxyView(view);
     std::vector<std::uint32_t> pixels(1120 * 570);
     std::vector<StarLight> light(pixels.size());
     std::array<double, 12> previousFrame{};
@@ -35,7 +36,7 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
     lab::EnergyJob energy{};
     std::vector<lab::DiagnosticSample> history{};
     std::vector<lab::TimestepRow> timestepRows{};
-    energy.start(simulation);
+    if (!capturePath) energy.start(simulation);
 #endif
 
     const auto cancel = [&]() {
@@ -73,7 +74,7 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
         const double dy = double(y - previousY);
         if (dragButton == SDL_BUTTON_LEFT) {
             simulation.camera.yaw += dx * 0.006;
-            simulation.camera.pitch = std::clamp(simulation.camera.pitch + dy * 0.006, -1.4, 1.4);
+            simulation.camera.pitch = std::clamp(simulation.camera.pitch + dy * 0.006, -1.5707963267948966, 1.5707963267948966);
         } else {
             const double panScale = std::max(0.3, std::abs(simulation.camera.distance));
             simulation.camera.target.x -= dx * panScale / 570.0;
@@ -150,8 +151,12 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
                     } else {
                         simulation.paused = !simulation.paused;
                     }
-                } else if (key == SDLK_HOME) {
-                    simulation.camera = {};
+                } else if (key == SDLK_HOME || key == SDLK_F1 || key == SDLK_F2 || key == SDLK_F3) {
+                    release();
+                    int angle = 0;
+                    if (key == SDLK_F2) angle = 1;
+                    if (key == SDLK_F3) angle = 2;
+                    simulation.camera = lab::galaxyView(angle);
                 } else if (key == SDLK_W || key == SDLK_S || key == SDLK_Q || key == SDLK_Z) {
                     double direction = -1.0;
                     if (key == SDLK_W || key == SDLK_Z) {
@@ -171,7 +176,7 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
                     if (key == SDLK_UP) {
                         change = -change;
                     }
-                    simulation.camera.pitch = std::clamp(simulation.camera.pitch + change, -1.4, 1.4);
+                    simulation.camera.pitch = std::clamp(simulation.camera.pitch + change, -1.5707963267948966, 1.5707963267948966);
                 } else if (key == SDLK_COMMA || key == SDLK_PERIOD) {
                     std::size_t change = 1;
                     if (key == SDLK_COMMA) {
@@ -383,6 +388,15 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
             SDL_RenderDebugTextFormat(renderer, 12, 210 + float(i * 19), "Binary T=1 dt=%.6f error=%.3e dE/E0=%.3e", row.dt, row.positionError, row.energyDrift);
         }
 #endif
+        if (capturePath) {
+            SDL_Surface* surface = SDL_RenderReadPixels(renderer, nullptr);
+            if (!surface) throw std::runtime_error(SDL_GetError());
+            const bool saved = SDL_SavePNG(surface, capturePath);
+            SDL_DestroySurface(surface);
+            if (!saved) throw std::runtime_error(SDL_GetError());
+            std::cout << "P31 snapshot: " << simulation.bodies.size() << " bodies; view=" << view << '\n';
+            break;
+        }
         SDL_RenderPresent(renderer);
         SDL_Delay(1);
         ++frames;
@@ -391,7 +405,7 @@ inline int runApplication(SDL_Window* window, SDL_Renderer* renderer, SDL_Textur
         finishedWorkflow = simulation.steps >= 2;
 #endif
         if ((smoke && !workflow && frames >= 4) || (workflow && finishedWorkflow)) {
-            std::cout << "P31 N=" << simulation.bodies.size() << " steps=" << simulation.steps << " seed=" << lab::galaxySeed << '\n';
+            std::cout << "SDL smoke PASS: P31 N=" << simulation.bodies.size() << " steps=" << simulation.steps << " seed=" << lab::galaxySeed << '\n';
             break;
         }
         if ((smoke || workflow) && SDL_GetTicks() - started > 10000) {

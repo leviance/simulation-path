@@ -1,3 +1,5 @@
+import { sampleGalaxyPoint } from "./galaxy/seed.ts";
+
 export interface Vec3 {
   x: number;
   y: number;
@@ -140,65 +142,20 @@ export function makeGalaxyBodies(count: number, seed: number): Body3D[] {
     },
   ];
 
-  const diskRadius = (sample: number) => {
-    const scale = 0.36,
-      maximum = 1.4;
-    const limit = 1 - (1 + maximum / scale) * Math.exp(-maximum / scale);
-    let low = 0,
-      high = maximum;
-    for (let iteration = 0; iteration < 16; iteration++) {
-      const middle = (low + high) * 0.5;
-      const cumulative = 1 - (1 + middle / scale) * Math.exp(-middle / scale);
-      if (cumulative < sample * limit) low = middle;
-      else high = middle;
-    }
-    return 0.2 + (low + high) * 0.5;
-  };
-
-  for (let index = 1; index < safeCount; index += 1) {
-    // Seeded morphology, not a path imposed by the renderer or integrator.
-    const bulge = index % 3 === 0;
-    const halo = !bulge && index % 11 === 0;
-    const radialSample = random.unit();
-    const radius = bulge
-      ? 0.06 + Math.pow(radialSample, 1.1) * 0.55
-      : halo
-        ? 0.5 + radialSample * 0.9
-        : diskRadius(radialSample);
-    const angularSample = random.unit();
-    const scatter = random.unit();
-    let angle = 0;
-    if (bulge || halo) angle = angularSample * Math.PI * 2;
-    else if (angularSample < 0.22) angle = (angularSample / 0.22) * Math.PI * 2;
-    else {
-      const firstArm = angularSample < 0.64;
-      const winding = firstArm ? 3.4 : 2.6;
-      const phase = firstArm ? 0 : 3.7;
-      angle = phase + winding * Math.log((radius + 0.12) / 0.32);
-      angle += 0.14 * Math.sin(radius * 8 + phase);
-      angle += (scatter - 0.5) * (0.22 + 0.35 * radius);
-      if (angularSample > 0.9) angle += 0.3 + 0.3 * radius;
-    }
-    const heightSample = random.unit() * 2 - 1;
-    const planarRadius =
-      bulge || halo ? radius * Math.sqrt(1 - heightSample * heightSample) : radius;
-    const thickness =
-      bulge || halo
-        ? radius * heightSample * (bulge ? 0.85 : 1)
-        : 0.28 * heightSample * Math.abs(heightSample) * (1.3 - 0.35 * radius);
+  for (let id = 1; id < safeCount; id++) {
+    const point = sampleGalaxyPoint(id, random),
+      r = point.speedRadius;
     const mass = ((0.7 + random.unit() * 0.6) * 120) / (safeCount - 1);
-    const orbitalSpeed = Math.sqrt((0.001 * (120 + 120 * Math.min(1, radius * radius))) / radius);
-    const speedJitter = 0.92 + random.unit() * 0.16;
+    const enclosedMass = 120 + 120 * Math.min(1, r * r);
+    const speed = Math.sqrt((0.001 * enclosedMass) / r) * (0.92 + 0.16 * random.unit());
+    const cosine = Math.cos(point.angle),
+      sine = Math.sin(point.angle);
     bodies.push({
-      position: {
-        x: Math.cos(angle) * planarRadius,
-        y: Math.sin(angle) * planarRadius,
-        z: thickness,
-      },
+      position: { x: cosine * point.planarRadius, y: sine * point.planarRadius, z: point.height },
       velocity: {
-        x: -Math.sin(angle) * orbitalSpeed * speedJitter,
-        y: Math.cos(angle) * orbitalSpeed * speedJitter,
-        z: (random.unit() - 0.5) * (bulge || halo ? 0.5 : 0.06),
+        x: -sine * speed,
+        y: cosine * speed,
+        z: (random.unit() - 0.5) * point.verticalSpread,
       },
       mass,
     });

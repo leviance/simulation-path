@@ -4,6 +4,7 @@
 namespace lab {
 #if LAB_CHECKPOINT >= 9
 // [snippet:RuntimeRow]
+// [snippet runtime-row]
 struct RuntimeRow {
     std::size_t count{};
     double directMedian{};
@@ -18,6 +19,7 @@ struct RuntimeRow {
     std::size_t treeWork{};
 };
 
+// [/snippet runtime-row]
 // [/snippet:RuntimeRow]
 
 // [snippet:RuntimeJob]

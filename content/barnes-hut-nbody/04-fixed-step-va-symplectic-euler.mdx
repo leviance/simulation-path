@@ -1,30 +1,55 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 # Tiến thời gian mà không trộn hai snapshot
 
 ## Vấn đề cần giải quyết
 
-Bây giờ mới cho state tiến triển. Một frame render không phải một bước vật lý: nó có thể chậm vì vẽ, resize hoặc làm phép đo. Nếu lấy frame time tùy ý làm dt, bạn đã đổi thí nghiệm mỗi khi máy bận.
+Đến đây thiên hà sáng nhưng vẫn đứng yên. Muốn cho các sao đi tiếp một nhịp, ta phải trả lời hai câu khác nhau: chúng bị kéo theo hướng nào ở thời điểm này, và sau khoảng `dt` thì chúng ở đâu? Trộn hai câu trong một vòng lặp sẽ khiến kết quả phụ thuộc thứ tự sao.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Ta dùng symplectic Euler: tính toàn bộ a từ position cũ, cập nhật velocity, rồi dùng velocity mới cho position. Đây là integrator bậc một, không phải lời hứa bảo toàn energy chính xác.
+Hình dung đang chụp hai tấm ảnh, ở $t$ và $t+\Delta t$. Tất cả gia tốc phải được tính từ tấm thứ nhất. Khi đủ hết, cập nhật $\mathbf v_{n+1}=\mathbf v+\mathbf a\,\Delta t$, rồi $\mathbf x_{n+1}=\mathbf x+\mathbf v_{n+1}\,\Delta t$. Đây là symplectic Euler, dùng **vận tốc vừa cập nhật** trong phép tính vị trí.
 
-$$
-\mathbf v_{n+1}=\mathbf v_n+\mathbf a(\mathbf p_n)\Delta t,\qquad \mathbf p_{n+1}=\mathbf p_n+\mathbf v_{n+1}\Delta t.
-$$
-
-Một accumulator thông thường biến frame time thành nhiều fixed step. Ở hệ lớn, ứng dụng còn chia ngay một force pass qua nhiều frame. Scheduler ưu tiên hoàn tất một bước trên snapshot cố định, có budget mỗi đợt. Simulated time có thể chậm hơn thời gian thực; không cố bù lag bằng vòng lặp vô hạn.
-
-Checkpoint 04 dùng direct ở N=256. Chưa tăng lên hàng nghìn trước khi có Barnes–Hut, nhưng nguyên tắc commit state đã phải đúng ở đây.
+Nếu cửa sổ cần nhận chuột giữa chừng, ta giữ những gia tốc đã tính và tính tiếp sau. Ngân sách vài mili giây chỉ để trả quyền cho vòng xử lý sự kiện, không phải `dt` của thiên hà. Trong lúc dở bước, không sao nào được nhảy trước sao khác.
 
 <InteractiveLab demo="barnes-hut-nbody" mode="nbody-fixed-step" />
 
 ## Viết code từng bước
 
-### Giữ thứ tự cập nhật rõ ràng
+### Bắt đầu một bước trên ảnh cũ
 
-```cpp title="include/lab.hpp — Giữ thứ tự cập nhật rõ ràng"
+```cpp title="include/simulation.hpp — Chừa một ô gia tốc cho mỗi sao"
+inline void beginPhysics(Simulation& simulation) {
+    // Freeze this snapshot until all accelerations are ready. No in-place update.
+    simulation.rebuild();
+    simulation.pendingAccelerations.assign(simulation.bodies.size(), {});
+    simulation.nextTarget = 0;
+    simulation.physicsPending = true;
+}
+```
+
+Từ lúc `physicsPending` bật đến khi bước hoàn tất, `bodies` là đầu vào chỉ đọc của phép tính lực. `nextTarget` nhớ chỉ số cần làm tiếp.
+
+### Hết lượt tính thì nhường cho cửa sổ
+
+```cpp title="include/simulation.hpp — Tạm dừng công việc, chưa dời sao"
+while (simulation.nextTarget < simulation.bodies.size()) {
+    const std::size_t target = simulation.nextTarget;
+    simulation.pendingAccelerations[target] = directAcceleration(simulation.bodies, target, gravity, simulation.epsilon).acceleration;
+    ++simulation.nextTarget;
+    if (std::chrono::steady_clock::now() >= deadline) {
+        return false;
+    }
+}
+```
+
+Trả `false` ở đây chỉ nói *chưa tính hết*. Lần sau tiếp tục từ `nextTarget`; không xóa các gia tốc đã tích. Nếu tăng thời gian vẽ, bước có thể mất thêm vài khung hình, nhưng thời gian vật lý của nó vẫn như cũ.
+
+### Cập nhật vận tốc trước, vị trí sau
+
+{/* snippet include/lab.hpp#kick-drift */}
+```cpp title="include/lab.hpp — Một bước symplectic Euler"
 inline void integrateSymplecticEuler(
     std::vector<Body>& bodies,
     std::span<const Vec3> accelerations,
@@ -40,83 +65,53 @@ inline void integrateSymplecticEuler(
 }
 ```
 
-Hai dòng không được tùy tiện đảo chỗ. acceleration[index] thuộc snapshot cũ; velocity mới được dùng cho position mới. Kiểm kích thước vector và dt trước khi truy cập.
-
-### Mở bước chưa được commit
-
-```cpp title="include/simulation.hpp — Mở bước chưa được commit"
-inline void beginPhysics(Simulation& simulation) {
-    // Freeze this snapshot until all accelerations are ready. No in-place update.
-    simulation.rebuild();
-    simulation.pendingAccelerations.assign(simulation.bodies.size(), {});
-    simulation.nextTarget = 0;
-    simulation.physicsPending = true;
-}
+```cpp title="include/simulation.hpp — Chỉ tiến đồng hồ sau khi bước hoàn tất"
+integrateSymplecticEuler(simulation.bodies, simulation.pendingAccelerations, simulation.dt);
+simulation.physicsPending = false;
+simulation.time += simulation.dt;
+++simulation.steps;
+simulation.rebuild();
 ```
 
-pendingAccelerations có một ô cho mỗi target, nextTarget bắt đầu từ 0. Không body nào di chuyển ở đây. Cancel có thể bỏ bước này mà không để nửa hệ ở một thời điểm khác.
+Một ví dụ một chiều: `x = 0`, `v = 2`, `a = 1`, `dt = 0,5`. Vận tốc mới là 2,5; vị trí mới là 1,25. Nếu ra 1,0, bạn đang dùng vận tốc cũ.
 
-### Chia việc nhưng không chia state
+### Tự ghép trong `work/`
 
-```cpp title="include/simulation.hpp — Chia việc nhưng không chia state"
-inline bool advancePhysics(Simulation& simulation, double budgetMilliseconds = 6) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double, std::milli>(budgetMilliseconds);
-    while (simulation.nextTarget < simulation.bodies.size()) {
-        const std::size_t target = simulation.nextTarget;
-        simulation.pendingAccelerations[target] = directAcceleration(simulation.bodies, target, gravity, simulation.epsilon).acceleration;
-        ++simulation.nextTarget;
-        if (std::chrono::steady_clock::now() >= deadline) {
-            return false;
-        }
-    }
-    integrateSymplecticEuler(simulation.bodies, simulation.pendingAccelerations, simulation.dt);
-    simulation.physicsPending = false;
-    simulation.time += simulation.dt;
-    ++simulation.steps;
-    simulation.rebuild();
-    // 24 IDs trải đều toàn bộ hệ × 64 snapshot; không chỉ lấy sao ở lõi.
-    std::vector<Vec3> trail{};
-    for (std::size_t i = 0; i < std::min<std::size_t>(24, simulation.bodies.size()); ++i) {
-        const std::size_t index = i * simulation.bodies.size() / std::min<std::size_t>(24, simulation.bodies.size());
-        trail.push_back(simulation.bodies[index].position);
-    }
-    simulation.trails.push_back(std::move(trail));
-    if (simulation.trails.size() > 64) {
-        simulation.trails.pop_front();
-    }
-    return true;
-}
-```
+Viết `integrateSymplecticEuler` trong `work/include/lab.hpp`; đừng vừa duyệt nguồn vừa gọi hàm này cho một sao.
 
-Mỗi lần gọi có khoảng 6 ms để tính các target. Nếu chưa đủ, hàm trả false để event loop tiếp tục nhận input. Chỉ sau target cuối mới integrate toàn vector, tăng time đúng một dt và lưu trail có giới hạn.
+<CourseWorkFile project="31" step={4} path="include/lab.hpp" />
+
+Trong `work/include/simulation.hpp`, thêm vùng chứa gia tốc tạm, chỉ số tiếp tục và hai hàm bắt đầu/hoàn tất bước.
+
+<CourseWorkFile project="31" step={4} path="include/simulation.hpp" />
+
+Trong `work/include/application.hpp`, nối lệnh chạy, dừng, bước đơn và đổi `dt` với mô phỏng. Kiểm tra rằng sự kiện chuột vẫn được đọc khi còn bước chưa xong.
+
+<CourseWorkFile project="31" step={4} path="include/application.hpp" />
 
 ## Ghép các phần lại
 
-Trong runApplication, N gọi beginPhysics và bật singleStep. Ở các lượt event loop tiếp theo, advancePhysics làm tiếp công việc; không có vòng while chờ khóa cửa sổ. Khi hàm trả true, singleStep tắt. Space cho chạy/dừng, camera vẫn dùng được.
+Build, dừng thời gian rồi nhấn `N` đúng một lần. Chờ bước hoàn tất và đọc đồng hồ: từ `t` nó phải thành `t + dt`. Xoay camera lúc này để xem chính cùng tập vị trí từ phía khác. Phím `D` đổi `dt`; nó không đặt tốc độ hiển thị của cửa sổ.
 
-Đổi dt từ 1/240 sang 1/120. Mỗi lần N vẫn là một bước, nhưng khoảng thời gian vật lý lớn gấp đôi. Đó không phải tăng tốc kernel tính lực.
-
-```bash title="Terminal — checkpoint 04"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_31_checkpoint_4
+```sh title="Terminal — chạy phần vừa viết trong work/"
+cmake --build build-work --config Release --target project_31_work --parallel 1
+.\build-work\Release\project_31_work.exe
 ```
-
-Trên Windows chạy ./build/Debug/project_31_checkpoint_4.exe; với Ninja/macOS/Linux, executable nằm trực tiếp trong build. Toàn bộ source và phần so sánh với bài trước ở cuối trang.
 
 ## Thử làm sai để hiểu đúng
 
-1. Integrate mỗi body ngay sau khi có acceleration của nó. Lỗi phụ thuộc thứ tự ở bài 03 sẽ quay lại. Khôi phục cách tính acceleration của toàn snapshot trước khi cập nhật state.
-2. Tăng dt ở preset hai vật, giữ force model và solver không đổi. Quỹ đạo có thể xấu dù direct force vẫn đúng: đây là integration error, chưa liên quan Octree. Giảm dt và so tại cùng thời gian.
+Tạm đổi hai phép cập nhật vị trí và vận tốc cho nhau. Dùng ví dụ số ở trên để thấy sai ngay sau một bước; không cần chờ một quỹ đạo dài. Sau đó khôi phục đúng thứ tự.
+
+Thử dừng một bước đang tính và quay camera. Nếu chỉ vài sao di chuyển, tìm chỗ ghi thẳng vào `bodies` trong vòng tính lực: dữ liệu trung gian phải nằm ở `pendingAccelerations`.
 
 ## Tự kiểm tra kết quả
 
-- Single-step tăng step đúng 1 và time đúng dt, kể cả force pass đi qua nhiều frame.
-- Tất cả body commit cùng lúc; Cancel trước commit giữ nguyên snapshot.
-- Pause không khóa camera; Reset bỏ pending force và tạo lại đúng seed.
-- Trail không vượt 64 snapshot × 24 body; toàn bộ N vẫn nhận gravity.
+- Mỗi lần `N` hoàn tất, bộ đếm tăng một; thời gian tăng đúng `dt`.
+- Vẽ thêm vài khung hình khi đang dừng không làm các sao tiến lên.
+- Sau khi có bước đầu tiên, sao chuyển động theo `velocity` và lực, không bám theo các nhánh xoắn được gieo ở bài 01.
 
 ## Bài tập mở rộng
 
-Ghi số target hoàn thành sau mỗi lượt event loop. So simulated time với thời gian thực rồi giải thích vì sao budget mỗi đợt bảo vệ input nhưng không bảo đảm 60 FPS.
+Bắt đầu lại hai lần từ cùng seed. Lần đầu chạy 10 bước dài, lần hai chạy 20 bước dài bằng một nửa. So vị trí cùng một ID tại **cùng thời điểm**, không so sau cùng số lần nhấn phím.
 
-Bài tiếp theo: [Gộp khối lượng từ lá lên gốc Octree](/projects/barnes-hut-nbody/05-mass-octree-va-center-of-mass).
+Học tiếp: [Gộp khối lượng từ lá lên gốc Octree](/projects/barnes-hut-nbody/05-mass-octree-va-center-of-mass).

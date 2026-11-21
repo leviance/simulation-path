@@ -1,10 +1,11 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 # Đặt camera vào không gian
 
 ## Vấn đề cần giải quyết
 
-Ở bài trước, ta vẽ điểm như thể người quan sát luôn đứng ở gốc tọa độ. Giờ giữ điểm đứng yên và dời camera sang phải: trên màn hình, điểm phải dịch sang trái. Làm sao tính được điều đó mà không sửa vị trí thật của điểm?
+Hãy để đốm sáng đứng yên, rồi hình dung bạn bước sang phải một bước. Nó sẽ nằm về bên nào trong tầm mắt? Trên màn hình nó phải trượt sang trái, dù không một tọa độ nào của đốm sáng trong căn phòng thay đổi. Ta cần hai bộ số để diễn tả hai chuyện khác nhau đó.
 
 Ta sẽ lưu riêng vị trí camera và tính tọa độ của điểm so với camera. Camera trong project này chưa xoay, nên việc đổi hệ tọa độ chỉ cần một phép trừ.
 
@@ -24,17 +25,17 @@ Lưu ý Z trong camera space là độ sâu theo trục nhìn, không phải đ�
 
 ## Viết code từng bước
 
-Tiếp tục sửa **starter/include** và **starter/src**, giữ lại mã đã hoàn thành ở bài trước. Tiêu đề code block ghi đường dẫn tính từ thư mục Starter. Nếu bài yêu cầu thay một hàm, hãy thay hàm cũ, không dán thêm một bản trùng tên.
+Mở lại thư mục `work/` của bài trước. Các đường dẫn như `include/lab.hpp` dưới đây đều tính từ **work/**. Configure lại sẽ không ghi đè phần bạn đã viết.
 
-Build và chạy đúng mã bạn vừa viết:
+Để ý hai dòng số: `world` là vị trí trong căn phòng; `camera point` là vị trí lấy chỗ đứng của bạn làm gốc. Sau bài này, khi bạn chỉ di chuyển camera, đúng một trong hai dòng được phép đổi.
 
-```powershell title="Chạy mã đang học trong Starter"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_11_starter --parallel 2
-.\build\Debug\project_11_starter.exe
+```powershell title="Chạy chương trình đang viết (Windows, Visual Studio)"
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
+cmake --build build-work --config Debug --target project_11_work --parallel 1
+.\build-work\Debug\project_11_work.exe
 ```
 
-**Checkpoint 02 là bản tham khảo sau bài này**, không phải nơi tự nhận thay đổi từ Starter. Khi cần đối chiếu, mở checkpoints/02 hoặc build riêng target project_11_checkpoint_2; lệnh đó chạy mã mẫu, không kiểm chứng phần bạn vừa sửa.
+`checkpoints/02` là bản tham khảo sau bài này. Khi muốn thử phần mình vừa sửa, hãy chạy `project_11_work`, không chạy checkpoint.
 
 ### Bước 1 — Giữ camera thành dữ liệu riêng
 
@@ -50,6 +51,7 @@ Scene có point và camera độc lập. Khi đổi camera.position, tuyệt đ�
 
 ### Bước 2 — Đổi gốc đúng một lần
 
+{/* snippet include/lab.hpp#camera-origin */}
 ```cpp title="include/lab.hpp — từ world sang camera"
 inline Vec3 worldToCamera(Vec3 worldPoint, const Camera3D& camera) {
     return {worldPoint.x - camera.position.x, worldPoint.y - camera.position.y, worldPoint.z - camera.position.z};
@@ -116,9 +118,29 @@ if (event.key.key == SDLK_O) {
 }
 ```
 
+### Tự ghép trong `work/`
+
+Các đoạn trên giải thích phần mới. Khi viết, mở từng tệp dưới đây để thấy chỗ cần sửa trong **bản của bài trước**. Đoạn nào đã gõ rồi thì chỉ đối chiếu, không chèn thêm lần nữa.
+
+Viết phép đổi gốc và phép cộng ngược để về lại tọa độ ban đầu.
+
+<CourseWorkFile project="11" step={2} path="include/lab.hpp" />
+
+Thay đầu vào của bản xem trước: dùng điểm so với camera, không sửa điểm trong cảnh.
+
+<CourseWorkFile project="11" step={2} path="include/view.hpp" />
+
+Cho người dùng biết checkpoint này đã có phím dời camera.
+
+<CourseWorkFile project="11" step={2} path="include/presentation.hpp" />
+
+Nối J/L với camera X. So dòng world trước và sau khi nhấn L.
+
+<CourseWorkFile project="11" step={2} path="src/main.cpp" />
+
 ## Ghép các phần lại
 
-Build lại project_11_starter, dùng J/L để dời camera X, I/K cho Y, U/O cho Z. Mỗi nấc là 0.1 world, camera bị giới hạn [-2,2] ở từng trục. WASD/QE vẫn điều khiển point. Trong Canvas có ba slider Camera.X/Y/Z tương ứng.
+Build lại `project_11_work`, dùng J/L để dời camera X, I/K cho Y, U/O cho Z. Mỗi nấc là 0.1 world, camera bị giới hạn [-2,2] ở từng trục. WASD/QE vẫn điều khiển point. Trong Canvas có ba slider Camera.X/Y/Z tương ứng.
 
 Giữ point cố định và tăng Camera.X: marker đi trái. Tăng Camera.Z hiện chỉ đổi số đo Z vì preview vẫn chưa perspective. Đừng thêm phép chia cho đến bài kế tiếp; ở đây ta đang kiểm riêng việc đổi gốc.
 

@@ -1,10 +1,11 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 # Cho điểm bay, dừng và bước từng nhịp
 
 ## Vấn đề cần giải quyết
 
-Bạn đã có thể dùng Q/E đưa điểm lại gần hoặc ra xa giữa các khung 3D. Nhưng giữ phím bằng tay khó cho hai lần chạy giống nhau. Ta sẽ cho điểm bay theo thời gian, có thể tạm dừng và tiến từng nhịp để quan sát lại cùng một vị trí.
+Đến đây đốm sáng chỉ chuyển động khi có tay bạn trên bàn phím. Hãy cho nó tự bay giữa những chiếc cổng, rồi tạm dừng đúng lúc nó sắp chạm mép ảnh. Nếu người khác mở cùng chương trình ở tốc độ khung hình khác, làm sao để cả hai dừng ở cùng một vị trí sau cùng một khoảng thời gian?
 
 Vẫn giữ điều khiển tay, nhưng mỗi lúc chỉ một cách được quyền đổi vị trí: bấm WASD/QE thì dừng quỹ đạo. Nếu không, điểm vừa được bạn dịch chuyển sẽ bị công thức tự động kéo về ngay trong cùng frame.
 
@@ -27,20 +28,21 @@ Clamp dt tối đa 0.1s ngăn một frame bị treo làm nhảy quá xa. Nó kh�
 
 ## Viết code từng bước
 
-Tiếp tục sửa **starter/include** và **starter/src**, giữ lại mã đã hoàn thành ở bài trước. Tiêu đề code block ghi đường dẫn tính từ thư mục Starter. Nếu bài yêu cầu thay một hàm, hãy thay hàm cũ, không dán thêm một bản trùng tên.
+Mở lại thư mục `work/` của bài trước. Các đường dẫn như `include/lab.hpp` dưới đây đều tính từ **work/**. Configure lại sẽ không ghi đè phần bạn đã viết.
 
-Build và chạy đúng mã bạn vừa viết:
+Mượn đúng một ý từ Project 02: thời gian không phải số khung hình. Ở đây hàm quỹ đạo trả **vị trí** tại thời điểm t, không phải lượng cần cộng vào vị trí cũ. Phím N giúp bạn soi từng bước mà không phải bấm dừng thật nhanh.
 
-```powershell title="Chạy mã đang học trong Starter"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_11_starter --parallel 2
-.\build\Debug\project_11_starter.exe
+```powershell title="Chạy chương trình đang viết (Windows, Visual Studio)"
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
+cmake --build build-work --config Debug --target project_11_work --parallel 1
+.\build-work\Debug\project_11_work.exe
 ```
 
-**Checkpoint 06 là bản tham khảo sau bài này**, không phải nơi tự nhận thay đổi từ Starter. Khi cần đối chiếu, mở checkpoints/06 hoặc build riêng target project_11_checkpoint_6; lệnh đó chạy mã mẫu, không kiểm chứng phần bạn vừa sửa.
+`checkpoints/06` là bản tham khảo sau bài này. Khi muốn thử phần mình vừa sửa, hãy chạy `project_11_work`, không chạy checkpoint.
 
 ### Bước 1 — Viết quỹ đạo thành hàm thuần
 
+{/* snippet include/lab.hpp#flight */}
 ```cpp title="include/lab.hpp — một thời điểm xác định một vị trí"
 inline Vec3 flightPoint(double timeSeconds) {
     return {std::sin(0.9 * timeSeconds) * 2.2, std::cos(1.3 * timeSeconds) * 1.3, 6.0 + std::sin(0.55 * timeSeconds) * 4.0};
@@ -85,6 +87,26 @@ if (event.key.key == SDLK_N && !event.key.repeat && scene.paused) {
 
 Mỗi lần nhấn Space chỉ toggle một lần nhờ !event.key.repeat. N chỉ chạy khi paused. Trong Canvas có hai button tương đương; reduced-motion tắt chạy tự động nhưng vẫn cho step và các slider.
 
+### Tự ghép trong `work/`
+
+Các đoạn trên giải thích phần mới. Khi viết, mở từng tệp dưới đây để thấy chỗ cần sửa trong **bản của bài trước**. Đoạn nào đã gõ rồi thì chỉ đối chiếu, không chèn thêm lần nữa.
+
+Tách hàm cho biết điểm ở đâu khỏi hàm cho biết bây giờ là lúc nào.
+
+<CourseWorkFile project="11" step={6} path="include/lab.hpp" />
+
+Tăng thời gian rồi tính lại điểm. Khi dừng, không tăng đồng hồ.
+
+<CourseWorkFile project="11" step={6} path="include/scene.hpp" />
+
+Nối Space và N sao cho mỗi lần bấm N chỉ tiến một nhịp.
+
+<CourseWorkFile project="11" step={6} path="src/main.cpp" />
+
+Hiện số giây và trạng thái đang bay/tạm dừng bên cạnh cảnh.
+
+<CourseWorkFile project="11" step={6} path="include/presentation.hpp" />
+
 ## Ghép các phần lại
 
 Trong main.cpp, đặt khối dưới **sau phần đọc WASD/QE và trước if (dirty)**. Nếu bạn chỉ thêm hàm advanceScene mà quên gọi ở vòng lặp, Space sẽ đổi paused nhưng điểm vẫn đứng yên.
@@ -111,7 +133,7 @@ if (!text(renderer, 16, 768, value)) {
 
 Bộ khung đã xử lý focus lost, hidden/minimize và resize: đặt paused=true và dirty=true. Khi cửa sổ được hiện lại hoặc bị yêu cầu vẽ lại, nó đặt dirty=true để ảnh không bị trống. Giữ các nhánh đó; đừng thay bằng việc chạy quỹ đạo trong mọi frame.
 
-Build lại project_11_starter. Thử Chạy/Pause, tiến 0.1s và reset. So quỹ đạo tại elapsed=1s khi chia thành nhiều dt nhỏ: vị trí phải trùng. FOV và camera không làm đổi công thức world, chỉ đổi cách nhìn.
+Build lại `project_11_work`. Thử Chạy/Pause, tiến 0.1s và reset. So quỹ đạo tại elapsed=1s khi chia thành nhiều dt nhỏ: vị trí phải trùng. FOV và camera không làm đổi công thức world, chỉ đổi cách nhìn.
 
 Chuyển tab, mất focus hoặc resize sẽ pause. Khi quay lại, ứng dụng không tự bay tiếp. Đây là lựa chọn để người học không mất vị trí đang quan sát và không gặp một dt khổng lồ sau thời gian tab ẩn.
 

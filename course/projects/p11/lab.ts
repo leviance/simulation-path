@@ -1,5 +1,29 @@
 import type { ProjectLabMeta } from "../../labs/types";
 const lab = {
+  native: {
+    directory: "/field-notes/perspective-point",
+    withDemo: true,
+    overview: ["runway"],
+    lessons: { "projection-full": ["ruler"] },
+    takes: {
+      runway: {
+        title: "Đốm sáng giữa bốn cổng",
+        source: "Project 11 · C++/SDL3 · Release",
+        poster: "piste.png",
+        alt: "Đốm sáng màu hổ phách nằm lệch phải, phía trên mặt đường kẻ ô. Bốn cổng có cùng kích thước thật thu nhỏ dần về tâm.",
+        caption:
+          "Nhìn các cổng thay vì chỉ nhìn kích thước đốm sáng: mỗi cổng có cùng chiều ngang và được vẽ bằng cùng một hàm.",
+      },
+      ruler: {
+        title: "Nếu đẩy đèn ra xa gấp đôi thì sao?",
+        source: "Project 11 · C++/SDL3 · Release",
+        poster: "depth-ruler.png",
+        alt: "Vòng rỗng màu lam nằm trên thước giữa tâm ảnh và đốm sáng màu hổ phách. Hai số đo bên dưới là khoảng cách tính bằng pixel.",
+        caption:
+          "A là vị trí thật của đèn. B là ảnh dự đoán khi giữ X/Y và nhân đôi độ sâu tính từ camera. Nhấn M trong bản C++ để làm lại phép đo.",
+      },
+    },
+  },
   base: {
     label: "PROJECTION LAB",
     title: "Điểm 3D đi tới pixel nào?",

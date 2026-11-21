@@ -1,26 +1,24 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 # Cộng tất cả lực và giữ một lời giải đối chứng
 
 ## Vấn đề cần giải quyết
 
-Một cặp đúng chưa có nghĩa là một hệ nhiều vật thể đúng. Bước tiếp theo không phải cây: ta đọc từng source thật cho từng target. Bản direct này cố ý đơn giản, vì nó là lời giải đối chứng cho mọi tối ưu sau đó.
+Một sao ở rìa không chỉ bị vật tâm hút. Nó còn chịu lực của các sao lệch về bên trái, phải, trên và dưới đĩa. Hãy thay mũi tên của một cặp bằng mũi tên tổng, rồi giữ cách làm chậm mà rõ này để chấm bài cho Barnes–Hut.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với N body, một target đọc N−1 source. Tính cho mọi target tạo N(N−1) tương tác có hướng; i→j và j→i đều được tính. Đó là lý do lượng việc tăng theo N², không phải cứ FPS thấp là đã chứng minh được độ phức tạp.
-
-Chỉ bỏ self interaction theo index, không bỏ mọi nguồn trùng position. Hai body khác nhau vẫn là hai nguồn của hệ. Cũng không cập nhật position khi đang tính lực: mọi target phải nhìn cùng một snapshot.
-
-Với N=256, một target đọc 255 nguồn; full pass có 65.280 interactions. Bản tương tác direct giữ N≤256 để không khóa UI. Reference của hệ lớn về sau vẫn đọc đủ mọi source cho tập target được công bố.
+Chọn một `targetIndex`. Mỗi lần duyệt qua `sourceIndex` khác nó, cộng **vector** gia tốc; hai mũi tên ngược hướng có thể triệt tiêu. Với $N$ vật, có $N-1$ đóng góp cho một vật và $N(N-1)$ đóng góp cho tất cả. Đây là số lần cộng nguồn, không phải số mili giây.
 
 <InteractiveLab demo="barnes-hut-nbody" mode="nbody-direct" />
 
 ## Viết code từng bước
 
-### Giải cho một target trước
+### Giải cho một vật trước
 
-```cpp title="include/lab.hpp — Giải cho một target trước"
+{/* snippet include/lab.hpp#direct-target */}
+```cpp title="include/lab.hpp — Cộng các nguồn, trừ chính vật đang xét"
 inline AccelerationResult directAcceleration(
     std::span<const Body> bodies,
     std::size_t targetIndex,
@@ -48,41 +46,30 @@ inline AccelerationResult directAcceleration(
 }
 ```
 
-sourceIndex chạy qua toàn vector. continue chỉ bỏ chính target. exactInteractions tăng đúng tại nơi cộng một nguồn, không được suy từ số node hoặc số pixel.
+Dùng chỉ số để nhận diện một vật. Hai vật khác nhau có thể trùng tọa độ. `exactInteractions` tăng sau mỗi nguồn được xét; nó không phụ thuộc độ lớn gia tốc.
 
-### Mở rộng thành pass toàn hệ
+### Giữ nguyên vị trí cho đến khi đủ mọi gia tốc
 
-```cpp title="include/lab.hpp — Mở rộng thành pass toàn hệ"
-inline std::vector<Vec3> directAccelerations(
-    std::span<const Body> bodies,
-    double gravitationalConstant,
-    double softening,
-    std::size_t* interactionCount = nullptr
-) {
-    std::vector<Vec3> accelerations(bodies.size());
-    std::size_t interactions = 0;
-    for (std::size_t targetIndex = 0; targetIndex < bodies.size(); ++targetIndex) {
-        const AccelerationResult result = directAcceleration(
-            bodies,
-            targetIndex,
-            gravitationalConstant,
-            softening
-        );
-        accelerations[targetIndex] = result.acceleration;
-        interactions += result.metrics.exactInteractions;
-    }
-    if (interactionCount) {
-        *interactionCount = interactions;
-    }
-    return accelerations;
+```cpp title="include/lab.hpp — Đặt gia tốc của từng vật vào đúng ô"
+std::vector<Vec3> accelerations(bodies.size());
+std::size_t interactions = 0;
+for (std::size_t targetIndex = 0; targetIndex < bodies.size(); ++targetIndex) {
+    const AccelerationResult result = directAcceleration(
+        bodies,
+        targetIndex,
+        gravitationalConstant,
+        softening
+    );
+    accelerations[targetIndex] = result.acceleration;
+    interactions += result.metrics.exactInteractions;
 }
 ```
 
-Vector acceleration mới có cùng thứ tự với bodies. Ta trả hết kết quả ra ngoài, chưa cho integrator sửa position. Nhờ vậy còn có thể kiểm output trước khi state đổi.
+`accelerations` có số phần tử bằng `bodies`. Nhờ vậy người tính lực cho vật cuối nhìn thấy cùng một thiên hà như người tính cho vật đầu. Bài này chưa dịch bất kỳ ngôi sao nào.
 
-### Thay vector trong scene bằng tổng lực
+### Nhìn kết quả thay vì nhìn mã
 
-```cpp title="include/presentation.hpp — Thay vector trong scene bằng tổng lực"
+```cpp title="include/presentation.hpp — Vẽ lực tổng tại ngôi sao đang chọn"
 inline void drawScene(std::span<std::uint32_t> pixels, int width, int height, const lab::Simulation& simulation, std::vector<StarLight>& light) {
     drawBodies(pixels, width, height, simulation.bodies, simulation.camera, light);
     drawTrails(pixels, width, height, simulation);
@@ -92,35 +79,39 @@ inline void drawScene(std::span<std::uint32_t> pixels, int width, int height, co
 }
 ```
 
-Ở checkpoint 03, drawScene dùng directAcceleration thay cho riêng body 0. Khung SDL và camera giữ nguyên; thứ thay đổi là ý nghĩa mũi tên đang trình bày.
+Sao gần vật tâm thường vẫn bị kéo về gần tâm, nhưng không nhất thiết chỉ đúng vào tâm. Để biết mũi tên lệch có phải lỗi hay không, thử một hệ nhỏ đối xứng trước.
+
+### Tự ghép trong `work/`
+
+Trong `work/include/lab.hpp`, viết hàm tính cho một vật rồi mới thêm hàm trả cả mảng gia tốc. Hai vòng lặp có hai trách nhiệm khác nhau.
+
+<CourseWorkFile project="31" step={3} path="include/lab.hpp" />
+
+Trong `work/include/presentation.hpp`, thay kết quả của đúng một cặp bằng kết quả `directAcceleration` cho sao được chọn.
+
+<CourseWorkFile project="31" step={3} path="include/presentation.hpp" />
 
 ## Ghép các phần lại
 
-Trên preset ba vật, target phía trên phải bị hai vật phía dưới hút xuống. Hai thành phần X triệt tiêu. Đó là fixture độc lập; gọi directAcceleration hai lần rồi so hai kết quả giống nhau không phải oracle.
+Build từ `work/` của bài trước. Trong preset ba vật, có hai nguồn cho mỗi vật đích. Hai sao ở hai bên của sao nằm trên trục đối xứng: thành phần gia tốc ngang do chúng gây ra triệt tiêu nhưng thành phần dọc thì cộng lại. Nếu tự đặt thêm một ca thử với ba sao thẳng hàng, cả vector của sao giữa mới bằng 0.
 
-Kiểm counters trước khi bật chuyển động. Bài 04 sẽ đưa vector acceleration vào integrator, không viết một công thức gravity thứ hai bên trong event loop.
-
-```bash title="Terminal — checkpoint 03"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_31_checkpoint_3
+```sh title="Terminal — chạy phần vừa viết trong work/"
+cmake --build build-work --config Release --target project_31_work --parallel 1
+.\build-work\Release\project_31_work.exe
 ```
-
-Trên Windows chạy ./build/Debug/project_31_checkpoint_3.exe; với Ninja/macOS/Linux, executable nằm trực tiếp trong build. Toàn bộ source và phần so sánh với bài trước ở cuối trang.
 
 ## Thử làm sai để hiểu đúng
 
-1. Thử cập nhật position ngay sau khi tính xong target đầu. Target tiếp theo sẽ nhìn một phần state mới và phần còn lại state cũ; so với bản tính mọi acceleration từ cùng snapshot.
-2. Giữ bản thử đó rồi đảo thứ tự target. Dự đoán kết quả có đổi không: sự phụ thuộc thứ tự không đến từ physics. Khôi phục hai bước tính lực và commit riêng, rồi lặp lại phép so.
+Thử thay phép cộng dồn bằng phép gán trong vòng lặp nguồn. Hệ hai vật vẫn có vẻ đúng vì chỉ có một nguồn; hệ ba vật sẽ lộ lỗi vì chỉ giữ nguồn được đọc cuối cùng. Khôi phục phép cộng dồn.
 
 ## Tự kiểm tra kết quả
 
-- N=1 trả acceleration 0 và exactInteractions=0.
-- Các ca N=2, N=3 khớp tính tay; expected value không gọi production gravity helper.
-- Một target có N−1 interactions, full pass có N(N−1).
-- Hàm tính lực không sửa position, velocity hoặc mass của input.
+- Trong hệ ba vật, một vật có hai nguồn; cả hệ xét sáu lượt có hướng.
+- Đổi thứ tự hai nguồn đối xứng không làm mất tính triệt tiêu (chấp nhận sai số dấu phẩy động rất nhỏ).
+- Danh sách vị trí trước và sau một lượt tính lực không đổi.
 
 ## Bài tập mở rộng
 
-Viết bản cặp $i<j$ cập nhật hai lực đối nghịch rồi so với oracle hiện tại. Lưu ý acceleration hai body không đối nhau khi mass khác nhau, dù force của chúng đối nhau.
+So sánh gia tốc do riêng vật tâm với gia tốc trực tiếp do cả hệ tại một sao ngoài rìa. Thành phần chênh lệch cho biết điều gì mà độ sáng của điểm sao không cho biết?
 
-Bài tiếp theo: [Tiến thời gian mà không trộn hai snapshot](/projects/barnes-hut-nbody/04-fixed-step-va-symplectic-euler).
+Học tiếp: [Tiến thời gian mà không trộn hai snapshot](/projects/barnes-hut-nbody/04-fixed-step-va-symplectic-euler).

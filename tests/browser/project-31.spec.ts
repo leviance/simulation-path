@@ -67,7 +67,17 @@ test("P31 renders the real galaxy, steps every body, restores camera and sweeps 
     .toBeLessThan(0);
   await expect(clock).toContainText("4096 / 1 /");
   await canvas.press("Home");
-  await expect(board).toHaveAttribute("data-galaxy-distance", "2.6000");
+  await expect(board).toHaveAttribute("data-galaxy-distance", "4.8500");
+  await page.getByRole("button", { name: "Nhìn từ trên", exact: true }).click();
+  await expect(board).toHaveAttribute("data-galaxy-distance", "6.3500");
+  const face = await canvas.evaluate((element) => (element as HTMLCanvasElement).toDataURL());
+  await canvas.press("F3");
+  await expect(board).toHaveAttribute("data-galaxy-distance", "4.4000");
+  await expect
+    .poll(() => canvas.evaluate((element) => (element as HTMLCanvasElement).toDataURL()))
+    .not.toBe(face);
+  await expect(clock).toContainText("4096 / 1 /");
+  await canvas.press("Home");
   await page.getByRole("button", { name: "Hiện node debug", exact: true }).click();
   await expect
     .poll(() => canvas.evaluate((element) => (element as HTMLCanvasElement).toDataURL()))
@@ -88,6 +98,24 @@ test("P31 renders the real galaxy, steps every body, restores camera and sweeps 
   await page.getByRole("button", { name: "Tiến một bước", exact: true }).click();
   await expect(clock).toContainText("4096 / 1 /", { timeout: 15000 });
   expect(errors).toEqual([]);
+});
+
+test("P31 shows three genuine native views beside the interactive galaxy", async ({ page }) => {
+  await page.goto("/projects/barnes-hut-nbody");
+  const gallery = page.getByRole("group", { name: "Chọn cảnh" });
+  for (const [title, file] of [
+    ["Một thiên hà ở góc nhìn nghiêng", "oblique"],
+    ["Xoắn ở đâu? Hãy nhìn từ trên xuống", "face"],
+    ["Nếu đĩa chỉ là một tấm phẳng?", "edge"],
+  ]) {
+    await gallery.getByRole("button", { name: title, exact: true }).click();
+    const still = page.locator('img[src="/field-notes/barnes-hut/' + file + '.png"]');
+    await still.scrollIntoViewIfNeeded();
+    await expect
+      .poll(() => still.evaluate((img) => (img as HTMLImageElement).naturalWidth))
+      .toBe(1120);
+  }
+  await expect(page.getByRole("button", { name: "Nhìn ngang đĩa", exact: true })).toBeVisible();
 });
 
 test("P31 first lesson keeps later controls hidden; reduced motion still permits finite steps", async ({

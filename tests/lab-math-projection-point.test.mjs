@@ -28,6 +28,22 @@ test("P11 projection has independent pixel, camera translation and double-depth 
     z: 6,
   });
 });
+test("P11 measures two camera depths without moving the point or dividing by an on-axis offset", () => {
+  const camera = { position: { x: 3, y: -1, z: 2 } };
+  const lens = { verticalFovRadians: Math.PI / 2, nearPlane: 0.5, farPlane: 16 };
+  const v = { x: 10, y: 20, width: 800, height: 600 };
+  const measure = (x, y, z) => math.measureDoubleDepth({ x, y, z }, camera, lens, v);
+  const read = measure(4, -0.5, 6);
+  near(read.first.x, 485);
+  near(read.first.y, 282.5);
+  near(read.second.x, 447.5);
+  near(read.second.y, 301.25);
+  near(read.firstOffset, Math.hypot(75, 37.5));
+  near(read.secondOffset, read.firstOffset / 2);
+  near(measure(3, -1, 6).secondOffset, 0);
+  assert.equal(measure(4, -0.5, 11), null);
+  assert.equal(measure(4, -0.5, -1), null);
+});
 test("P11 rejects unsafe depth/lens/viewport before divide, includes near/far and has no invented pixel", () => {
   const s = model.initialPointScene(),
     v = model.viewportFor(s);
@@ -467,6 +483,7 @@ test("P11 actual clean renderer keeps depth geometry/marker and hides overlays, 
       beginPath: noop,
       rect: noop,
       clip: noop,
+      stroke: noop,
       arc: (...a) => arcs.push(a),
       fill: noop,
       fillText: (t) => labels.push(t),
@@ -487,6 +504,19 @@ test("P11 actual clean renderer keeps depth geometry/marker and hides overlays, 
   assert.equal(labels.length, 0);
   assert.ok(!lines.some((l) => l.color === "#ffe26c" || l.color === "#ff6b6b"));
   const first = arcs[0];
+  arcs.length = 0;
+  s.debug = true;
+  s.measureDepth = true;
+  draw(ctx, { width: 1100, height: 800, dpr: 2 }, s, 8);
+  assert.equal(arcs.length, 3, "two filled discs make one light; B is only a ring");
+  near(arcs[2][0], (550 + first[0]) / 2);
+  near(arcs[2][1], (400 + first[1]) / 2);
+  arcs.length = 0;
+  s.point.z = 9;
+  draw(ctx, { width: 1100, height: 800, dpr: 2 }, s, 8);
+  assert.equal(arcs.length, 2, "hide B when its depth exceeds far");
+  s.point.z = 4;
+  s.debug = false;
   arcs.length = 0;
   const far = model.pointPreset(1);
   far.debug = false;

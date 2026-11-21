@@ -4,6 +4,7 @@ import {
   projectPerspective,
   clipPointDepth,
   clipPointScreen,
+  measureDoubleDepth,
   verticalFocalScale,
 } from "@/lib/labs/projection-point";
 import { viewportFor, pointDisplay, type PointScene } from "@/lib/labs/projection-scene";
@@ -41,19 +42,23 @@ export function drawProjectionLab(
   if (debug) {
     ctx.fillStyle = "#e1e8fa";
     ctx.font = "18px ui-monospace";
-    ctx.fillText(
-      stage < 3
-        ? "XY PREVIEW · chưa dùng depth để chiếu"
-        : "PERSPECTIVE · camera nhìn +Z · Y lên trên",
-      30,
-      40,
-    );
-    ctx.fillText("WASD: XY · Q/E: Z · kéo marker từ bài 7 · F: debug ở bài cuối", 30, 72);
+    let title = "ĐƯỜNG BĂNG ĐO ĐỘ SÂU";
+    let hint = "Điểm sáng là đèn. Đường dóng cho biết nó nằm phía trên vạch nào của sàn.";
+    if (stage < 3) {
+      title = "XEM TRƯỚC TRÊN MẶT PHẲNG XY";
+      hint = "Đổi riêng Z: tọa độ của đèn thay đổi nhưng ảnh chưa dịch chuyển.";
+    } else if (stage < 5) {
+      title = "CHIẾU ĐIỂM LÊN MÀN HÌNH";
+      hint = "Giữ nguyên X và Y, rồi đưa đèn ra xa. Tâm đèn tiến về đâu?";
+    }
+    ctx.fillText(title, 30, 40);
+    ctx.fillText(hint, 30, 72);
   }
   ctx.save();
   ctx.beginPath();
   ctx.rect(v.x, v.y, v.width, v.height);
   ctx.clip();
+  const floorY = -1.5;
   const line = (a: Vec3, b: Vec3, color: string) => {
     const depth = clipPointDepth(
       worldToCamera(a, scene.camera),
@@ -69,17 +74,33 @@ export function drawProjectionLab(
     if (clipped) drawLine(ctx, clipped[0], clipped[1], color, 1.5);
   };
   if (stage >= 5) {
-    for (let x = -4; x <= 4; x++) line({ x, y: -1.5, z: 1 }, { x, y: -1.5, z: 16 }, "#28334d");
-    for (let z = 1; z <= 16; z++) line({ x: -4, y: -1.5, z }, { x: 4, y: -1.5, z }, "#28334d");
+    // Vạch sơn, lề đường và khung đều dùng cùng phép chiếu với đèn.
+    for (let x = -4; x <= 4; x++) {
+      line({ x, y: floorY, z: 1 }, { x, y: floorY, z: 16 }, "#28334d");
+    }
+    for (let z = 1; z <= 16; z++) {
+      line({ x: -4, y: floorY, z }, { x: 4, y: floorY, z }, "#28334d");
+      if (z < 16) line({ x: 0, y: floorY, z }, { x: 0, y: floorY, z: z + 0.45 }, "#74839f");
+    }
+    for (const side of [-1, 1]) {
+      const x = side * 1.9;
+      line({ x, y: floorY, z: 1 }, { x, y: floorY, z: 16 }, "#426474");
+    }
     for (const z of [2, 4, 8, 12]) {
-      line({ x: -3, y: -1.5, z }, { x: -3, y: 2, z }, "#74839f");
-      line({ x: -3, y: 2, z }, { x: 3, y: 2, z }, "#74839f");
-      line({ x: 3, y: 2, z }, { x: 3, y: -1.5, z }, "#74839f");
+      line({ x: -1.55, y: 1.1, z }, { x: 1.55, y: 1.1, z }, "#74839f");
+      for (const side of [-1, 1]) {
+        const post = side * 1.9;
+        const shoulder = side * 1.55;
+        line({ x: post, y: floorY, z }, { x: post, y: 0.75, z }, "#74839f");
+        line({ x: post, y: 0.75, z }, { x: shoulder, y: 1.1, z }, "#75c9d1");
+        line({ x: post, y: floorY, z }, { x: side * 1.63, y: floorY, z }, "#75c9d1");
+      }
     }
     if (debug) {
-      line({ x: -2, y: 0, z: 4 }, { x: 2, y: 0, z: 4 }, "#ff6b6b");
-      line({ x: 0, y: -1.5, z: 4 }, { x: 0, y: 2, z: 4 }, "#53f0ae");
-      line({ x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: 16 }, "#84a9ff");
+      const foot = { x: -1.9, y: floorY, z: 4 };
+      line(foot, { x: -1.35, y: floorY, z: 4 }, "#ff6b6b");
+      line(foot, { x: -1.9, y: floorY + 0.55, z: 4 }, "#53f0ae");
+      line(foot, { x: -1.9, y: floorY, z: 4.55 }, "#84a9ff");
     }
   } else if (stage < 3) {
     for (let d = -280; d <= 280; d += 70) {
@@ -89,6 +110,12 @@ export function drawProjectionLab(
   }
   const r = pointDisplay(scene, stage);
   if (r.status === "visible" && r.screen) {
+    if (stage >= 5 && debug) {
+      const foot = { x: scene.point.x, y: floorY, z: scene.point.z };
+      line(scene.point, foot, "#967b55");
+      line({ ...foot, x: foot.x - 0.1 }, { ...foot, x: foot.x + 0.1 }, "#967b55");
+      line({ ...foot, z: foot.z - 0.1 }, { ...foot, z: foot.z + 0.1 }, "#967b55");
+    }
     const focalPixels = v.height * 0.5 * (stage >= 4 ? verticalFocalScale(scene.lens) : 1);
     const radius =
       stage >= 3
@@ -96,7 +123,7 @@ export function drawProjectionLab(
         : 10;
     ctx.beginPath();
     ctx.arc(r.screen.x, r.screen.y, radius, 0, 2 * Math.PI);
-    ctx.fillStyle = "#53f0ae";
+    ctx.fillStyle = "#ffac47";
     ctx.fill();
     ctx.beginPath();
     ctx.arc(r.screen.x, r.screen.y, radius * 0.5, 0, 2 * Math.PI);
@@ -117,22 +144,38 @@ export function drawProjectionLab(
       );
     }
   }
+  const wantsRuler = stage >= 8 && debug && scene.measureDepth;
+  const measurement = wantsRuler
+    ? measureDoubleDepth(scene.point, scene.camera, scene.lens, v)
+    : null;
+  if (measurement) {
+    const center = { x: v.x + v.width / 2, y: v.y + v.height / 2 };
+    drawLine(ctx, center, measurement.first, "#7099ad", 1);
+    // B là vạch đo rỗng trên ảnh, không có thêm đèn nào trong không gian.
+    ctx.beginPath();
+    ctx.arc(measurement.second.x, measurement.second.y, 7, 0, 2 * Math.PI);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = "#99e2e6";
+    ctx.stroke();
+  }
   ctx.restore();
   if (debug) {
     ctx.fillStyle = "#e1e8fa";
     ctx.font = "18px ui-monospace";
     ctx.fillText(
       stage >= 5
-        ? "Các khung world có cùng kích thước ở depth 2 / 4 / 8 / 12."
-        : "Bài 5 sẽ thêm lưới và các khung 3D; lúc này hãy theo dõi tâm điểm sáng.",
+        ? "Bốn cổng đều rộng 3,8 đơn vị. Chỉ vị trí của chúng khác nhau: Z = 2, 4, 8 và 12."
+        : "Mốc để so sánh là tâm khung nhìn, không phải góc trên bên trái màn hình.",
       30,
       738,
     );
-    ctx.fillText(
-      "Resize giữ bảng logic; đổi Aspect để kiểm khung nhìn, không kéo dãn ảnh.",
-      30,
-      770,
-    );
+    let axisHint = "Trục Y hướng lên, còn trục +Z hướng vào sâu trong cảnh.";
+    if (wantsRuler) {
+      axisHint = measurement
+        ? "Vòng rỗng B là vị trí ảnh khi gấp đôi độ sâu của đèn trong hệ camera."
+        : "Thước chỉ hiện khi cả đèn lẫn điểm so sánh đều nằm trong khung nhìn.";
+    }
+    ctx.fillText(axisHint, 30, 770);
   }
   ctx.restore();
 }

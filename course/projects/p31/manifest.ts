@@ -7,13 +7,13 @@ const project = {
     "Project 30 — Octree 3D, storage theo index, camera và các job có thể hủy",
   ],
   summary:
-    "Từ đĩa sao 3D gồm 4.096 vật thể thật, tự tính lực hấp dẫn, dùng Octree gộp nguồn xa và đo phần chính xác phải đánh đổi. Camera giúp quan sát; direct reference, energy và thí nghiệm dt giúp hiểu kết quả.",
+    "Tự dựng một thiên hà xoắn mà bạn có thể bay xuyên qua. Từ cách tính lực giữa hai ngôi sao, bạn sẽ đi tới 4.096 vật thể rồi đo xem cách gộp sao ở xa tiết kiệm được bao nhiêu phép tính và sai lệch bao nhiêu.",
   challenge: {
     timebox: "8–12 giờ",
     mission:
       "Tự xây dựng một mô phỏng hấp dẫn 3D. Mỗi vật thể có position, velocity và mass; lực thật làm hệ tiến triển, không gán quỹ đạo có sẵn. Bản cuối cập nhật ít nhất 4.096 vật thể bằng Barnes–Hut và giữ direct summation để kiểm kết quả.",
     outcome:
-      "Một thiên hà có lõi lớn, hai nhánh sao dày và halo trong không gian 3D; camera orbit/pan và tiến/lùi xuyên qua tâm. Màu phân biệt vùng lõi/ngoại vi, ánh sáng và trails xuất phát từ state đã tính. Chọn target để đọc gia tốc direct/Barnes–Hut, xem node đã mở hoặc chấp nhận rồi đo sai số và runtime. Nhánh xoắn chỉ được gieo ở điều kiện đầu, không bị áp đặt khi chạy.",
+      "Nhìn từ trên, bạn thấy những dải sao sáng đậm nhạt khác nhau quấn quanh lõi. Xoay ngang, những dải này thu lại thành một đĩa mỏng ôm lấy phần lõi phình ra. Bạn có thể bay xuyên qua tâm, dừng ở một ngôi sao và đối chiếu lực tính trực tiếp với lực Barnes–Hut. Hình xoắn chỉ có trong điều kiện ban đầu; từ bước đầu tiên, lực hấp dẫn quyết định chuyển động.",
     requirements: [
       "Preset 3D ít nhất 4.096 vật thể; preset hai, ba và 256 vật thể để kiểm chứng. Cùng seed tạo cùng state đầu.",
       "Chạy/dừng, tiến đúng một fixed step, đặt lại preset và chọn dt. Camera vẫn dùng được khi physics hoặc phép đo đang dừng.",

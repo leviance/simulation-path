@@ -3,27 +3,32 @@
 
 void testGalaxyAppearance() {
     const auto bodies = lab::makeGalaxyBodies(4096, lab::galaxySeed);
-    std::size_t core = 0;
-    std::size_t disk = 0;
-    std::size_t innerDisk = 0;
-    for (std::size_t i = 1; i < bodies.size(); ++i) {
-        const auto p = bodies[i].position;
+    std::size_t core = 0, disk = 0, halo = 0, inner = 0, overlap = 0;
+    double diskZ2 = 0.0, coreZ2 = 0.0;
+    for (std::size_t id = 1; id < bodies.size(); ++id) {
+        const auto p = bodies[id].position;
         const double radius = std::hypot(p.x, p.y);
-        if (i % 3 == 0) {
-            const double ellipsoidRadius = std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z / (0.85 * 0.85));
-            check(ellipsoidRadius >= 0.06 && ellipsoidRadius <= 0.61, "seeded ellipsoid core has real XYZ volume");
+        if (id % 5 == 0) {
+            check(std::hypot(radius, p.z / 0.76) <= 0.66, "bulge is an ellipsoid, not a sphere painted on the disk");
+            coreZ2 += p.z * p.z;
             ++core;
-        } else if (i % 11 != 0) {
-            check(radius >= 0.2 && radius <= 1.6, "disk has bounded actual 3D bodies");
+        } else if (id % 23 == 0) {
+            const double radial = std::hypot(radius, p.z / 0.86);
+            check(radial >= 0.48 && radial <= 1.66, "sparse halo has real height");
+            ++halo;
+        } else {
+            check(radius <= 1.82, "bounded disk");
             ++disk;
-            if (radius < 0.7) {
-                ++innerDisk;
-            }
+            diskZ2 += p.z * p.z;
+            if (radius < 0.7) ++inner;
+            if (radius < 0.2) ++overlap;
         }
     }
-    check(core == 1365 && disk == 2482, "large core and thick disk contain actual bodies");
-    const auto cumulative = [](double r) { return 1.0 - (1.0 + r / 0.36) * std::exp(-r / 0.36); };
-    check(std::abs(double(innerDisk) / double(disk) - cumulative(0.5) / cumulative(1.4)) < 0.05, "radial density agrees with independently integrated exponential CDF");
+    check(core == 819 && disk == 3133 && halo == 143, "populations partition all satellite bodies");
+    check(overlap > 100 && diskZ2 / disk > 0.001 && coreZ2 / core > 2.0 * diskZ2 / disk, "disk reaches the center and is thinner than the bulge");
+    const auto cumulative = [](double r) { return 1.0 - (1.0 + r / 0.47) * std::exp(-r / 0.47); };
+    check(std::abs(double(inner) / double(disk) - cumulative(0.7) / cumulative(1.82)) < 0.04, "radial density matches area-weighted exponential disk");
+    check(std::abs(bodies[1].position.y - 1.1827046559686794) < 1e-10, "same seed sequence as Canvas");
     lab::OrbitCamera camera{};
     for (int i = 0; i < 30; ++i) {
         lab::dollyCamera(camera, 1);
@@ -42,7 +47,7 @@ void testGalaxyAppearance() {
     std::vector<std::uint32_t> pixels(800 * 570);
     std::vector<project31::StarLight> light{};
     lab::OrbitCamera wideCamera{};
-    wideCamera.distance = 4;
+    wideCamera.distance = 7.8;
     const auto drawn = project31::renderStarField(pixels, 800, 570, bodies, wideCamera, light);
     check(drawn == 4096, "renderer visits every body, no decorative replacement points");
     const auto first = pixels;

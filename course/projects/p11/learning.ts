@@ -3,7 +3,8 @@ const learning = {
   guides: {
     "p11-l01": {
       focus: "Dựng marker trên framebuffer, rồi nối WASD/QE với world point bằng delta time.",
-      expected: "Starter hiện marker; WASD/QE đổi đúng world XYZ, còn preview XY chưa phụ thuộc Z.",
+      expected:
+        "Cửa sổ của bạn đã có đốm sáng. WASD làm nó dịch chuyển; Q/E đổi số Z nhưng chưa đổi hình.",
       files: ["include/lab.hpp", "include/scene.hpp", "include/view.hpp", "src/main.cpp"],
       steps: [
         {
@@ -14,7 +15,7 @@ const learning = {
         {
           title: "Vẽ marker từ các pixel",
           explanation:
-            "Tâm sáng, đĩa xanh và crosshair được clip vào viewport; nối renderScene với SDL_UpdateTexture.",
+            "Vẽ đốm màu hổ phách và dấu chữ thập trong viewport, rồi đưa framebuffer lên texture SDL.",
         },
         {
           title: "Giữ phím theo thời gian",
@@ -174,9 +175,9 @@ const learning = {
       ],
     },
     "p11-l08": {
-      focus: "Tắt debug để xem cảnh sạch; kiểm tra bằng nghiệm tính tay, biên và mã hoàn chỉnh.",
+      focus: "Đo từ tâm ảnh, dự đoán ảnh ở độ sâu gấp đôi rồi so với hai lần chiếu thật.",
       expected:
-        "Clean mode vẫn giữ cảnh 3D; CTest chạy được với Starter hoàn chỉnh ở cả Debug và Release.",
+        "Ẩn thước vẫn thấy đèn và cổng. Bật lại để đọc A/B. CTest kiểm mã trong work/ ở cả Debug và Release.",
       files: [
         "include/lab.hpp",
         "include/scene.hpp",
@@ -197,9 +198,9 @@ const learning = {
             "FOV 90° và viewport có origin cho pixel tính tay; round-trip chỉ là phép kiểm bổ sung.",
         },
         {
-          title: "Build toàn bộ rồi chạy CTest",
+          title: "Kiểm chính chương trình bạn đã viết",
           explanation:
-            "Tám checkpoint có sản phẩm tăng dần; Debug/Release đều chạy explicit check, không dùng assert bị NDEBUG tắt.",
+            "Bật COURSE_WORKBOOK rồi build project_11_tests: cả Debug và Release đều đọc header trong work/, không kiểm hộ bằng bản final.",
         },
       ],
     },

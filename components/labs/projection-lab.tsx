@@ -11,6 +11,7 @@ import type { Vec3 } from "@/lib/labs/normal";
 import {
   screenToCameraAtDepth,
   cameraToWorld,
+  measureDoubleDepth,
   projectionRoundTripError,
   type PointLens,
 } from "@/lib/labs/projection-point";
@@ -32,6 +33,16 @@ import { ProjectionGeometry } from "./projection-geometry";
 import { ProjectionControls } from "./projection-controls";
 import { LabReadout, useCanvasSize, useReducedMotion, usePauseOnReducedMotion } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
+const stageHint: Record<number, string> = {
+  1: "Thử D, rồi E. D đưa đèn sang phải. E tăng số Z nhưng hình chưa đổi: bản xem trước này mới dùng X và Y.",
+  2: "Giữ đèn đứng yên và tăng Camera.X. Đèn trượt sang trái dù dòng world point không đổi.",
+  3: "Chọn Mặc định rồi Xa gấp đôi. So vị trí đèn với tâm ảnh; xem thêm mặt cắt XZ hoặc YZ dưới hình.",
+  4: "Giữ nguyên điểm, mở rộng Vertical FOV. Đổi Aspect để thử một khung nhìn khác; kéo rộng cửa sổ không phải là đổi ống kính.",
+  5: "Bốn cổng có cùng kích thước ở Z = 2, 4, 8, 12. Thử đưa đèn ra sau camera. Đèn biến mất nhưng phần đường còn nhìn thấy vẫn ở đó.",
+  6: "Cho đèn bay rồi tạm dừng. Mỗi lần nhấn N, đồng hồ tiến đúng 0.1 giây. So vị trí sau hai lần thử có cùng thời gian.",
+  7: "Nắm gần mép đốm sáng rồi kéo. Nó không được giật vào giữa con trỏ, và độ sâu so với camera phải giữ nguyên.",
+  8: "Đoán vị trí của đèn ở xa gấp đôi, rồi nhấn M để kiểm. Nắm đèn kéo sang chỗ khác và làm lại. Nhấn F để ngắm cảnh không có thước.",
+};
 const format = (p: Vec3) => "(" + [p.x, p.y, p.z].map((n) => n.toFixed(4)).join(", ") + ")";
 export default function ProjectionLab({ mode }: { mode?: InteractiveLabMode }) {
   return <ProjectionScene key={mode ?? "projection-full"} mode={mode} />;
@@ -80,6 +91,16 @@ function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
   const toggleDebug = () => {
     cancelDrag();
     commit({ ...sceneRef.current, debug: !sceneRef.current.debug });
+  };
+  const toggleMeasure = () => {
+    cancelDrag();
+    const current = sceneRef.current;
+    commit({
+      ...current,
+      measureDepth: !(current.measureDepth && current.debug),
+      debug: true,
+      paused: true,
+    });
   };
   const editPoint = useCallback(
     (axis: keyof Vec3, value: number) => {
@@ -184,6 +205,11 @@ function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
       if (!event.repeat) step();
       return;
     }
+    if (stage >= 8 && key === "m") {
+      event.preventDefault();
+      if (!event.repeat) toggleMeasure();
+      return;
+    }
     if (stage >= 8 && key === "f") {
       event.preventDefault();
       if (!event.repeat) toggleDebug();
@@ -247,6 +273,10 @@ function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
         ? projectionRoundTripError(scene.point, scene.camera, scene.lens, viewportFor(scene))
         : null;
   const debug = stage < 8 || scene.debug;
+  const showRuler = stage === 8 && debug && scene.measureDepth;
+  const reading = showRuler
+    ? measureDoubleDepth(scene.point, scene.camera, scene.lens, viewportFor(scene))
+    : null;
   return (
     <div className="lab-body">
       <ProjectionControls
@@ -257,6 +287,7 @@ function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
         togglePause={togglePause}
         step={step}
         toggleDebug={toggleDebug}
+        toggleMeasure={toggleMeasure}
         editPoint={editPoint}
         editCamera={editCamera}
         editLens={editLens}
@@ -279,13 +310,21 @@ function ProjectionScene({ mode }: { mode?: InteractiveLabMode }) {
         aria-label="Điểm sáng 3D: WASD đổi XY, Q/E đổi depth; từ bài 7 kéo marker tại depth cố định"
       />
       <p>
-        Camera nhìn theo +Z; Y hướng lên. WASD/QE trong Canvas dịch từng nấc 0.1 world; ứng dụng SDL
-        dùng trạng thái phím và delta time để di chuyển liên tục. Từ bài 7, nhấn gần marker rồi kéo:
-        giữ depth, giữ chỗ nắm, chỉ XY thay đổi. Từ bài 5, các khung 3D cùng kích thước nằm ở depth
-        2/4/8/12; resize giữ bảng logic, Aspect thay đổi khung nhìn thật.{" "}
-        {reducedMotion ? "Reduced motion: tự động bay bị tắt; vẫn có thể tiến từng bước." : ""}
+        {stageHint[stage]}{" "}
+        {stage === 1 &&
+          "Trong Canvas, bấm vào hình để dùng WASD/QE; mỗi lần nhấn dịch 0.1 đơn vị. Trong bản SDL, giữ phím để đi liên tục."}
+        {stage >= 6 &&
+          reducedMotion &&
+          " Bạn đang bật giảm chuyển động: vẫn có thể dùng nút Tiến 0.1 s."}
       </p>
       {(stage === 3 || stage === 4) && <ProjectionGeometry scene={scene} />}
+      {showRuler && (
+        <p data-testid="depth-measurement">
+          {reading
+            ? `Từ tâm ảnh đến A: ${reading.firstOffset.toFixed(2)} px (Z = ${r.cameraPoint.z.toFixed(2)}). Đến vòng B: ${reading.secondOffset.toFixed(2)} px (Z = ${(2 * r.cameraPoint.z).toFixed(2)}). Chỉ độ sâu thay đổi; vòng B không phải một đốm sáng thứ hai.`
+            : "Không đo được: cả A và B phải nằm trong vùng nhìn. Chọn điểm mặc định hoặc giảm độ sâu rồi thử lại."}
+        </p>
+      )}
       {debug && (
         <LabReadout
           items={[

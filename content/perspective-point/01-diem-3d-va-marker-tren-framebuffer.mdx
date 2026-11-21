@@ -1,10 +1,11 @@
+import { CourseWorkFile } from "@/components/voxel-work-file";
 import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 # Vẽ điểm sáng và điều khiển ba tọa độ
 
 ## Vấn đề cần giải quyết
 
-Ở Project 10, bạn đã dùng một camera helper để nhìn các vector trong không gian. Bây giờ ta sẽ tự xây phần chiếu đó từ đầu. Nhưng trước khi bàn đến phối cảnh, hãy làm một việc nhìn thấy được: vẽ một điểm sáng và điều khiển vị trí của nó.
+Ở [Project 10](/projects/3d-compass), bạn đã kéo một đỉnh tam giác rồi nhìn mũi tên pháp tuyến đổi hướng. Khi ấy bộ chiếu được cho sẵn: bạn bảo nó vẽ một điểm 3D và nhận lại một vị trí trên màn hình. Bây giờ ta mở chính chiếc hộp ấy. Đích đầu tiên rất nhỏ: giữ D để đốm sáng chạy sang phải; giữ E để số Z tăng mà đốm sáng **chưa** đi đâu cả.
 
 Tải ZIP ở trang tổng quan, giải nén rồi mở thư mục có CMakeLists.txt. Starter đã có window, renderer, texture và framebuffer CPU từ Project 01. Các file được tách theo việc chúng làm: lab.hpp giữ kiểu toán học, scene.hpp giữ state, view.hpp vẽ pixel, presentation.hpp đưa ảnh lên SDL, main.cpp quản lý vòng lặp và input. Starter chỉ hiện nền; bài này thêm điểm sáng.
 
@@ -18,27 +19,27 @@ $$
 
 Trong công thức, (cₓ,cᵧ) là tâm viewport; mỗi đơn vị trong world tạm ứng với 70 pixel. Dấu trừ ở Y đổi chiều từ Y hướng lên trong world sang Y hướng xuống trên màn hình. Đây **không phải perspective projection**: tăng Z mà hình chưa đổi là đúng với mục đích của bản xem trước này. Đến bài 3, ta sẽ thay công thức đó bằng phép chiếu có độ sâu.
 
-Điểm sáng không phải một pixel quá nhỏ để quan sát. Ta vẽ một đĩa xanh có tâm trắng và crosshair vàng. Bán kính lúc này cố định 10 pixel; đến bài 3 cả vị trí lẫn kích thước sẽ phụ thuộc độ sâu.
+Điểm sáng không phải một pixel quá nhỏ để quan sát. Ta vẽ một đốm màu hổ phách, có lõi sáng và dấu chữ thập để xác định tâm. Bán kính lúc này cố định 10 pixel; đến bài 3 cả vị trí lẫn kích thước sẽ phụ thuộc độ sâu.
 
 <InteractiveLab demo="projection" mode="projection-point" />
 
 ## Viết code từng bước
 
-Viết mã trong **starter/include** và **starter/src** của bản ZIP đã giải nén. Tiêu đề code block ghi đường dẫn tính từ thư mục Starter. Nếu bài yêu cầu thay một hàm, hãy thay hàm cũ, không dán thêm một bản trùng tên.
+Giải nén ZIP rồi mở terminal ngay cạnh `CMakeLists.txt`. Lệnh configure bên dưới tạo `work/` từ `starter/` **một lần**. Chạy thử trước khi viết, sau đó sửa trong `work/include` và `work/src`. Giữ nguyên `starter/` để lúc nào cũng có chỗ đối chiếu.
 
-Build và chạy đúng mã bạn vừa viết:
+Hãy chạy bản khởi đầu trước khi sửa. Cửa sổ có nền nhưng chưa có đốm sáng. Trong vòng lặp, dữ liệu đi theo thứ tự: đọc phím → cập nhật `scene.point` → vẽ vào framebuffer → đưa ảnh lên SDL. Ta sẽ gắn từng việc vào đúng chỗ trên đường đi ấy.
 
-```powershell title="Chạy mã đang học trong Starter"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_11_starter --parallel 2
-.\build\Debug\project_11_starter.exe
+```powershell title="Chạy chương trình đang viết (Windows, Visual Studio)"
+cmake -S . -B build-work -DCOURSE_WORKBOOK=ON
+cmake --build build-work --config Debug --target project_11_work --parallel 1
+.\build-work\Debug\project_11_work.exe
 ```
 
-**Checkpoint 01 là bản tham khảo sau bài này**, không phải nơi tự nhận thay đổi từ Starter. Khi cần đối chiếu, mở checkpoints/01 hoặc build riêng target project_11_checkpoint_1; lệnh đó chạy mã mẫu, không kiểm chứng phần bạn vừa sửa.
+`checkpoints/01` là bản tham khảo sau bài này. Khi muốn thử phần mình vừa sửa, hãy chạy `project_11_work`, không chạy checkpoint.
 
 ### Bước 1 — Đọc dữ liệu đã có trong bộ khung
 
-Vec2, Vec3, Camera3D, PerspectiveLens, Viewport và hàm finite đã có trong starter/include/lab.hpp. Scene cùng viewportFor và applyPreset đã có trong starter/include/scene.hpp. Đọc lại hai khai báo dưới để biết mình đang sửa dữ liệu nào; **không khai báo thêm một Vec3 hay Scene trùng tên**.
+Vec2, Vec3, Camera3D, PerspectiveLens, Viewport và hàm finite đã có trong `work/include/lab.hpp`. Scene cùng viewportFor và applyPreset đã có trong `work/include/scene.hpp`. Đọc lại hai khai báo dưới để biết mình đang sửa dữ liệu nào; **không khai báo thêm một Vec3 hay Scene trùng tên**.
 
 ```cpp title="include/lab.hpp — một vị trí có ba thành phần"
 struct Vec3 {
@@ -64,6 +65,7 @@ struct Scene {
 
 Camera, lens, elapsed và debug đã có trong khung để các checkpoint dùng chung cấu trúc; hai bài đầu chưa dùng chúng để chiếu. point khởi đầu tại (1,0.6,4). Đừng đổi point thành pixel rồi ghi ngược vào state. Hàm previewPoint chỉ trả một Vec2 tạm:
 
+{/* snippet include/lab.hpp#preview-xy */}
 ```cpp title="include/lab.hpp — bản xem trước XY"
 inline Vec2 previewPoint(Vec3 point) {
     return {point.x * 70.0, point.y * 70.0};
@@ -99,7 +101,7 @@ inline void drawPointMarker(Framebuffer& image, Vec2 center, int radius, const V
 }
 ```
 
-Thêm drawPointMarker trong namespace lab của starter/include/view.hpp, trước renderScene. Hai vòng lặp xét một hình vuông nhỏ quanh tâm. Điều kiện x²+y²≤r² giữ lại phần đĩa; phần giữa dùng màu trắng. Kiểm tra viewport chạy trước putPixel để marker không ghi sang vùng chữ. Thay toàn bộ renderScene đang chỉ tô nền bằng hàm dưới. Hàm lấy preview, cộng tâm viewport và gọi drawPointMarker. Đọc cả hàm để biết chính xác ảnh được ghép ở đâu:
+Thêm drawPointMarker vào namespace `lab` của `work/include/view.hpp`, ngay trước `renderScene`. Hai vòng lặp xét một hình vuông nhỏ quanh tâm. Điều kiện x²+y²≤r² giữ lại phần đĩa; phần giữa dùng màu trắng. Kiểm tra viewport chạy trước putPixel để marker không ghi sang vùng chữ. Thay toàn bộ renderScene đang chỉ tô nền bằng hàm dưới. Hàm lấy preview, cộng tâm viewport và gọi drawPointMarker. Đọc cả hàm để biết chính xác ảnh được ghép ở đâu:
 
 ```cpp title="include/view.hpp — từ world point tới ảnh xem trước"
 inline void renderScene(Framebuffer& image, const Scene& scene) {
@@ -119,7 +121,7 @@ inline void renderScene(Framebuffer& image, const Scene& scene) {
 
 ### Bước 3 — Bắt phím rồi cập nhật theo dt
 
-Thêm movePoint vào namespace lab của starter/include/scene.hpp. Trong main.cpp, scene, dirty, deltaTime và khối PollEvent đã có sẵn; đặt khối đọc phím dưới đây **sau vòng SDL_PollEvent và trước if (dirty)**. Không tạo thêm vòng lặp while (running).
+Thêm `movePoint` vào namespace `lab` của `work/include/scene.hpp`. Trong `work/src/main.cpp`, scene, dirty, deltaTime và khối PollEvent đã có sẵn; đặt khối đọc phím dưới đây **sau vòng SDL_PollEvent và trước if (dirty)**. Không tạo thêm vòng lặp while (running).
 
 W/A/S/D đổi Y/X; Q đưa điểm lại gần camera bằng cách giảm Z, E tăng Z. Đọc SDL_GetKeyboardState sau khi đã PollEvent. Dùng scancode, không dùng keycode làm chỉ số mảng. Đây là khối input trong main.cpp:
 
@@ -168,23 +170,46 @@ movePoint từ chối delta không hữu hạn trước khi sửa bất kỳ th�
 
 length chuẩn hóa hướng khi giữ nhiều phím để đi chéo không nhanh hơn. distance=2×dt/length chia đều quãng đường cho ba thành phần. Chỉ nhận input khi window có focus; movePoint giới hạn vùng di chuyển và đặt paused=true. Cuối frame, ảnh CPU được chuyển lên texture bằng SDL_UpdateTexture:
 
+### Tự ghép trong `work/`
+
+Các đoạn trên giải thích phần mới. Khi viết, mở từng tệp dưới đây để thấy chỗ cần sửa trong **bản của bài trước**. Đoạn nào đã gõ rồi thì chỉ đối chiếu, không chèn thêm lần nữa.
+
+Viết phép đổi đơn vị tạm thời, từ tọa độ X/Y sang số pixel lệch tâm.
+
+<CourseWorkFile project="11" step={1} path="include/lab.hpp" />
+
+Cho điểm di chuyển nhưng vẫn giữ riêng ba tọa độ thật.
+
+<CourseWorkFile project="11" step={1} path="include/scene.hpp" />
+
+Dùng tâm viewport để đặt đốm sáng; vẽ thử ở một vị trí cố định trước khi nối phím.
+
+<CourseWorkFile project="11" step={1} path="include/view.hpp" />
+
+Nối trạng thái phím với bước dịch chuyển; đến đây đốm sáng mới chạy.
+
+<CourseWorkFile project="11" step={1} path="src/main.cpp" />
+
 ## Ghép các phần lại
 
-Trong main.cpp, giữ nguyên khối upload/present đã có từ Starter; renderScene chạy trước upload, còn SDL_RenderPresent nằm trong presentFramebuffer. Cụ thể:
+Trong main.cpp, giữ nguyên khối upload/present đã có từ Starter; renderScene chạy trước upload, còn `finishFrame` gọi `SDL_RenderPresent` sau khi đã vẽ xong. Cụ thể:
 
 ```cpp title="src/main.cpp — upload ảnh sau khi vẽ"
 if (dirty) {
     lab::renderScene(image, scene);
-    if (!SDL_UpdateTexture(texture, nullptr, image.pixels.data(), lab::Framebuffer::width * static_cast<int>(sizeof(std::uint32_t))) || !lab::presentFramebuffer(renderer, texture, scene)) {
+    if (!SDL_UpdateTexture(texture, nullptr, image.pixels.data(), lab::Framebuffer::width * static_cast<int>(sizeof(std::uint32_t))) || !lab::presentFramebuffer(renderer, texture, scene, capturePath)) {
         std::cerr << SDL_GetError() << '\n';
         failed = true;
         break;
     }
     dirty = false;
+    if (capturePath) {
+        running = false;
+    }
 }
 ```
 
-Build lại project_11_starter. Bạn phải thấy điểm sáng lệch phải và lệch lên so với tâm. W đưa nó lên, D đưa nó sang phải. Q/E chỉ đổi world Z trong HUD, chưa thay hình; đừng sửa điều đó bằng cách đổi bán kính giả. Window resize dùng bảng logic 1100×800 có letterbox nên không kéo dãn ảnh.
+Build lại `project_11_work`. Bạn phải thấy điểm sáng lệch phải và lệch lên so với tâm. W đưa nó lên, D đưa nó sang phải. Q/E chỉ đổi world Z trong HUD, chưa thay hình; đừng sửa điều đó bằng cách đổi bán kính giả. Window resize dùng bảng logic 1100×800 có letterbox nên không kéo dãn ảnh.
 
 ## Thử làm sai để hiểu đúng
 

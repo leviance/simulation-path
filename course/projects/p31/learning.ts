@@ -3,240 +3,266 @@ import type { ProjectLearningAssets } from "../../learning/types";
 const learning = {
   guides: {
     "p31-l01": {
-      focus: "Mở cửa sổ, vẽ state XYZ qua camera và sinh lại cùng đĩa sao bằng seed cố định.",
+      focus:
+        "Dùng cùng một đĩa sao để phân biệt vị trí thật trong không gian với vị trí của đốm sáng trên màn hình.",
       expected:
-        "Gắn seed với preset, giữ tổng mass đĩa gần như không đổi khi tăng N và trừ cùng bulk velocity khỏi toàn hệ.",
-      files: ["src/main.cpp", "include/lab.hpp", "include/simulation.hpp"],
+        "Đổi từ nhìn thẳng sang nhìn cạnh: nhánh xoắn thu hẹp thành một dải, vùng sao ở tâm vẫn dày. Tâm khối không đổi theo camera.",
+      files: ["include/lab.hpp", "include/galaxy-seed.hpp", "src/main.cpp"],
       steps: [
         {
-          title: "Chạy khung SDL trước",
+          title: "Mở bản mình sẽ viết",
           explanation:
-            "main tạo từng tài nguyên và trả lỗi ngay nếu không tạo được. runApplication giữ event loop; Simulation::reset sinh bodies trước lần vẽ đầu.",
+            "Giải nén ZIP, bật COURSE_WORKBOOK và chạy project_31_work. Bộ gieo sao, camera cùng vòng lặp SDL đã có; các phép đo mới nằm ở work/include/lab.hpp.",
         },
         {
-          title: "Chốt dữ liệu vật lý",
+          title: "Tìm xem nhánh từ đâu mà có",
           explanation:
-            "Body chỉ giữ position, velocity và mass. Camera không ghi ngược tọa độ màn hình vào vector bodies.",
+            "Đọc diskDensity: trên cùng một vành, có góc dễ nhận sao hơn góc bên cạnh. Cách gieo này chỉ tạo trạng thái ban đầu; sao không bị neo vào một đường cong.",
         },
         {
-          title: "Sinh lại cùng thí nghiệm",
+          title: "Cân cả thiên hà",
           explanation:
-            "Gắn seed với preset, giữ tổng mass đĩa gần như không đổi khi tăng N và trừ cùng bulk velocity khỏi toàn hệ.",
+            "Cộng khối lượng và vị trí có trọng số, rồi chia một lần. Thử hai sao khác khối lượng trước khi đọc tâm khối của hàng nghìn sao.",
         },
       ],
     },
     "p31-l02": {
       focus:
-        "Tự suy ra vector gia tốc, phân biệt mass của nguồn với mass của target và xử lý cự ly gần bằng softening.",
+        "Từ vị trí của hai sao, tự vẽ mũi tên cho biết vật thứ nhất bị vật thứ hai kéo về phía nào.",
       expected:
-        "pairAccelerationForSelected đọc hai body trong snapshot; drawScene chuyển vector sang mũi tên, chưa làm physics tự chạy.",
+        "Đổi ngôi sao đang chọn làm mũi tên đổi hướng. Hai vật trùng tọa độ vẫn cho kết quả hữu hạn.",
       files: ["include/lab.hpp", "include/simulation.hpp", "include/presentation.hpp"],
       steps: [
         {
-          title: "Từ lực đến gia tốc",
+          title: "Vẽ vector nối hai sao trên giấy",
           explanation:
-            "Vì đang cập nhật velocity của target, mass target triệt tiêu; sourceMass vẫn phải nằm trong biểu thức.",
+            "Lấy vị trí nguồn trừ vị trí đích. Đưa nguồn sang phía bên trái, gia tốc phải đổi chiều dù độ sáng trên ảnh giữ nguyên.",
         },
         {
-          title: "Xử lý cự ly gần",
+          title: "Tính một cặp",
           explanation:
-            "Cộng epsilon² trước khi lấy lũy thừa 3/2. Đây là mô hình potential đã làm trơn, không phải một chiếc kẹp số tùy ý.",
+            "Dùng khối lượng của nguồn và khoảng cách đã làm trơn. Thử nhân đôi khối lượng nguồn hoặc đặt hai sao trùng nhau.",
         },
         {
-          title: "Nối với hình đang vẽ",
+          title: "Đưa lực vào cửa sổ",
           explanation:
-            "pairAccelerationForSelected đọc hai body trong snapshot; drawScene chuyển vector sang mũi tên, chưa làm physics tự chạy.",
+            "Lấy hai Body trong mô phỏng đang mở và chuyển vector kết quả cho hàm vẽ mũi tên. Chưa cập nhật vị trí ở bước này.",
         },
       ],
     },
     "p31-l03": {
-      focus:
-        "Viết direct summation đơn giản trước khi tối ưu; kiểm N−1 nguồn và các ca hai, ba vật thể tính tay.",
+      focus: "Thay sức hút của riêng vật tâm bằng tổng sức hút của mọi sao khác.",
       expected:
-        "Một target đọc N−1 nguồn; cả pass đọc N(N−1). Đó là lượng việc, không phải số microsecond.",
+        "Một lượt tính trên ba vật xét sáu đóng góp. Dữ liệu vị trí ban đầu vẫn nguyên vẹn cho vật được xét cuối cùng.",
       files: ["include/lab.hpp", "include/presentation.hpp"],
       steps: [
         {
-          title: "Đọc từng nguồn thật",
+          title: "Chọn một vật đích",
           explanation:
-            "Vòng lặp direct bỏ sourceIndex==targetIndex; hai body cùng position nhưng khác index vẫn là hai nguồn hợp lệ.",
+            "Bỏ nguồn có cùng ID, không bỏ một vật khác chỉ vì trùng tọa độ. Cộng các vector thay vì cộng độ dài.",
         },
         {
-          title: "Giữ snapshot bất biến",
+          title: "Tính cho cả hệ",
           explanation:
-            "directAccelerations trả một vector gia tốc mới. Không cập nhật position ngay bên trong vòng target.",
+            "Mỗi vật ghi vào một ô gia tốc riêng. Không ghi ngược vào danh sách vị trí mà các phép tính sau còn đang đọc.",
         },
         {
-          title: "Đếm lượng việc",
+          title: "Thử tính đối xứng",
           explanation:
-            "Một target đọc N−1 nguồn; cả pass đọc N(N−1). Đó là lượng việc, không phải số microsecond.",
+            "Đặt hai nguồn đối xứng rồi xét thành phần gia tốc dọc đường nối chúng. Hai đóng góp ngược nhau phải triệt tiêu trên trục đó.",
         },
       ],
     },
     "p31-l04": {
-      focus:
-        "Tính xong gia tốc của cả snapshot rồi mới cập nhật velocity/position; chia việc theo target để UI vẫn phản hồi.",
+      focus: "Từ một ảnh đứng yên, cho mọi sao tiến lên đúng một bước thời gian.",
       expected:
-        "Pause giữ bước đang tính, Cancel bỏ pending state. Camera vẫn hoạt động; không cố đuổi kịp mọi frame chậm.",
+        "Nhấn N rồi chờ tính xong: đồng hồ tăng đúng dt và toàn bộ sao đổi sang trạng thái mới cùng lúc.",
       files: ["include/lab.hpp", "include/simulation.hpp", "include/application.hpp"],
       steps: [
         {
-          title: "Tính lực theo từng đợt",
+          title: "Chốt ảnh trước bước",
           explanation:
-            "beginPhysics mở một bước trên snapshot hiện tại, giữ nextTarget và pendingAccelerations giữa các frame.",
+            "Dành một ô cho gia tốc của mỗi sao. Mọi phép tính trong bước cùng đọc các vị trí lúc bắt đầu.",
         },
         {
-          title: "Commit đúng một fixed step",
+          title: "Giữ việc dở, không dời sao sớm",
           explanation:
-            "Chỉ khi target cuối cùng xong mới cập nhật velocity rồi position; dt không đổi theo thời gian vẽ frame.",
+            "Nhớ ID tiếp theo khi hết ngân sách xử lý. Có thể quay camera trong lúc chờ mà không thấy nửa đĩa đã sang thời điểm mới.",
         },
         {
-          title: "Cho người dùng dừng được",
+          title: "Thử một bước bằng số nhỏ",
           explanation:
-            "Pause giữ bước đang tính, Cancel bỏ pending state. Camera vẫn hoạt động; không cố đuổi kịp mọi frame chậm.",
+            "Cập nhật vận tốc trước, dùng vận tốc mới để dời vị trí. Kiểm ví dụ một chiều rồi mới quan sát thiên hà chuyển động.",
         },
       ],
     },
     "p31-l05": {
       focus:
-        "Thêm mass và tâm khối vào Octree; kiểm trung bình có trọng số, leaf storage và điểm trùng nhau.",
+        "Biến Octree tìm điểm thành một cây biết mỗi vùng chứa bao nhiêu khối lượng và khối lượng tập trung ở đâu.",
       expected:
-        "Dựng lại sau khi bodies đổi. Cây của snapshot cũ không được mang sang tính lực cho vị trí mới.",
-      files: ["include/tree.hpp", "include/simulation.hpp"],
+        "Tổng khối lượng và tâm khối ở gốc khớp với việc duyệt toàn bộ sao, kể cả khi trong một lá có hai sao trùng tọa độ.",
+      files: [
+        "include/tree.hpp",
+        "include/simulation.hpp",
+        "include/render.hpp",
+        "include/presentation.hpp",
+      ],
       steps: [
         {
-          title: "Chia không gian có giới hạn",
+          title: "Chia ô và giữ các ID",
           explanation:
-            "Dùng index thay reference khi vector nodes thêm phần tử; depth/node-size/node-count ngăn điểm trùng làm cây tách vô hạn.",
+            "Một ID thuộc một lá. Giới hạn chia giúp cây kết thúc khi không thể phân biệt hai tọa độ trùng nhau.",
         },
         {
-          title: "Gộp từ lá đi lên",
+          title: "Cân từ lá lên gốc",
           explanation:
-            "Leaf cộng mass thật; internal node cộng children. Tâm khối là weightedPosition/totalMass, không phải tâm hộp.",
+            "Lá cộng khối lượng sao thật; ô cha coi mỗi con là một cụm có tổng khối lượng và tâm khối riêng.",
         },
         {
-          title: "Đặt cây vào vòng đời",
+          title: "Cho cây theo kịp sao",
           explanation:
-            "Dựng lại sau khi bodies đổi. Cây của snapshot cũ không được mang sang tính lực cho vị trí mới.",
+            "Dựng lại cây sau bước thay đổi vị trí. Xoay camera chỉ cần chiếu lại đường cạnh, không cần gieo lại bất kỳ sao nào.",
         },
       ],
     },
     "p31-l06": {
       focus:
-        "Dùng s/d < theta nhưng buộc mở node chứa target; vẽ lại đúng các quyết định traversal.",
+        "Quyết định khi nào cả cụm sao xa có thể thay bằng một nguồn mà không tính luôn lực của vật lên chính nó.",
       expected:
-        "ForceTrace ghi opened/accepted trong chính traversal tính lực; presentation không suy đoán từ một cây chỉ vẽ các lá.",
-      files: ["include/tree.hpp", "include/presentation.hpp"],
+        "Chọn hai sao khác nhau: cùng một ô có thể được mở khi ở gần sao thứ nhất nhưng được nhận nguyên cụm khi ở xa sao thứ hai.",
+      files: [
+        "include/tree.hpp",
+        "include/simulation.hpp",
+        "include/presentation.hpp",
+        "include/application.hpp",
+      ],
       steps: [
         {
-          title: "Hỏi cụm có đủ xa không",
+          title: "Đo từ sao, không từ camera",
           explanation:
-            "Dùng cạnh node s và khoảng cách d đến centerOfMass. Mỗi target có một quyết định mở/chấp nhận riêng.",
+            "So cạnh ô với khoảng cách đến tâm khối. Dù nhìn màn hình từ góc nào, phép quyết định vẫn diễn ra trong không gian của mô phỏng.",
         },
         {
-          title: "Không quên chính target",
-          explanation: "Dù s/d nhỏ, node chứa target vẫn phải mở. Leaf chỉ bỏ đúng index target.",
+          title: "Bảo vệ vật đang xét",
+          explanation:
+            "Ô chứa vật đích luôn phải mở; khi tới lá, chỉ bỏ đúng ID của vật đích. Sau đó mới áp dụng phép tính lực cặp.",
         },
         {
-          title: "Vẽ đúng quyết định đã dùng",
+          title: "Tô đúng các ô đã dùng",
           explanation:
-            "ForceTrace ghi opened/accepted trong chính traversal tính lực; presentation không suy đoán từ một cây chỉ vẽ các lá.",
+            "Ghi các ô đã mở hoặc nhận ngay trong hàm tính lực. Đổi theta trên cùng một ảnh dừng rồi đối chiếu lớp quan sát.",
         },
       ],
     },
     "p31-l07": {
       focus:
-        "Dùng fixture độc lập để phát hiện sai mass ở lá, trùng storage và cạnh trỏ về tổ tiên.",
+        "Khi mũi tên lực có vẻ sai, phân biệt lỗi lưu ID, lỗi cộng khối lượng và lỗi để vật tự hút.",
       expected:
-        "Bắt đầu hai/ba vật và vị trí trùng trước khi chạy thiên hà. Timing hoặc ảnh đẹp không thay được đáp án tính tay.",
-      files: ["include/tree.hpp", "tests/tests.cpp", "tests/extended.hpp"],
+        "Một cây hỏng trả về tên điều kiện sai thay vì làm công cụ kiểm tra truy cập ngoài phạm vi.",
+      files: ["include/tree.hpp", "include/application.hpp", "tests/tests.cpp"],
       steps: [
         {
-          title: "Kiểm lá bằng bodies thật",
+          title: "Đếm chỗ ở của từng sao",
           explanation:
-            "Mass ở lá cũng có thể sai. Inspector đối chiếu leaf mass và center với bodyIndices, không chỉ cộng các children.",
+            "Duyệt tất cả lá bằng một bảng đếm chung. ID mất hoặc lặp đều phải lộ ra cho dù tổng khối lượng trông hợp lý.",
         },
         {
-          title: "Kiểm quan hệ cha con",
+          title: "Kiểm con trước khi đọc",
           explanation:
-            "Mỗi node trừ root có một cha, child nằm sau parent và sâu hơn một mức. Cạnh quay ngược bị báo lỗi mà không cần recurse vào nó.",
+            "Xác nhận các chỉ số và hình hộp phù hợp với ô cha. Một cây lỗi cũng phải kiểm được mà không làm ứng dụng dừng đột ngột.",
         },
         {
-          title: "Dùng fixture có đáp án",
+          title: "Dựng ca lỗi nhỏ",
           explanation:
-            "Bắt đầu hai/ba vật và vị trí trùng trước khi chạy thiên hà. Timing hoặc ảnh đẹp không thay được đáp án tính tay.",
+            "Lặp một ID, rồi thử riêng ca hỏng liên kết con. Cuối cùng chọn một sao và đối chiếu lực với cách cộng trực tiếp.",
         },
       ],
     },
     "p31-l08": {
-      focus:
-        "Giữ nguyên bodies và epsilon, quét nhiều theta; báo absolute/RMS error cùng exact/aggregate work.",
+      focus: "Đo xem khi chấp nhận nhiều cụm hơn, lực lệch lời giải trực tiếp bao nhiêu.",
       expected:
-        "Absolute RMS có đơn vị gia tốc. Normalized RMS dùng tổng bình phương lực reference và sàn K·10⁻²⁴ để tránh chia cho 0.",
-      files: ["include/analysis.hpp", "include/experiments.hpp", "include/application.hpp"],
+        "Mỗi hàng theta nói về cùng một thời điểm và nhóm sao; bạn đọc được cả sai số có đơn vị gia tốc lẫn sai số tương đối.",
+      files: [
+        "include/analysis.hpp",
+        "include/experiments.hpp",
+        "include/render.hpp",
+        "include/application.hpp",
+      ],
       steps: [
         {
-          title: "Đóng băng snapshot",
+          title: "Chụp ảnh trạng thái một lần",
           explanation:
-            "SurveyJob giữ bodies, tree, epsilon và thời điểm đo. Đổi cấu hình thì hủy report cũ.",
+            "Giữ nguyên danh sách sao, epsilon và nhóm ID sẽ đo. Chỉ theta được phép đổi giữa các hàng.",
         },
         {
-          title: "Giữ cùng tập target",
+          title: "Lấy direct làm mốc",
           explanation:
-            "Direct đọc mọi source cho từng target; cả bốn theta dùng lại đúng các reference vector ấy.",
+            "Tính lực chính xác cho các ID mẫu rồi giữ lại để khỏi lấy một thiên hà ở thời điểm khác làm đối chứng.",
         },
         {
-          title: "Đọc RMS có đơn vị",
+          title: "Đọc hai loại RMS",
           explanation:
-            "Absolute RMS có đơn vị gia tốc. Normalized RMS dùng tổng bình phương lực reference và sàn K·10⁻²⁴ để tránh chia cho 0.",
+            "Đặt sai số tuyệt đối cạnh sai số chuẩn hóa. Ở gần nơi lực triệt tiêu, một phần trăm lớn chưa hẳn là một gia tốc lớn.",
         },
       ],
     },
     "p31-l09": {
       focus:
-        "Tách build, force pass và render; warm-up, median và khoảng min/max trên cùng workload có giới hạn.",
+        "Đo riêng thời gian duyệt cây và thời gian dựng cây trước khi kết luận Barnes–Hut có lợi ở cỡ hệ nào.",
       expected:
-        "Bảng runtime không xếp hạng độ đúng. Giữ cả trường hợp chi phí dựng cây khiến BH không có lợi ở hệ nhỏ.",
-      files: ["include/benchmark.hpp", "include/application.hpp"],
+        "Mỗi hàng đủ số liệu có trung vị, khoảng dao động và lượng việc; hàng hết hạn không biến thành một số đo giả.",
+      files: [
+        "include/benchmark.hpp",
+        "include/analysis.hpp",
+        "include/application.hpp",
+        "include/render.hpp",
+        "src/main.cpp",
+      ],
       steps: [
         {
-          title: "Chốt workload trước đồng hồ",
+          title: "Chọn cùng dữ liệu và cấu hình",
           explanation:
-            "Direct và BH dùng cùng N, seed, epsilon, theta và đủ mọi target. Tree build được ghi riêng.",
+            "Dùng Release với cùng seed, theta, epsilon, số vật. Đừng so khung hình/giây của toàn bộ cửa sổ với thời gian phép tính lực.",
         },
         {
-          title: "Đo nhiều mẫu ngắn",
+          title: "Đo theo lượt hữu hạn",
           explanation:
-            "RuntimeJob bỏ một warm-up và lấy median/min/max của năm pass; clock chỉ bao kernel, không bao thời gian đợi frame.",
+            "Bỏ lượt làm nóng, dùng năm lượt để tính trung vị. Giữa các lượt vẫn cho phép dừng hoặc hủy.",
         },
         {
-          title: "Đặt sai số cạnh chi phí",
+          title: "Tính giá của cả một bước",
           explanation:
-            "Bảng runtime không xếp hạng độ đúng. Giữ cả trường hợp chi phí dựng cây khiến BH không có lợi ở hệ nhỏ.",
+            "So thời gian trực tiếp với chi phí dựng cộng duyệt cây, rồi đọc sai số của theta đã dùng ở bài trước.",
         },
       ],
     },
     "p31-l10": {
-      focus:
-        "Đo năng lượng toàn hệ theo snapshot, thử giảm dt ở hệ có nghiệm tròn và bàn giao ứng dụng 4.096 vật thể.",
+      focus: "Nối hình thiên hà với bằng chứng rằng lực và bước thời gian đang làm đúng việc.",
       expected:
-        "Thực hiện quy trình 4.096 body, camera/target, pause/step, đo lực và energy, rồi build/test các snapshot. Ghi riêng desktop và smoke.",
-      files: ["include/experiments.hpp", "include/application.hpp", "tests/extended.hpp"],
+        "Bản C++ trong work/ cho xem 4.096 vật từ ba góc, bước qua thời gian, đo năng lượng toàn hệ và kiểm một quỹ đạo hai vật.",
+      files: [
+        "include/analysis.hpp",
+        "include/experiments.hpp",
+        "include/simulation.hpp",
+        "include/presentation.hpp",
+        "include/application.hpp",
+        "tests/extended.hpp",
+      ],
       steps: [
         {
-          title: "Cộng đủ năng lượng hệ",
+          title: "Theo dõi các đại lượng của cùng thời điểm",
           explanation:
-            "EnergyJob đọc mọi cặp i<j của snapshot và dùng cùng potential có softening; ghi N và t cạnh E, momentum và COM.",
+            "Cộng động năng theo sao, thế năng theo từng cặp khác nhau. Ghi thời điểm và epsilon cùng với số đo.",
         },
         {
-          title: "Giảm dt trên bài toán có nghiệm",
+          title: "Tách hai nguồn sai số",
           explanation:
-            "Hai vật quay tròn cho phép tính vị trí tại T=1 độc lập. Giữ theta=0,5 và epsilon=0,02, chỉ đổi dt.",
+            "Dùng các lực trực tiếp để đánh giá theta. Dùng quỹ đạo hai vật có nghiệm đã biết để đánh giá dt ở cùng thời điểm cuối.",
         },
         {
-          title: "Nghiệm thu sản phẩm",
+          title: "Chạy bản do bạn ghép",
           explanation:
-            "Thực hiện quy trình 4.096 body, camera/target, pause/step, đo lực và energy, rồi build/test các snapshot. Ghi riêng desktop và smoke.",
+            "Build work/ và chạy CTest trên chính các header trong đó. Sau đó đổi góc nhìn, đi xuyên qua lõi và thử chuột, phím trong cửa sổ C++ thật.",
         },
       ],
     },
