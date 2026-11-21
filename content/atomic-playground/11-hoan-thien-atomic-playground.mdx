@@ -268,37 +268,25 @@ Phần còn lại của fixture yêu cầu evaluator từ chối, examined=257 v
 Từ thư mục giải nén chứa CMakeLists.txt, với Visual Studio 2022:
 
 ```powershell title="PowerShell — build và kiểm CPU Debug"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug --parallel 1 --target project_45_final project_45_tests
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake -S . -B build-ref -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build-ref --config Debug --parallel 1 --target project_45_final project_45_tests
+ctest --test-dir build-ref -C Debug -L reference --no-tests=error --output-on-failure --timeout 20
 ```
 
-Target project_45_tests mặc định dùng headers trong final/include: CTest ở lệnh trên kiểm đáp án đóng gói, không tự kiểm các thay đổi bạn viết trong starter. Nó hữu ích để biết môi trường và bộ source mẫu có ổn, nhưng test xanh chưa chứng minh bài làm của bạn đúng. Phần dưới chỉ cách tạo target test riêng cho bản tự viết.
+Các lệnh trên kiểm `final/include`: chúng cho biết bộ mẫu chạy được, chưa nói gì về sampler bạn viết trong `starter/`. Bước 5 kiểm chính sampler đó.
 
 Lần configure đầu có thể tải SDL 3.4.8; đó là công việc mạng, không phải một vòng test. Không tăng timeout để che một job bị kẹt. Nếu tiến trình không còn tiến triển, dừng job đó và đọc log trước khi chạy lại.
 
-Với generator đa cấu hình, executable nằm dưới `build\Debug`. Với Ninja/Makefiles đơn cấu hình, dùng đường dẫn executable trực tiếp trong build và chọn build type khi configure. Muốn kiểm Release, build các target Release trước rồi chạy CTest với `-C Release`; không chạy CTest cho một cấu hình chưa được build.
+Với generator đa cấu hình, executable nằm dưới `build-ref\Debug`. Với Ninja/Makefiles đơn cấu hình, dùng đường dẫn executable trực tiếp trong build và chọn build type khi configure. Muốn kiểm Release, build các target Release trước rồi chạy CTest với `-C Release`; không chạy CTest cho một cấu hình chưa được build.
 
 ### Bước 5 — Kiểm bản tự viết, không chỉ đáp án
 
-Sau khi bạn đã điền đủ các hàm của bài 2–10 và nối app/shader, thêm target riêng sau vào cuối CMakeLists.txt **trong bản ZIP luyện tập**. Nó dùng cùng tests nhưng trỏ tới headers của starter:
-
-```cmake title="CMakeLists.txt — target kiểm CPU của bài làm"
-if(BUILD_TESTING)
-    add_executable(project_45_student_tests tests/tests.cpp)
-    target_compile_features(project_45_student_tests PRIVATE cxx_std_20)
-    target_include_directories(project_45_student_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/starter/include")
-    add_test(NAME project_45_student_tests COMMAND project_45_student_tests)
-    set_tests_properties(project_45_student_tests PROPERTIES TIMEOUT 20)
-endif()
-```
-
-Không thêm target này ở bài 1 rồi mong các hàm sampler chưa viết đã chạy được. Đây là bước kiểm của sản phẩm đã hoàn thành. Configure lại và chạy riêng tên test mới:
+Khi đã nối đủ các hàm ở bài 2–10, chọn `starter/` cho bộ kiểm CPU rồi chạy verifier trên ứng dụng của chính bạn. Các snapshot đầu chưa có đủ API; không cần sửa `CMakeLists.txt`.
 
 ```powershell title="PowerShell — kiểm đúng starter đã tự hoàn thiện"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug --parallel 1 --target project_45_student_tests project_45_starter
-ctest --test-dir build -C Debug -R "^project_45_student_tests$" --output-on-failure --timeout 20
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_45_check_work --parallel 1
+cmake --build build --config Debug --parallel 1 --target project_45_starter
 .\build\Debug\project_45_starter.exe --hidden --verify --seconds 5
 ```
 
@@ -311,8 +299,8 @@ Còn các lệnh project_45_final ở bước kế là mốc đối chiếu củ
 Chạy từng lệnh một, đợi kết thúc rồi mới chạy lệnh tiếp:
 
 ```powershell title="PowerShell — kiểm GPU và một lần chạy đo hữu hạn"
-.\build\Debug\project_45_final.exe --hidden --verify --seconds 5
-.\build\Debug\project_45_final.exe --orbital 2pz --count 1000003 --seed 12345 --benchmark --seconds 20
+.\build-ref\Debug\project_45_final.exe --hidden --verify --seconds 5
+.\build-ref\Debug\project_45_final.exe --orbital 2pz --count 1000003 --seed 12345 --benchmark --seconds 20
 ```
 
 `--verify` của bản final có deadline tổng của bộ kiểm GPU: N sát ranh workgroup, catalog, một triệu cộng phần đuôi lẻ, nhiều seed/test field, guard, cancel và pass đánh giá field riêng với cả fixture hợp lệ/lỗi cố ý. Nó chỉ tải về những đoạn nhỏ để so record; histogram/region và field pass đọc toàn cloud bằng compute. Đây là scope đầy đủ ở checkpoint 11, không phải scope nhỏ của checkpoint 4.

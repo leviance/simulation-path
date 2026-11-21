@@ -213,7 +213,7 @@ const learning = {
         {
           title: "Kiểm bài làm, không chỉ bản mẫu",
           explanation:
-            "Đổi include path của target tests sang starter/include. Kiểm nghiệm giải tích, tải trọng treo, damping power, drift, input và graph rồi mới nghiệm thu.",
+            "Bật -DCOURSE_TEST_STARTER=ON và chạy project_25_check_work. Kiểm nghiệm giải tích, tải trọng treo, damping power, drift, input và graph trước khi nghiệm thu.",
         },
       ],
     },

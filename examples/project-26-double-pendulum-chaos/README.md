@@ -94,7 +94,7 @@ CTest kiểm thêm residual Newton với mass/length khác nhau, đạo hàm nă
 
 ## Kiểm đúng bài làm trong Starter
 
-Target tests mặc định include final/include. Trong bản ZIP đã giải nén, sau khi viết xong bảy bài, đổi đúng dòng target_include_directories(project_26_tests PRIVATE final/include) thành target_include_directories(project_26_tests PRIVATE starter/include), rồi configure/build/CTest lại. Không lấy một lượt CTest đang đọc final làm bằng chứng cho phần vừa viết trong Starter.
+Muốn kiểm mã của mình trong `starter/`, chạy `cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON`, rồi `cmake --build build --config Debug --target project_26_check_work --parallel 1`. CTest sẽ ghi `project_26_starter_validation`. Nếu chỉ thấy nhãn `reference`, bạn đang kiểm bản mẫu. Bộ kiểm cuối cần đủ bảy bài.
 
 ## Các file chính
 

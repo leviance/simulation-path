@@ -1,3 +1,9 @@
+import {
+  triangleReferenceWorld,
+  triangleReferenceRgb,
+  triangleVerticalFov,
+} from "./triangle-reference.ts";
+
 export interface Vec2 {
   x: number;
   y: number;
@@ -18,6 +24,7 @@ export interface TriangleTransform {
   angleRadians: number;
   scale: number;
   translation: Vec2;
+  panelFit?: Vec2;
 }
 
 export interface Viewport {
@@ -53,11 +60,27 @@ export interface ProbeAgreement {
   pixelY: number;
 }
 
-export const defaultTriangle: readonly TriangleVertex[] = [
-  { position: { x: 0, y: 0.66 }, color: { r: 0.97, g: 0.42, b: 0.35 } },
-  { position: { x: -0.7, y: -0.58 }, color: { r: 0.35, g: 0.78, b: 0.48 } },
-  { position: { x: 0.7, y: -0.58 }, color: { r: 0.38, g: 0.68, b: 0.94 } },
-] as const;
+export function project16Position(x: number, y: number, z: number): Vec2 {
+  const focal = 1 / Math.tan(triangleVerticalFov / 2);
+  return { x: (focal * x) / z, y: (focal * y) / z };
+}
+
+export const defaultTriangle: readonly TriangleVertex[] = triangleReferenceWorld.map((point, i) => {
+  const [r, g, b] = triangleReferenceRgb[i];
+  return {
+    position: project16Position(point.x, point.y, point.z),
+    color: { r: r / 255, g: g / 255, b: b / 255 },
+  };
+});
+
+export function forTrianglePanel(
+  transform: TriangleTransform,
+  width: number,
+  height: number,
+): TriangleTransform {
+  const span = Math.min(height, 1.5 * width);
+  return { ...transform, panelFit: { x: span / width, y: span / height } };
+}
 
 export const identityTriangleTransform: TriangleTransform = {
   angleRadians: 0,
@@ -83,8 +106,8 @@ export function transformPosition(position: Vec2, transform: TriangleTransform):
   const rotatedX = position.x * cosine - position.y * sine;
   const rotatedY = position.x * sine + position.y * cosine;
   return {
-    x: rotatedX * transform.scale + transform.translation.x,
-    y: rotatedY * transform.scale + transform.translation.y,
+    x: (rotatedX * transform.scale + transform.translation.x) * (transform.panelFit?.x ?? 1),
+    y: (rotatedY * transform.scale + transform.translation.y) * (transform.panelFit?.y ?? 1),
   };
 }
 
@@ -212,6 +235,7 @@ export function compareProbe(
   cpuHeight: number,
   gpuViewport: Viewport,
   smoothColor = true,
+  backgroundAt?: (x: number, y: number) => Rgb,
 ): ProbeAgreement {
   if (
     ![cpuWidth, cpuHeight, gpuViewport.width, gpuViewport.height].every(
@@ -235,7 +259,12 @@ export function compareProbe(
   const pixelY = Math.floor(gpuWindow.y);
   const pixelCenterNdc = gpuWindowToNdc({ x: pixelX + 0.5, y: pixelY + 0.5 }, gpuViewport);
   const sample = sampleTriangle(triangle, transform, pixelCenterNdc, smoothColor);
-  const expectedColor = sample.inside ? sample.color : { r: 11 / 255, g: 16 / 255, b: 32 / 255 };
+  const expectedColor = sample.inside
+    ? sample.color
+    : (backgroundAt?.(
+        pixelX - gpuViewport.x,
+        gpuViewport.height - 1 - (pixelY - gpuViewport.y),
+      ) ?? { r: 11 / 255, g: 16 / 255, b: 32 / 255 });
   const quantizedColor = quantizeColor8(expectedColor);
   return {
     ndc: { ...pointNdc },

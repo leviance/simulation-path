@@ -263,7 +263,7 @@ const learning = {
         {
           title: "Kiểm chính mã vừa viết",
           explanation:
-            "Cuối học phần, đổi include tests sang starter/include để kiểm bài làm. Không lấy kết quả của final tham khảo làm bằng chứng cho Starter.",
+            "Cuối học phần, bật -DCOURSE_TEST_STARTER=ON rồi chạy project_24_check_work. Kết quả của final chỉ để đối chiếu.",
         },
       ],
     },

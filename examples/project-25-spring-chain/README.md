@@ -44,7 +44,7 @@ Mặc định chỉ build final và tests. BUILD_CHECKPOINTS=ON mở thêm proje
 
 Viết bài làm trong starter/include và starter/src. Checkpoint là bản tham khảo sau mỗi bài; build checkpoint không chứng minh Starter đúng. Các hàm vẽ/window/event scaffold đã có trong Starter để tập trung vào hệ vật lý.
 
-Sau khi hoàn thành bài 8, đổi target_include_directories(project_25_tests PRIVATE final/include) thành target_include_directories(project_25_tests PRIVATE starter/include) trong CMakeLists.txt để CTest kiểm chính bài làm. Output phải có nhóm “canonical scale, analytic physics, energy, interaction and graph groups tested”.
+Muốn kiểm mã của mình trong `starter/`, chạy `cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON`, rồi `cmake --build build --config Debug --target project_25_check_work --parallel 1`. CTest sẽ ghi `project_25_starter_validation`. Nếu chỉ thấy nhãn `reference`, bạn đang kiểm bản mẫu. Kết quả phải có nhóm “canonical scale, analytic physics, energy, interaction and graph groups tested”.
 
 ## Điều khiển bản cuối
 

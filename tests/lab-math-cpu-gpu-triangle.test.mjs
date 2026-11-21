@@ -5,6 +5,7 @@ import {
   compareProbe,
   cpuScreenToNdc,
   defaultTriangle,
+  forTrianglePanel,
   gpuWindowToNdc,
   identityTriangleTransform,
   makePipelineTrace,
@@ -17,6 +18,11 @@ import {
   triangleCentroid,
   wrapDegrees,
 } from "../lib/labs/cpu-gpu-triangle.ts";
+import {
+  initialRasterScene,
+  rasterSceneTriangle,
+  rasterSceneViewport,
+} from "../lib/labs/triangle-scene.ts";
 
 const viewport = { x: 640, y: 0, width: 640, height: 720 };
 
@@ -78,8 +84,37 @@ test("pipeline trace keeps input, NDC and both viewport conventions connected", 
   const trace = makePipelineTrace(defaultTriangle, identityTriangleTransform, 640, 720, viewport);
   assert.equal(trace.length, 3);
   assert.deepEqual(trace[0].input, defaultTriangle[0].position);
-  assert.ok(Math.abs(trace[0].cpuScreen.y - 122.4) < 1e-12);
-  assert.ok(Math.abs(trace[0].gpuWindow.y - 597.6) < 1e-12);
+  const offset = ((720 / 2) * (1.2 / 4)) / Math.tan(Math.PI / 6);
+  assert.ok(Math.abs(trace[0].cpuScreen.y - (360 - offset)) < 1e-12);
+  assert.ok(Math.abs(trace[0].gpuWindow.y - (360 + offset)) < 1e-12);
+});
+
+test("P33 reproduces the actual P16 screen-space triangle and RGB at both viewport heights", () => {
+  const scene = initialRasterScene();
+  for (const debug of [true, false]) {
+    scene.debug = debug;
+    const { width, height } = rasterSceneViewport(scene);
+    const original = rasterSceneTriangle(scene);
+    const fit = forTrianglePanel(identityTriangleTransform, width, height);
+    for (const [i, key] of ["a", "b", "c"].entries()) {
+      const point = ndcToCpuScreen(
+        transformPosition(defaultTriangle[i].position, fit),
+        width,
+        height,
+      );
+      assert.ok(Math.hypot(point.x - original[key].x, point.y - original[key].y) < 1e-8);
+      assert.deepEqual(
+        Object.values(defaultTriangle[i].color).map((v) => v * 255),
+        scene.palette[i],
+      );
+    }
+    const center = triangleCentroid(defaultTriangle, fit);
+    const rgb = sampleTriangle(defaultTriangle, fit, center, true).color;
+    assert.deepEqual(
+      Object.values(rgb).map((v) => Math.round(v * 255)),
+      [85, 85, 85],
+    );
+  }
 });
 
 test("interior probe agreement separates coordinate error from color quantization", () => {
@@ -128,6 +163,34 @@ test("outside probes compare background, not extrapolated vertex colors", () => 
   assert.equal(result.quantizationError, 0);
   assert.equal(barycentricAtPoint(defaultTriangle, { x: NaN, y: 0 }).inside, false);
   assert.equal(maximumColorDifference({ r: 0, g: 0, b: 0 }, { r: NaN, g: 0, b: 0 }), Infinity);
+});
+
+test("final probe reads the floor from the matching top-left pixel, even in an offset GPU viewport", () => {
+  const ground = { r: 40 / 255, g: 51 / 255, b: 77 / 255 };
+  const sampled = [];
+  const readGround = (x, y) => {
+    sampled.push([x, y]);
+    return ground;
+  };
+  const frame = { x: 31, y: 7, width: 100, height: 100 };
+  const read = (point) =>
+    compareProbe(
+      defaultTriangle,
+      identityTriangleTransform,
+      point,
+      100,
+      100,
+      frame,
+      true,
+      readGround,
+    );
+  assert.deepEqual(read({ x: -0.75, y: 0.75 }).expectedColor, ground);
+  assert.deepEqual(sampled, [[12, 12]]);
+  assert.notDeepEqual(
+    read(triangleCentroid(defaultTriangle, identityTriangleTransform)).expectedColor,
+    ground,
+  );
+  assert.equal(sampled.length, 1, "the surface of the triangle hides the grid");
 });
 
 test("readback model rejects empty viewport and offscreen or nonfinite probe", () => {

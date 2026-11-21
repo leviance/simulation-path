@@ -99,18 +99,12 @@ if (!SDL_RenderDebugText(renderer, 16, 746, line)) {
 
 ZIP chứa README, Starter, chín checkpoint, final, tests và CMake. Phần toàn bộ mã nguồn cuối bài cho xem từng file, không phải các mảnh cần đoán chỗ nối.
 
-CTest mặc định kiểm final/include. Sau khi viết đủ chín bài, đổi đúng dòng trong CMakeLists.txt **của ZIP bạn giải nén** để kiểm Starter:
+Bạn đã ghép xong Z-buffer, camera và culling. Chọn `starter/` cho lần nghiệm thu này; CTest sẽ so ảnh do chính các hàm bạn viết tạo ra.
 
-```cmake title="CMakeLists.txt — chọn mã người học"
-target_include_directories(project_17_tests PRIVATE starter/include)
-```
-
-```powershell title="Kiểm chứng Starter Debug và Release"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_17_starter project_17_tests --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 30
-cmake --build build --config Release --target project_17_starter project_17_tests --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 30
+```bash title="Terminal — kiểm mã trong starter/"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_17_check_work --parallel 1
+cmake --build build --config Release --target project_17_check_work --parallel 1
 ```
 
 Tests dùng check/EXIT_FAILURE, không dùng assert bị NDEBUG tắt. Chúng so toàn bộ ảnh qua nhiều góc, kiểm winding bằng cross/dot, phép chiếu near/far tính tay, culling, input sai, buffer bounds và ảnh CPU clean còn cube/grid.
@@ -129,7 +123,7 @@ Canvas tôn trọng reduced motion và có controls dùng bàn phím. Độ phâ
 
 2. Đặt fill/grid trong if(debug): F làm cửa sổ trống. Giữ chúng ngoài overlay.
 
-3. Chạy tests của final rồi kết luận Starter đúng: sửa một công thức trong Starter và kiểm target_include_directories để thấy khác biệt.
+3. Tạm làm sai một phép so depth trong Starter rồi chạy `project_17_check_work`. Ca đảo thứ tự vẽ phải thất bại. Nếu bạn chỉ thấy nhãn `reference`, hãy kiểm lại cấu hình và chạy lại bằng mã của mình.
 
 ## Tự kiểm tra kết quả
 

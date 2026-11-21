@@ -50,7 +50,7 @@ cmake --build build-all --config Release --parallel 2
 ctest --test-dir build-all -C Release --output-on-failure --timeout 30
 ```
 
-SDL3 được khóa ở release 3.4.8. `starter`, tám checkpoint và `final` chạy độc lập; CTest chỉ include code thuần trong `final/include` nên không mở window.
+Muốn kiểm mã của mình trong `starter/`, chạy `cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON`, rồi `cmake --build build --config Debug --target project_21_check_work --parallel 1`. CTest sẽ ghi `project_21_starter_validation`. Nếu chỉ thấy nhãn `reference`, bạn đang kiểm bản mẫu. Bộ kiểm toán hình học không mở cửa sổ SDL.
 
 ## Học theo checkpoint
 

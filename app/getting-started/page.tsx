@@ -96,11 +96,14 @@ export default function GettingStartedPage() {
         />
         <p>
           Ở Project 01, bạn viết trong <code>starter/</code> và dùng target{" "}
-          <code>project_1_starter</code> suốt học phần. Một số gói có bản làm bài riêng. Chẳng hạn ở{" "}
+          <code>project_1_starter</code> suốt học phần. Bật <code>-DCOURSE_TEST_STARTER=ON</code> để
+          CTest kiểm chính thư mục đó. Nếu muốn giữ starter nguyên vẹn, mọi ZIP cũng có thể tạo một
+          bản riêng trong <code>work/</code>. Chẳng hạn ở{" "}
           <Link href="/projects/perspective-point">Project 11</Link>, configure với{" "}
           <code>-DCOURSE_WORKBOOK=ON</code> để tạo <code>work/</code> một lần, rồi build{" "}
-          <code>project_11_work</code>. CTest của cấu hình đó đọc mã bạn viết, không đọc lời giải.
-          Mỗi bài đều ghi đúng target; không cần tự sửa CMake để đổi nơi làm bài.
+          <code>project_11_work</code>. Riêng Project 58–64 dùng <code>-DVOXEL_WORKBOOK=ON</code>.
+          Chọn một cách làm và giữ nó suốt project. Configure lại không ghi đè bài cũ; không cần sửa
+          CMakeLists.txt.
         </p>
         <p>
           Các thư mục <code>checkpoints/</code> và <code>final/</code> là bản đối chiếu. Đừng viết
@@ -112,11 +115,15 @@ export default function GettingStartedPage() {
         <p>
           Mở terminal tại thư mục vừa giải nén, nơi có <code>CMakeLists.txt</code>, rồi chạy:
         </p>
-        <HighlightedCode language="bash" code={"cmake -S . -B build -DBUILD_CHECKPOINTS=ON"} />
+        <HighlightedCode
+          language="bash"
+          code={"cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DCOURSE_TEST_STARTER=ON"}
+        />
         <p>
           Bước này gọi là <em>configure</em>. <code>-S .</code> bảo CMake đọc source ở thư mục hiện
           tại; <code>-B build</code> bảo nó đặt mọi file sinh ra vào <code>build/</code>. Tùy chọn
-          cuối cùng bật thêm target cho starter và sáu checkpoint.
+          <code>BUILD_CHECKPOINTS</code> mở thêm các bản mẫu sau mỗi bài. Tùy chọn còn lại cho biết
+          mã cần kiểm là bài làm trong <code>starter/</code>.
         </p>
         <p>
           Lần configure đầu cần mạng vì CMake tải đúng source SDL 3.4.8 và kiểm tra SHA-256. Những
@@ -171,19 +178,20 @@ export default function GettingStartedPage() {
           kiểm tra hay không.
         </p>
 
-        <h2 id="final-build">6. Build bản hoàn chỉnh và chạy test</h2>
-        <p>Khi học xong project, build toàn bộ target rồi chạy CTest:</p>
+        <h2 id="final-build">6. Chạy CTest trên bài mình vừa viết</h2>
+        <p>Khi đã viết đủ các hàm mà bộ test của project cần, dùng đúng thư mục build ở bước 3:</p>
         <HighlightedCode
           language="bash"
-          code={
-            "cmake --build build --config Debug\nctest --test-dir build -C Debug --output-on-failure"
-          }
+          code={"cmake --build build --config Debug --target project_1_check_work --parallel 1"}
         />
         <p>
-          Lệnh build không có <code>--target</code> sẽ dựng bản final, tests và cả
-          starter/checkpoint nếu bạn đã bật <code>BUILD_CHECKPOINTS</code>. CTest kiểm tra phần
-          thuật toán không cần mở cửa sổ; bạn vẫn phải chạy ứng dụng và làm checklist thủ công ở
-          cuối bài.
+          Lệnh này biên dịch lại bộ test bằng header bạn đang sửa rồi mới chạy CTest. Kết quả phải
+          ghi
+          <code> project_1_starter_validation</code> (hoặc <code>project_1_work_validation</code>{" "}
+          nếu viết trong work/). Ở bài đầu, hãy build ứng dụng và thử bước đang học; bộ test cuối có
+          thể chưa biên dịch được vì bạn chưa viết đủ API. Muốn kiểm lời giải, configure riêng trong{" "}
+          <code>build-ref</code> không bật chế độ học: kết quả mang nhãn <code>reference</code>,
+          không chứng minh bài làm đúng.
         </p>
 
         <h2 id="debug">7. Khi có lỗi, kiểm tra theo thứ tự này</h2>

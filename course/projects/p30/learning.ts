@@ -259,7 +259,7 @@ const learning = {
         {
           title: "Build đúng target đang sửa",
           explanation:
-            "Final mặc định; BUILD_CHECKPOINTS mở starter và 11 checkpoint. Tests dùng final/include, đổi sang starter/include khi muốn kiểm lời giải của bạn.",
+            "BUILD_CHECKPOINTS mở starter và 11 checkpoint. Để kiểm lời giải của bạn, bật -DCOURSE_TEST_STARTER=ON và chạy project_30_check_work.",
         },
         {
           title: "Nghiệm thu theo hành vi sử dụng",

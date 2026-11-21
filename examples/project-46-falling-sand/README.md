@@ -105,21 +105,15 @@ vị trí tường, thứ tự, RGBA/pitch, viewport, clock và commands. Oracle
 đi cùng hạt, không gọi production `tryMove` hoặc dùng cùng moved mask.
 Mốc lớn Mixture/seed 46/order 0 chạy 120 tick trên 512×320 và kiểm đủ visits.
 
-CTest mặc định include **final/include**, tức kiểm đáp án mẫu. Muốn kiểm starter
-đã tự hoàn thiện và có đủ API, thêm vào CMake ở gốc:
+Từ thư mục gốc của gói ZIP, bật `-DCOURSE_TEST_STARTER=ON` để kiểm các hàm trong `starter/include`. Target `project_46_check_work` sẽ biên dịch lại bài làm rồi mới chạy CTest.
 
-```cmake
-if(BUILD_TESTING)
-    add_executable(project_46_student_tests tests/tests.cpp)
-    target_include_directories(project_46_student_tests PRIVATE starter/include)
-    enable_course_warnings(project_46_student_tests)
-    add_test(NAME project_46_student_validation COMMAND project_46_student_tests)
-endif()
+```bash
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_46_check_work --parallel 1
+cmake --build build --config Release --target project_46_check_work --parallel 1
 ```
 
-Build target ấy ở Debug/Release rồi chạy CTest với `-R project_46_student_validation`.
-Chủ động làm sai một luật để xác nhận test thất bại. Một lượt tests final xanh
-không chứng minh phần bạn vừa sửa trong starter đúng.
+Thử bỏ một điều kiện trong luật cát rơi, chạy lại rồi khôi phục. Ca kiểm phải đổi từ đỏ sang xanh trên cùng một thư mục bài làm.
 
 ## Đo/chụp hữu hạn
 

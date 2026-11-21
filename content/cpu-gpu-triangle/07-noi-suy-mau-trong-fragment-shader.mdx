@@ -4,13 +4,13 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 ## Vấn đề cần giải quyết
 
-Tam giác đang có một màu cố định. Dữ liệu VBO thực ra đã chứa ba màu khác nhau ở A, B, C; bài này cho phép chúng xuất hiện trên bề mặt. Nhấn C sẽ đổi cả hai phía giữa solid và smooth.
+Ở bài trước, tam giác chỉ có một màu dù ta đã gửi đủ ba màu vào VBO. Mở checkpoint này: góc trên trái đỏ, góc dưới phải lục, góc dưới trái lam, đúng như ở Project 16. Nhấn `C` để trở lại màu đơn, rồi nhấn lần nữa. Đường bao không hề dịch chuyển: ta chỉ đổi cách tô phần bên trong.
 
 Bạn cần tách hai việc: quyết định pixel có nằm trong tam giác không, rồi mới tính màu của pixel đó. Trên CPU ta tính barycentric weights. Trên GPU, rasterizer nội suy dữ liệu giữa các đỉnh trước khi fragment shader nhận nó.
 
 ## Hiểu ý tưởng trước khi viết code
 
-Với một điểm bên trong, ba barycentric weights cộng lại gần 1. Tại một đỉnh, weight của đỉnh đó gần 1; tại centroid, cả ba gần 1/3. Màu RGB được trộn theo ba hệ số ấy.
+Ở đây, ba kênh màu cũng chính là ba barycentric weights: càng gần A, thành phần đỏ càng lớn. Hãy đoán màu ở trọng tâm trước khi đo: mỗi đỉnh đóng góp một phần ba, nên kết quả là **xám**, khoảng `RGB(85, 85, 85)`, không phải trắng. Tâm pixel gần trọng tâm nhất có thể lệch một mức màu.
 
 Vertex shader đặt clip w = 1 cho cả ba đỉnh, nên phép nội suy smooth ở đây tương ứng với nội suy affine của CPU. Khi học mesh perspective có w khác nhau, cần perspective-correct interpolation; đừng mang nguyên giả định 2D này sang mọi bài 3D.
 

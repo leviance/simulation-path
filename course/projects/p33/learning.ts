@@ -5,6 +5,7 @@ const files = [
   "include/gl_api.hpp",
   "include/gpu_renderer.hpp",
   "include/editor.hpp",
+  "include/reference_floor.hpp",
   "include/overlay.hpp",
   "include/verification.hpp",
   "src/main.cpp",
@@ -63,7 +64,7 @@ const learning = {
     },
     "p33-l03": {
       focus:
-        "Nối `GpuVertex` C++ với `layout(location=...)` GLSL bằng VBO data và VAO interpretation.",
+        "Lấy ba đỉnh của Project 16, chiếu một lần rồi đưa vị trí và màu vào VBO. VAO cho shader biết năm số của mỗi đỉnh được sắp xếp ra sao.",
       expected:
         "Ba vertex được upload một lần; location 0 đọc vec2 position, location 1 đọc vec3 color bằng đúng stride/offset.",
       files,

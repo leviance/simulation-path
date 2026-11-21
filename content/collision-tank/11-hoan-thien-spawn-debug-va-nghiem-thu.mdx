@@ -169,18 +169,13 @@ Trong main của Starter đã có các nhánh blur, hidden, minimize, resize/pix
 
 ### Bước 3 — Kiểm chính Starter đã hoàn thiện
 
-Nếu chưa làm ở bài 8, đổi target include của tests:
-```cmake title="CMakeLists.txt — nghiệm thu mã do bạn viết"
-target_include_directories(project_24_tests PRIVATE starter/include)
-```
+Dùng lại cấu hình kiểm `starter/` từ bài 8. Lần này hãy chạy cả Debug lẫn Release và mở bể va chạm của chính bạn:
 
-Build Starter và tests:
-```powershell title="Kiểm đầy đủ Starter ở hai cấu hình"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug --target project_24_starter project_24_tests --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 45
-cmake --build build --config Release --target project_24_starter project_24_tests --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 45
+```bash title="Terminal — kiểm mã trong starter/"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_24_check_work --parallel 1
+cmake --build build --config Release --target project_24_check_work --parallel 1
+cmake --build build --config Release --target project_24_starter --parallel 1
 .\build\Release\project_24_starter.exe
 ```
 

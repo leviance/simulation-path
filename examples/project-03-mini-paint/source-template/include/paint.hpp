@@ -36,6 +36,7 @@ inline void cancelStroke(PaintState& state) {
     state.drawing = false;
 }
 
+// [snippet apply-stamp]
 inline void applyStamp(Framebuffer& framebuffer, PaintState& state, Point point) {
 #if LAB_CHECKPOINT >= 2
     stampCircle(framebuffer, point, state.radius, state.color);
@@ -46,7 +47,9 @@ inline void applyStamp(Framebuffer& framebuffer, PaintState& state, Point point)
     ++state.stamps;
 #endif
 }
+// [/snippet apply-stamp]
 
+// [snippet start-stroke]
 inline bool beginStroke(Framebuffer& framebuffer, PaintState& state, Point point) {
     if (state.drawing || !insideCanvas(point)) {
         return false;
@@ -62,7 +65,9 @@ inline bool beginStroke(Framebuffer& framebuffer, PaintState& state, Point point
     applyStamp(framebuffer, state, point);
     return true;
 }
+// [/snippet start-stroke]
 
+// [snippet move-stroke]
 #if LAB_CHECKPOINT >= 3
 inline bool moveStroke(Framebuffer& framebuffer, PaintState& state, Point current, bool forceEndpoint = false) {
 #else
@@ -103,7 +108,9 @@ inline bool moveStroke(Framebuffer& framebuffer, PaintState& state, Point curren
     state.previous = current;
     return true;
 }
+// [/snippet move-stroke]
 
+// [snippet finish-stroke]
 inline bool endStroke(Framebuffer& framebuffer, PaintState& state, Point endpoint) {
 #if LAB_CHECKPOINT >= 3
     const bool changed = moveStroke(framebuffer, state, endpoint, true);
@@ -113,6 +120,7 @@ inline bool endStroke(Framebuffer& framebuffer, PaintState& state, Point endpoin
     cancelStroke(state);
     return changed;
 }
+// [/snippet finish-stroke]
 
 #if LAB_CHECKPOINT >= 3
 // Cùng các điểm cho phép so checkpoint 3 và 4, không phụ thuộc tay người.

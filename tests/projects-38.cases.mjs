@@ -143,7 +143,8 @@ test("Canvas discloses sample count, uses pointer capture/DPR/reduced-motion, an
     assert.ok(component.includes(symbol), symbol);
   assert.match(controls, /reducedMotion/);
   assert.match(readout, /hạt CPU/);
-  assert.match(readout, /không đọc GPU của bạn/);
+  const panels = await read("components/labs/charged-particle-chamber/lesson-panels.tsx");
+  assert.match(panels, /không đọc GPU của bạn/);
   assert.match(controller, /Math.min\(DEMO_COUNT, this.state.active.count\)/);
   assert.match(controller, /deadline: now \+ 8000/);
   assert.match(controller, /work.done \+ 128/);

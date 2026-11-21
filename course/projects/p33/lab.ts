@@ -1,9 +1,25 @@
 import type { ProjectLabMeta } from "../../labs/types";
 
 const lab = {
+  native: {
+    directory: "/field-notes/cpu-gpu-triangle",
+    withDemo: true,
+    overview: ["reference"],
+    lessons: { "pipeline-validation": ["reference"] },
+    takes: {
+      reference: {
+        title: "Một tam giác, hai cách vẽ",
+        source: "Project 33 · C++/SDL3 · OpenGL",
+        poster: "project-16-reference.png",
+        alt: "Hai khung có cùng tam giác đỏ ở trên trái, lam ở dưới trái và lục ở dưới phải, trên một mặt lưới nền xanh sẫm.",
+        caption:
+          "Ảnh chụp khi mở bản C++ hoàn chỉnh. Khung trái tô màu trên CPU; khung phải là kết quả vẽ của OpenGL. Cạnh nối hai đỉnh dưới hơi dốc vì chúng ở hai độ sâu khác nhau trong Project 16.",
+      },
+    },
+  },
   base: {
     label: "CPU ↔ GPU TRIANGLE LAB",
-    title: "Một triangle đi qua hai pipeline khác nhau ở đâu?",
+    title: "Tam giác của Project 16 trông thế nào khi để GPU vẽ?",
     description:
       "Lần theo ba đỉnh qua transform, viewport và nội suy màu. Kéo điểm lấy mẫu để xem NDC và tâm pixel; Canvas minh họa bằng JavaScript, còn ứng dụng C++ mới chạy OpenGL thật.",
   },
@@ -51,7 +67,7 @@ const lab = {
     "pipeline-validation": {
       title: "Pipeline đã đúng contract và đúng lifecycle chưa?",
       description:
-        "Rà context, shader logs, vertex layout, two-viewports, probes, resize, keyboard, pointer capture và cleanup trước Project 34.",
+        "Tìm ba góc đỏ, lục và lam, rồi xoay một bước. Mặt lưới đứng yên, hai tam giác quay cùng nhau. Dùng dấu lấy mẫu để đoán màu trước khi kiểm trong bản C++.",
     },
   },
 } satisfies ProjectLabMeta;

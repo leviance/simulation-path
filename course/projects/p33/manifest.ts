@@ -7,13 +7,13 @@ const project = {
     "Project 16 — coverage, barycentric weights và nội suy màu trên CPU",
   ],
   summary:
-    "Giữ lại tam giác đã tô bằng CPU rồi vẽ nó lần nữa bằng OpenGL 3.3 Core. Kéo một đỉnh, đổi màu hoặc xoay hình để lần theo cùng dữ liệu qua hai renderer, sau đó đọc pixel GPU thật để kiểm tra kết quả.",
+    "Vẽ lại tam giác ba màu của Project 16 trong hai khung cạnh nhau. Bên trái bạn tự tô từng pixel bằng C++; bên phải OpenGL nhận đúng ba đỉnh ấy và tự tô. Hãy kéo đỉnh đỏ rồi đọc màu ở giữa hình để xem hai cách vẽ có còn khớp nhau không.",
   challenge: {
     timebox: "Thử tự làm trong 12–16 giờ; không tính thời gian cài compiler/SDL",
     mission:
       "Tự xây dựng một ứng dụng C++/SDL3 có hai vùng vẽ cạnh nhau: bên trái tự tô tam giác bằng CPU, bên phải vẽ cùng tam giác bằng GPU. Hai phía nhận chung vị trí đỉnh, màu và phép biến đổi. Hãy cho người dùng sửa đầu vào rồi kiểm tra hình và màu bằng số liệu, không chỉ nhìn bằng mắt.",
     outcome:
-      "Một cửa sổ chia đôi CPU/GPU, có nhãn A/B/C, tọa độ NDC và controls ngay trong ảnh. Kéo đỉnh hoặc đổi màu để thấy cả hai pipeline nhận cùng input; đọc probe để so màu GPU thật với màu CPU kỳ vọng tại cùng tâm pixel.",
+      "Hai tam giác giống cảnh cuối Project 16: A đỏ ở trên trái, B lục ở dưới phải, C lam ở dưới trái, phía sau là mặt lưới phối cảnh. Kéo một đỉnh thì cả hai hình cùng đổi; nhấn P để biết hai bên lệch nhau bao nhiêu ở tâm pixel đang đo.",
     requirements: [
       "Tạo SDL window với `SDL_WINDOW_OPENGL`, yêu cầu OpenGL 3.3 Core, tạo context rồi mới gọi `SDL_GL_GetProcAddress`.",
       "Lấy kích thước framebuffer bằng `SDL_GetWindowSizeInPixels`; không dùng logical window size cho `glViewport`.",

@@ -8,6 +8,8 @@ Project này vẽ cùng một tam giác bằng hai pipeline trong cùng cửa s�
 
 Mục tiêu không phải chứng minh GPU luôn nhanh hơn. Ta dùng triangle nhỏ để nối từng stage OpenGL với renderer CPU đã tự xây ở Project 15–16.
 
+Hình mẫu là cảnh cuối Project 16, không phải một tam giác cân mới. Ở trạng thái ban đầu, A đỏ (−1,4; 1,2; 4) nằm trên trái, B lục (1,6; −1; 5,5) ở dưới phải và C lam (−1,4; −1; 6,5) ở dưới trái. Camera gốc nhìn về +Z, góc nhìn dọc 60°. Bản hoàn chỉnh mở sẵn chế độ ba màu. Nhấn `C` để so với màu đơn, `N` để quay một bước trên nền lưới đứng yên, `R` để trở về hình gốc.
+
 ## Cách học và phần được cung cấp
 
 Hãy thử tự dựng hai vùng vẽ dùng chung ba đỉnh trước khi mở lời giải. Khi di chuyển một đỉnh, cả hai hình phải đổi; khi nhấn P, bạn phải giải thích được pixel nào được đọc và màu tham chiếu được tính ở đâu. Đây là bài chuyển tiếp pipeline, không cần thêm camera 3D, ánh sáng hoặc model để làm sản phẩm lớn hơn.
@@ -35,6 +37,7 @@ include/gl_api.hpp       OpenGL function pointers được load qua SDL context
 include/gpu_renderer.hpp shader program, VBO/VAO, CPU texture presenter, readback
 src/main.cpp             SDL/OpenGL lifecycle, input, render hai panel và cleanup
 include/editor.hpp       chọn/kéo vertex, high-DPI pointer mapping, inverse transform
+include/reference_floor.hpp  chiếu và lưu nền lưới tĩnh của Project 16 khi resize
 include/overlay.hpp      nhãn CPU/GPU, A/B/C và bảng NDC trong cửa sổ
 include/verification.hpp fixture OpenGL thật trong chế độ hữu hạn --verify
 ```
@@ -105,7 +108,7 @@ CTest kiểm code CPU thuần:
 
 Runtime probe so interior fragment tại centroid. Không dùng triangle edge làm pass/fail vì CPU/GPU có thể khác coverage rule quanh biên dù cả hai implementation đều hợp lệ.
 
-Centroid không bảo đảm tâm pixel lân cận cách xa cạnh khi tam giác rất nhỏ hoặc suy biến. Không dùng trường hợp ấy để kết luận màu đúng/sai theo oracle nội thất; fixture nghiệm thu giữ hình đủ lớn và công bố dải cạnh riêng. Vì clip w luôn bằng 1, bài dùng nội suy affine; không suy rộng sang perspective có w khác nhau. Resize làm hai phía giữ cùng NDC, không áp camera/aspect correction ẩn.
+Với tam giác quá nhỏ, tâm pixel gần trọng tâm nhất vẫn có thể chạm cạnh. Không dùng điểm ấy để kết luận đúng sai về màu. Ba đỉnh đã được chiếu trước và shader đặt clip w = 1: màu nội suy theo mặt ảnh như Project 16. Khi resize, `forPanel` tính hệ số riêng từ kích thước thật của từng khung để giữ nguyên hình dáng.
 
 Report trong dải cạnh 1,5 pixel hiển thị `EDGE - NO VERDICT`; mẫu nền ghi `BACKGROUND`. Chưa đo hoặc sau Reset, title ghi `not measured`. Không dùng infinity hoặc số đo cũ như kết quả của trạng thái hiện tại.
 
@@ -119,7 +122,7 @@ Phép so tính màu CPU tại tâm đúng pixel mà glReadPixels đọc, không 
 
 Chế độ này mở cửa sổ ẩn, chạy sáu frame rồi thoát: solid/smooth, transform, winding ngược, sửa vertex/màu và resize width lẻ. Mỗi frame có ba interior probes và một background probe, tolerance 2/255; lỗi trả exit code khác 0. CTest vẫn thuần CPU. Chế độ này cần driver OpenGL 3.3 thật và không kiểm thay thao tác kéo, focus hoặc DPI bằng tay.
 
-`--smoke` mở ẩn rồi tự đóng sau sáu frame ở starter, từng checkpoint hoặc final, không thay GPU correctness verification. `--capture image.bmp` chạy verification và xuất framebuffer của ứng dụng trước khi đóng; không điều khiển hoặc chụp desktop. Khi chạy qua agent/CI, luôn có watchdog process tree ngoài chương trình theo ARCHITECTURE.md.
+`--smoke` mở ẩn rồi tự đóng sau sáu frame ở starter, từng checkpoint hoặc final. `--capture image.png` trên bản final chụp cảnh ban đầu ngay từ framebuffer, rồi chạy sáu ca kiểm GPU như `--verify`. Có thể dùng đuôi `.bmp` nếu cần. Khi chạy qua agent/CI, luôn dùng watchdog bên ngoài theo ARCHITECTURE.md.
 
 Toàn panel GPU cũng được so với CPU reference cùng kích thước: sai khác lớn hơn 2/255 chỉ được nằm trong dải cách cạnh tam giác không quá 1,5 pixel. Mọi sai khác sâu trong nội thất hoặc ở nền xa cạnh làm fixture thất bại. Số pixel khác ở cạnh được in riêng; không coi hai ảnh giống bằng mắt là đủ.
 

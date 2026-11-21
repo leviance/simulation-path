@@ -26,6 +26,7 @@ layout(location = 1) in vec3 aColor;
 uniform float uAngle;
 uniform float uScale;
 uniform vec2 uTranslation;
+uniform vec2 uPanelFit;
 
 out vec3 vColor;
 
@@ -36,7 +37,7 @@ void main() {
         aPosition.x * cosine - aPosition.y * sine,
         aPosition.x * sine + aPosition.y * cosine
     );
-    vec2 ndc = rotated * uScale + uTranslation;
+    vec2 ndc = (rotated * uScale + uTranslation) * uPanelFit;
     gl_Position = vec4(ndc, 0.0, 1.0);
     vColor = aColor;
 }
@@ -186,6 +187,7 @@ struct GpuTriangleRenderer {
     GLint angleLocation{-1};
     GLint scaleLocation{-1};
     GLint translationLocation{-1};
+    GLint panelFitLocation{-1};
     GLint smoothColorLocation{-1};
 
     bool initializeProgram(GlApi& api, std::string& diagnostics) {
@@ -196,8 +198,9 @@ struct GpuTriangleRenderer {
         angleLocation = api.GetUniformLocation(program, "uAngle");
         scaleLocation = api.GetUniformLocation(program, "uScale");
         translationLocation = api.GetUniformLocation(program, "uTranslation");
+        panelFitLocation = api.GetUniformLocation(program, "uPanelFit");
         smoothColorLocation = api.GetUniformLocation(program, "uSmoothColor");
-        const bool locationsValid = angleLocation >= 0 && scaleLocation >= 0 && translationLocation >= 0 && smoothColorLocation >= 0;
+        const bool locationsValid = angleLocation >= 0 && scaleLocation >= 0 && translationLocation >= 0 && panelFitLocation >= 0 && smoothColorLocation >= 0;
         if (!locationsValid) {
             diagnostics = "triangle program is missing one or more required uniforms";
         }
@@ -242,6 +245,7 @@ struct GpuTriangleRenderer {
         api.Uniform1f(angleLocation, transform.angleRadians);
         api.Uniform1f(scaleLocation, transform.scale);
         api.Uniform2f(translationLocation, transform.translation.x, transform.translation.y);
+        api.Uniform2f(panelFitLocation, transform.panelFit.x, transform.panelFit.y);
         int smoothColorFlag = 0;
         if (smoothColor) {
             smoothColorFlag = 1;
@@ -389,7 +393,8 @@ inline GpuProbeReadback readGpuProbe(
     const Transform2D& transform,
     Vec2 pointNdc,
     bool smoothColor,
-    const std::array<GpuVertex, 3>& triangle = kSourceTriangle
+    const std::array<GpuVertex, 3>& triangle = kSourceTriangle,
+    [[maybe_unused]] const Framebuffer* backdrop = nullptr
 ) {
     GpuProbeReadback result{};
     const ProbePixel pixelLocation = locateProbePixel(pointNdc, viewport);
@@ -401,6 +406,14 @@ inline GpuProbeReadback readGpuProbe(
     result.inside = expectedSample.inside;
     const Color background{11.0F / 255.0F, 16.0F / 255.0F, 32.0F / 255.0F};
     Color expectedColor = background;
+#if LAB_CHECKPOINT >= 9
+    if (backdrop && backdrop->width == viewport.width && backdrop->height == viewport.height) {
+        const int x = pixelLocation.x - viewport.x;
+        const int y = viewport.height - 1 - (pixelLocation.y - viewport.y);
+        const std::size_t offset = (std::size_t(y) * backdrop->width + x) * 4U;
+        expectedColor = {backdrop->rgba[offset] / 255.0F, backdrop->rgba[offset + 1] / 255.0F, backdrop->rgba[offset + 2] / 255.0F};
+    }
+#endif
     if (expectedSample.inside) {
         expectedColor = expectedSample.color;
     }

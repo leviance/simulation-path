@@ -134,4 +134,11 @@ test("Project 38 reference job completes without claiming GPU coverage and final
     "aria-pressed",
     "true",
   );
+  const nextProject = page.getByRole("link", {
+    name: "Project 39 — Khám phá thành phố một triệu vật thể",
+    exact: true,
+  });
+  await nextProject.click();
+  await expect(page).toHaveURL(/\/projects\/million-object-city$/);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(/thành phố/i);
 });

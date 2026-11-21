@@ -176,20 +176,12 @@ Viewport debug là 1100×600, clean là 1100×800. Đổi aspect làm hình chi�
 
 ### Bước 5 — Kiểm mã của mình, không chỉ kiểm bản mẫu
 
-ZIP có README, CMake, Starter, tám checkpoint, final và tests. Toàn bộ source ở cuối bài tải từng file khi mở; chúng không phải các snippet cần tự đoán chỗ nối. CTest mặc định include final/include để kiểm bản mẫu. Muốn kiểm Starter đã làm xong, đổi đúng dòng này trong CMakeLists.txt của ZIP:
+Sau tám bài, hãy kiểm chính tam giác bạn vừa tô trong Starter. Nếu một công thức barycentric bị sai, bản `final/` đúng vẫn không giúp bài làm vượt qua phép kiểm.
 
-```cmake title="CMakeLists.txt — chọn mã người học để test"
-target_include_directories(project_16_tests PRIVATE starter/include)
-```
-
-Configure lại và build cả app lẫn tests:
-
-```powershell title="Kiểm chứng Starter Debug và Release"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_16_starter project_16_tests --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 30
-cmake --build build --config Release --target project_16_starter project_16_tests --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 30
+```bash title="Terminal — kiểm mã trong starter/"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_16_check_work --parallel 1
+cmake --build build --config Release --target project_16_check_work --parallel 1
 ```
 
 Tests dùng check/EXIT_FAILURE, không dùng assert bị NDEBUG tắt. Oracle của projector với viewport 800×600, FOV90°, P=(1,0.5,4) là (475,262.5); đây là tọa độ tính tay, không lấy expected từ inverse. Tests cũng kiểm RGB/weights, toàn buffer quad, limit chung, ảnh CPU clean còn grid/fill và kéo giữ depth.

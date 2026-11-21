@@ -117,11 +117,14 @@ inline CubeVertices worldCube(const Scene& scene) {
 #endif
 }
 
+// [snippet projected-cube]
 struct ProjectedCube {
     std::array<ProjectionResult, kCubeVertexCount> vertices{};
     std::size_t projectionCount = 0;
 };
+// [/snippet projected-cube]
 
+// [snippet project-eight-vertices]
 inline ProjectedCube projectCube(const CubeVertices& world, const Scene& scene) {
     ProjectedCube projected;
     for (std::size_t i = 0; i < world.size(); ++i) {
@@ -130,6 +133,7 @@ inline ProjectedCube projectCube(const CubeVertices& world, const Scene& scene) 
     }
     return projected;
 }
+// [/snippet project-eight-vertices]
 #endif
 #if LAB_CHECKPOINT >= 5
 inline void moveModel(Scene& scene, Vec3 direction, double deltaTime) {

@@ -59,7 +59,7 @@ ctest --test-dir build -C Release --output-on-failure --timeout 30
 .\build\Release\project_16_final.exe
 ~~~
 
-CTest mặc định include final/include. Sau khi viết đủ tám bài trong Starter, đổi target_include_directories(project_16_tests PRIVATE final/include) thành target_include_directories(project_16_tests PRIVATE starter/include) trong CMakeLists.txt của ZIP. Configure lại, build cả project_16_starter và project_16_tests rồi chạy CTest hai cấu hình. Không dùng kết quả của final để khẳng định Starter đúng.
+Muốn kiểm mã của mình trong `starter/`, chạy `cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON`, rồi `cmake --build build --config Debug --target project_16_check_work --parallel 1`. CTest sẽ ghi `project_16_starter_validation`. Nếu chỉ thấy nhãn `reference`, bạn đang kiểm bản mẫu. Chạy lại với `--config Release` sau khi hoàn thành tám bài.
 
 Tests không tạo window và không dùng assert bị NDEBUG tắt. Chúng kiểm oracle area, bounds, callback/limit, weights tại từng vertex của input negative, quad không crack/overlap cho hai đường chéo và subpixel, RGB cụ thể, phép chiếu tính tay, inverse drag và ảnh CPU sạch có fill/grid.
 

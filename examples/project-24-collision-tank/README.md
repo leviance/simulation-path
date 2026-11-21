@@ -47,7 +47,7 @@ Bản mặc định chỉ build final và tests. BUILD_CHECKPOINTS=ON mở thêm
 
 Viết bài làm trong starter/include và starter/src. Checkpoint là bản tham khảo chạy độc lập, không phải một thư mục cần sửa và cũng không chứng minh Starter đúng.
 
-Tests mặc định include final/include. Sau bài 8, có thể đổi target_include_directories(project_24_tests PRIVATE starter/include) để kiểm riêng phần 2D của Starter. Bộ tests in rõ các nhóm đã chạy. Khi Starter có đủ bài 11, phải có cả bốn nhóm: 2D, 3D physics, 3D renderer và spawn. Không coi một lượt chỉ chạy 2D là đã nghiệm thu phần 3D.
+Muốn kiểm mã của mình trong `starter/`, chạy `cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON`, rồi `cmake --build build --config Debug --target project_24_check_work --parallel 1`. CTest sẽ ghi `project_24_starter_validation`. Nếu chỉ thấy nhãn `reference`, bạn đang kiểm bản mẫu. Sau bài 8 mới có nhóm 2D. Ở bài 11, kết quả phải có đủ bốn nhóm: 2D, 3D physics, 3D renderer và spawn.
 
 ## Điều khiển bản cuối
 

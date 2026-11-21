@@ -52,19 +52,20 @@ Sau đoạn này application tạo Overlay và gọi `drawShowcase` hoặc `draw
 
 ## Chạy thử và quan sát
 
-Build `project_38_final`. Dùng cả góc trước và góc bên, orbit/pan/zoom khi Pause để kiểm chiều sâu mà state không đổi. Chọn ID 0/1, tắt trải pha nếu muốn quan sát từng hạt từ cùng gốc; bật lại để thấy nhiều vị trí của snapshot dọc quỹ đạo. Bốn preset phải thay chuyển động theo E/B/q, không chỉ đổi màu hoặc camera.
+Hãy thử góc trước và góc bên của buồng hạt do chính bạn dựng. Khi đang Pause, orbit/pan/zoom chỉ được đổi góc nhìn. Chọn ID 0/1, tắt trải pha để hai hạt xuất phát cùng gốc, rồi bật lại để thấy nhiều vị trí trên quỹ đạo. Bốn preset phải thay đổi chuyển động theo E/B/q, không chỉ đổi màu.
 
-Gói ZIP có starter, checkpoint 01–12, final, shader và tests. Phần source cuối bài cho đọc **toàn bộ file hoàn chỉnh**, không chỉ đoạn đang giải thích. Theo README để configure/build/run; bản final không phụ thuộc website hoặc backend. Chạy CTest trước, `--verify` trên GPU thật sau, rồi mới kiểm tương tác bằng tay. Không coi Canvas hoặc một ảnh chụp đẹp là thay executable đúng quy mô.
+Gói ZIP gồm `starter/`, 12 checkpoint, shader, `final/` và tests. Các lệnh dưới đây kiểm thuật toán trong `starter/` trước, rồi chạy `--verify` trên chính chương trình đã nối với GPU. Muốn so với đáp án, xem lệnh `build-ref` ở cuối bài.
 
-```powershell title="Build, CTest Debug/Release và chạy bản hoàn chỉnh"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 20
-.\build\Release\project_38_final.exe --verify
-.\build\Release\project_38_final.exe
+```powershell title="Kiểm bài làm ở Debug và Release"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_38_check_work --parallel 1
+cmake --build build --config Release --target project_38_check_work --parallel 1
+cmake --build build --config Release --target project_38_starter --parallel 1
+.\build\Release\project_38_starter.exe --verify
+.\build\Release\project_38_starter.exe
 ```
+
+Với Visual Studio, `--config` chọn Debug hoặc Release. Với Ninja/Makefiles, tạo hai thư mục build riêng, chọn `CMAKE_BUILD_TYPE` khi configure và chạy executable ngay trong thư mục build.
 
 ## Thử tạo lỗi
 
@@ -84,4 +85,4 @@ ctest --test-dir build -C Release --output-on-failure --timeout 20
 
 Tạo một báo cáo ngắn: chọn một preset, dự đoán chiều quay, đo sai số khi giảm dt và tìm bước chiếm nhiều thời gian nhất. Một hướng nâng cao là trường biến thiên, nhưng lúc ấy nghiệm uniform-field không còn dùng trực tiếp và cần bộ kiểm mới. Chưa thêm Coulomb giữa hạt rồi gọi đây là plasma hoàn chỉnh.
 
-Bạn đã nối toán trên một hạt với state sống trên GPU ở quy mô lớn. Xem [roadmap Project 39](/roadmap/39) để biết sản phẩm kế tiếp; không dùng tài liệu cũ của Project 39 như thể đã triển khai đề bài mới.
+Trong buồng hạt, GPU cập nhật cả triệu hạt rồi vẽ từ chính dữ liệu vừa tính. Sang [Project 39 — Khám phá thành phố một triệu vật thể](/projects/million-object-city), bạn sẽ gặp một câu hỏi khác: nếu camera chỉ nhìn thấy một góc phố, làm sao chọn đúng những tòa nhà cần vẽ?

@@ -2,7 +2,7 @@ import type { LessonMeta, ProjectMeta } from "@/lib/course";
 import type { LessonCodeGuide } from "@/course/learning/types";
 import { getProjectChangedPaths, getProjectSourceBundle } from "@/lib/project-sources";
 import { SourceFile } from "@/components/source-file";
-import { workbookOption } from "@/lib/voxel-workbook";
+import { learnerBuild } from "@/lib/voxel-workbook";
 
 export async function LessonWalkthrough({
   project,
@@ -14,10 +14,7 @@ export async function LessonWalkthrough({
   guide: LessonCodeGuide;
 }) {
   const previous = project.lessons[lesson.order - 2];
-  const workbook = workbookOption(project.id);
-  const startTarget = previous
-    ? `project_${Number(project.id)}_checkpoint_${previous.order}`
-    : `project_${Number(project.id)}_starter`;
+  const build = learnerBuild(project.id);
   const [startingBundle, changedPaths] = await Promise.all([
     getProjectSourceBundle(project.id, previous ? previous.order : "starter"),
     getProjectChangedPaths(project.id, lesson.order),
@@ -47,24 +44,22 @@ export async function LessonWalkthrough({
               : "Bộ khung starter của project"}
           </b>
           <p>
-            {workbook ? (
+            {build.tree === "work" ? (
               previous ? (
                 <>
                   Tiếp tục ngay trong <code>work/</code> của bài trước. Không chép checkpoint lên
-                  bài làm. Build lại <code>project_{project.id}_work</code> trước khi thêm tính
-                  năng.
+                  bài làm. Build lại <code>{build.target}</code> trước khi thêm tính năng.
                 </>
               ) : (
                 <>
                   Giải nén ZIP, mở terminal cạnh CMakeLists.txt và chạy{" "}
-                  <code>cmake -S . -B build-work -D{workbook}=ON -DCMAKE_BUILD_TYPE=Release</code>.
+                  <code>cmake -S . -B build-work {build.flags} -DCMAKE_BUILD_TYPE=Release</code>.
                   CMake tạo <code>work/</code> từ starter đúng một lần. Chạy{" "}
                   <code>
-                    cmake --build build-work --config Release --target project_{project.id}_work
-                    --parallel 1
+                    cmake --build build-work --config Release --target {build.target} --parallel 1
                   </code>{" "}
                   để thử trước khi sửa.
-                  {workbook === "VOXEL_WORKBOOK" && project.id !== "58" && (
+                  {build.flags === "-DVOXEL_WORKBOOK=ON" && project.id !== "58" && (
                     <>
                       {" "}
                       ZIP đã mang theo các phần của Project {Number(project.id) - 1}. Muốn giữ họa
@@ -76,8 +71,19 @@ export async function LessonWalkthrough({
               )
             ) : (
               <>
-                Hãy build target <code>{startTarget}</code> một lần trước khi sửa. Nếu điểm xuất
-                phát chưa chạy đúng, code mới sẽ chỉ làm việc tìm lỗi khó hơn.
+                {previous ? "Tiếp tục sửa " : "Giải nén ZIP và viết bài trong "}
+                <code>starter/</code>.{" "}
+                {previous ? (
+                  "Giữ nguyên bài làm từ lần trước."
+                ) : (
+                  <>
+                    Trong thư mục có CMakeLists.txt, chạy{" "}
+                    <code>cmake -S . -B build {build.flags}</code> một lần để CTest đọc chính bài
+                    của bạn.
+                  </>
+                )}{" "}
+                Build <code>{build.target}</code> để chạy mã mình viết; các checkpoint là lời giải
+                để đối chiếu.
               </>
             )}
           </p>

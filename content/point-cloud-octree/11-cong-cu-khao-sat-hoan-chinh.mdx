@@ -112,24 +112,26 @@ workflow chọn mặt sàn từ N=100000, kiểm IDs, serialize CSV rồi đọc
 
 Từ thư mục giải nén có CMakeLists.txt, dùng các lệnh ở dưới. CMake ≥3.24, C++20 và SDL 3.4.8 FetchContent+SHA-256; lần configure đầu cần mạng tải SDL, sau đó dùng cache. Link qua SDL3::SDL3. Bản ZIP không cần Node.js hoặc tài khoản website.
 
-Muốn CTest kiểm lời giải bạn tự viết trong starter, đổi include directory của project_30_tests từ final/include sang starter/include trong CMake của bản ZIP. Chỉ kỳ vọng bộ test toàn tính năng xanh sau khi bạn đã hoàn thiện các bài.
+Từ thư mục gốc của gói ZIP, bật `-DCOURSE_TEST_STARTER=ON` để kiểm các hàm trong `starter/include`. Target `project_30_check_work` sẽ biên dịch lại bài làm rồi mới chạy CTest. Chạy khi Starter đã đủ chức năng:
 
-macOS/Linux dùng hai thư mục build-debug/build-release với CMAKE_BUILD_TYPE tương ứng; bỏ -C và chạy executable ngay trong build directory. Chỉ tuyên bố nền tảng bạn thực sự đã build/kiểm.
-
-```cmake title="CMakeLists.txt — kiểm lời giải trong starter"
-target_include_directories(project_30_tests PRIVATE starter/include)
+```bash title="Terminal — kiểm mã trong starter/"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_30_check_work --parallel 1
+cmake --build build --config Release --target project_30_check_work --parallel 1
 ```
 
+Các lệnh dưới đây chạy bản mẫu để đối chiếu. Tách thư mục build giúp giữ nguyên cấu hình cho bài làm. Với Ninja/Makefiles, tạo hai thư mục Debug/Release và chọn `CMAKE_BUILD_TYPE` tương ứng.
+
 ```powershell title="Terminal — build độc lập và nghiệm thu Windows"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 30
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 30
-.\build\Debug\project_30_final.exe --smoke
-.\build\Release\project_30_final.exe --smoke-workflow
-.\build\Release\project_30_final.exe --benchmark
-.\build\Release\project_30_final.exe --input .runtime\selection-1.csv
+cmake -S . -B build-ref -DBUILD_CHECKPOINTS=ON
+cmake --build build-ref --config Debug --parallel 2
+ctest --test-dir build-ref -C Debug --output-on-failure --timeout 30
+cmake --build build-ref --config Release --parallel 2
+ctest --test-dir build-ref -C Release --output-on-failure --timeout 30
+.\build-ref\Debug\project_30_final.exe --smoke
+.\build-ref\Release\project_30_final.exe --smoke-workflow
+.\build-ref\Release\project_30_final.exe --benchmark
+.\build-ref\Release\project_30_final.exe --input .runtime\selection-1.csv
 ```
 
 ## Thử làm sai để hiểu đúng

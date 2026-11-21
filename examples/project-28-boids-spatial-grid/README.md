@@ -77,7 +77,7 @@ cmake --build build --config Release --parallel 2
 ctest --test-dir build -C Release --output-on-failure --timeout 20
 ```
 
-Mặc định tests include `final/include`: đây là kiểm bản tham khảo. Khi starter đã hoàn thành cả mười bài, đổi include của target tests trong CMake thành `starter/include`, configure/build lại và chạy CTest để kiểm bài làm của bạn. Tests không dùng assert bị tắt dưới NDEBUG.
+Muốn kiểm mã của mình trong `starter/`, chạy `cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON`, rồi `cmake --build build --config Debug --target project_28_check_work --parallel 1`. CTest sẽ ghi `project_28_starter_validation`. Nếu chỉ thấy nhãn `reference`, bạn đang kiểm bản mẫu. Cũng chạy ở Release: bộ tests không dựa vào `assert` có thể bị `NDEBUG` tắt.
 
 Có oracle độc lập chín ảnh tuần hoàn, ca R<S/R=S/R>S, biên cell/domain, trùng vị trí, insertion một lần, ba layout, state/steering equivalence, snapshot bất biến, batch partitions và cancellation. Test 10.000 dùng Grid toàn đàn, không chạy brute 10.000 trong vòng stress vô hạn.
 

@@ -219,9 +219,10 @@ test("Project 18 lessons teach learner-owned code and complete new helper defini
   );
   for (const token of [
     "Project 18 đã hoàn chỉnh",
-    "target_include_directories(project_18_tests PRIVATE starter/include)",
-    "ctest --test-dir build -C Debug",
-    "ctest --test-dir build -C Release",
+    "project_18_check_work",
+    "-DCOURSE_TEST_STARTER=ON",
+    "--config Debug --target project_18_check_work",
+    "--config Release --target project_18_check_work",
     "drawWorldGrid",
     "SDLK_F",
     "SDLK_J",

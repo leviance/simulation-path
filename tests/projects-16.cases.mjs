@@ -235,7 +235,7 @@ test("Project 16 rebuild teaches learner-owned code and finishes with a 3D scene
     assert.match(text, /--target project_16_starter --parallel 2/);
     assert.match(text, /bản tham khảo sau bài/);
     if (i === 7) {
-      assert.match(text, /target_include_directories\(project_16_tests PRIVATE starter\/include\)/);
+      assert.match(text, /project_16_check_work/);
       assert.match(text, /projectTriangle/);
       assert.match(text, /World|world/);
       assert.match(text, /Project 16 đã hoàn chỉnh/);

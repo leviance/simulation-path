@@ -119,19 +119,15 @@ static_assert(lab::rgba(255, 255, 255, 255) == 0xFFFFFFFFu);
 
 ### Bước 5 — Build và chạy CTest ở cả hai cấu hình
 
-CMake trong ZIP đã có target tests, include final/include và đăng ký project_1_validation; test không link SDL. Tại thư mục project:
+Từ thư mục gốc của gói ZIP, bật `-DCOURSE_TEST_STARTER=ON` để kiểm các hàm trong `starter/include`. Target `project_1_check_work` sẽ biên dịch lại bài làm rồi mới chạy CTest. Ở cả hai cấu hình, CTest phải ghi `project_1_starter_validation`:
 
-```bash title="Terminal — kiểm Debug và Release"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 20
+```bash title="Terminal — kiểm mã trong starter/"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_1_check_work --parallel 1
+cmake --build build --config Release --target project_1_check_work --parallel 1
 ```
 
-Với Ninja/Makefiles một cấu hình, dùng hai build directory và -DCMAKE_BUILD_TYPE=Debug/Release. Không chạy -C Release rồi nghĩ đã đổi một binary Debug thành Release.
-
-`--parallel 2` giới hạn công việc compile; `--timeout 20` chặn từng test treo. Trong repository website, các suite còn có process supervisor và deadline tổng. Không bỏ deadline chỉ vì một lần chạy lâu hơn dự kiến.
+Với Ninja/Makefiles một cấu hình, tạo hai thư mục build và chọn `CMAKE_BUILD_TYPE=Debug` hoặc `Release` ngay khi configure. `-C Release` không biến một binary Debug thành Release. Mỗi lệnh chỉ dùng một tiến trình biên dịch; nếu build lỗi, target dừng trước khi chạy test.
 
 ### Bước 6 — Kiểm đường SDL bằng smoke hữu hạn
 
@@ -150,9 +146,11 @@ if (smoke) {
 Biến smoke được đọc từ argv; chạy bình thường không có tham số vẫn mở ứng dụng tương tác. Trên Windows:
 
 ```powershell title="Terminal — SDL smoke và chạy tương tác"
-.\build\Debug\project_1_final.exe --smoke
-.\build\Release\project_1_final.exe --smoke
-.\build\Debug\project_1_final.exe
+cmake --build build --config Debug --target project_1_starter --parallel 1
+cmake --build build --config Release --target project_1_starter --parallel 1
+.\build\Debug\project_1_starter.exe --smoke
+.\build\Release\project_1_starter.exe --smoke
+.\build\Debug\project_1_starter.exe
 ```
 
 Nếu chạy qua automation, đặt hard timeout bên ngoài khoảng 15 giây cho mỗi smoke. Một lời gọi driver vẫn có thể kẹt; giới hạn số vòng lặp không thay thế deadline của process.

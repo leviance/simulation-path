@@ -20,17 +20,28 @@ Dùng tám phép chiếu cho cache đỉnh gốc. Near/far clipping có thể si
 
 Học từ `starter/`; từng `checkpoints/01..07/` và `final/` là source chạy độc lập. Không cần copy từng snippet vào một main.cpp lớn.
 
-## Build và chạy
+## Viết và kiểm bài làm trong `starter/`
+
+Mở terminal cạnh `CMakeLists.txt` trong gói đã giải nén. Khi đang học, chỉ build chương trình bạn vừa sửa:
+
+```bash
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_13_starter --parallel 1
+```
+
+Khi đã viết đủ các hàm của học phần, chạy `cmake --build build --config Debug --target project_13_check_work --parallel 1`. CTest phải hiện `project_13_starter_validation`. Nếu muốn so với chương trình mẫu trong `final/`, dùng thư mục `build-ref/` ở dưới; kết quả đó mang nhãn `reference`, không chấm bài làm.
+
+## Build và chạy bản tham khảo
 
 Cần C++20, CMake ≥3.24 và compiler (Windows: Visual Studio 2022 Desktop development with C++). Lần configure đầu cần mạng để FetchContent tải SDL **3.4.8**; link qua `SDL3::SDL3`.
 
 ```bash
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 30
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 30
-./build/Release/project_13_final.exe
+cmake -S . -B build-ref -DBUILD_CHECKPOINTS=ON
+cmake --build build-ref --config Debug --parallel 2
+ctest --test-dir build-ref -C Debug -L reference --no-tests=error --output-on-failure --timeout 30
+cmake --build build-ref --config Release --parallel 2
+ctest --test-dir build-ref -C Release -L reference --no-tests=error --output-on-failure --timeout 30
+./build-ref/Release/project_13_final.exe
 ```
 
 Target mặc định là final và tests. Option trên thêm starter và checkpoint_1..7. Với Ninja/Makefiles, chọn `-DCMAKE_BUILD_TYPE=Debug` hoặc Release và tìm executable trực tiếp trong build/.

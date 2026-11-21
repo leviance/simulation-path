@@ -101,12 +101,20 @@ Với $h=1.2$, đỉnh 0 đi từ $(-1.2,-1.2,-1.2)$ đến $(-1.2,-1.2,4.8)$; �
 
 ### Bước 4 — Lưu đủ kết quả chiếu, rồi vẽ marker
 
-`ProjectedCube` giữ một `ProjectionResult` cho mỗi index, không chỉ `Vec2`. Ta cần status để biết có thể đọc screen hay không.
+Một đỉnh có thể nằm sau camera, nên chỉ lưu hai số tọa độ màn hình là chưa đủ. Ta giữ nguyên `ProjectionResult` của từng đỉnh để lúc vẽ còn biết đỉnh nào nhìn thấy được. Thêm khai báo sau vào `include/scene.hpp`, ngay trước hàm `projectCube`:
 
-```cpp title="include/scene.hpp — đoạn ghép"
+{/* snippet include/scene.hpp#projected-cube */}
+
+```cpp title="include/scene.hpp — tám kết quả chiếu và số lượt đã chiếu"
 struct ProjectedCube {
     std::array<ProjectionResult, kCubeVertexCount> vertices{};
+    std::size_t projectionCount = 0;
+};
 ```
+
+Mỗi khối lập phương có tám đỉnh. Nếu tính đúng một lần cho mỗi đỉnh, bộ đếm phải đi từ 0 đến 8, kể cả khi có đỉnh không nhìn thấy. Viết hàm dưới đây ngay sau dấu `};`:
+
+{/* snippet include/scene.hpp#project-eight-vertices */}
 
 ```cpp title="include/scene.hpp — projectCube"
 inline ProjectedCube projectCube(const CubeVertices& world, const Scene& scene) {
@@ -143,12 +151,13 @@ for (const auto& vertex : projected.vertices) {
 
 `main.cpp` gọi `renderScene`, dùng `SDL_UpdateTexture` upload `image.pixels` lên SDL texture rồi present. `RenderStats` chuyển số đếm sang HUD; HUD không chiếu tám đỉnh thêm lần nữa.
 
-```bash title="Terminal — chạy checkpoint 1"
-cmake --build build --config Debug --target project_13_checkpoint_1
-./build/Debug/project_13_checkpoint_1.exe
+```bash title="Terminal — chạy tám đỉnh vừa viết trong starter/"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_13_starter --parallel 1
+./build/Debug/project_13_starter.exe
 ```
 
-Kết quả là hai lớp bốn chấm. Lớp Z=4.8 ở gần camera nên trải rộng hơn lớp Z=7.2. HUD báo cache bằng 8; native marker đều trắng, còn Canvas dùng màu và nhãn số để dễ đọc dữ liệu.
+Kết quả là hai lớp bốn chấm. Lớp Z=4.8 ở gần camera nên trải rộng hơn lớp Z=7.2. HUD báo cache bằng 8; native marker đều trắng, còn Canvas dùng màu và nhãn số để dễ đọc dữ liệu. Nếu chỉ thấy bốn chấm hoặc số đếm khác 8, dùng `project_13_checkpoint_1` để đối chiếu với bản đang sửa.
 
 ## Thử làm sai để hiểu đúng
 

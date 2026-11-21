@@ -28,6 +28,29 @@ void testVertexContract() {
     check(lab::kSourceTriangle.size() == 3U, "triangle contains exactly three vertices");
 }
 
+void testProject16Reference() {
+    // Oracle theo camera của P16, không lấy đáp án từ project16Position().
+    constexpr std::array<std::array<float, 3>, 3> world{{{-1.4F, 1.2F, 4}, {1.6F, -1, 5.5F}, {-1.4F, -1, 6.5F}}};
+    constexpr std::array<lab::Color, 3> colors{{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}};
+    constexpr std::array<std::array<int, 2>, 4> sizes{{{330, 180}, {560, 720}, {401, 517}, {175, 600}}};
+    for (const auto& size : sizes) {
+        const auto [w, h] = size;
+        const auto fit = lab::forPanel({}, w, h);
+        const auto projected = lab::transformedTriangle(lab::kSourceTriangle, fit);
+        const float focal = std::min(float(h), 1.5F * w) / (2.0F * std::tan(std::numbers::pi_v<float> / 6.0F));
+        for (int i = 0; i < 3; ++i) {
+            const auto [x, y, z] = world[i];
+            const lab::Vec2 expected{w * 0.5F + focal * x / z, h * 0.5F - focal * y / z};
+            const auto& v = projected[i];
+            const auto pixel = lab::ndcToCpuScreen({v.positionX, v.positionY}, w, h);
+            check(lab::length(lab::subtract(pixel, expected)) < 0.001F, "each labeled vertex matches the P16 lens in pixel space");
+            check(lab::maximumColorDifference({v.red, v.green, v.blue}, colors[i]) == 0, "pure RGB stays attached to the P16 vertex");
+            const auto local = lab::inverseTransformPosition({v.positionX, v.positionY}, fit);
+            check(lab::length(lab::subtract(local, {lab::kSourceTriangle[i].positionX, lab::kSourceTriangle[i].positionY})) < 0.00001F, "dragging undoes viewport fit");
+        }
+    }
+}
+
 void testTransformOrder() {
     const lab::Transform2D transform{std::numbers::pi_v<float> * 0.5F, 0.5F, {0.2F, -0.1F}};
     const lab::Vec2 result = lab::transformPosition({1.0F, 0.0F}, transform);
@@ -101,7 +124,8 @@ void testCpuRasterAndQuantization() {
 
 void testProbePixelCenter() {
     check(lab::probeEdgeDistance(lab::kSourceTriangle, {}, {0, 0}, 100, 100) > 1.5F, "interior probe is away from coverage boundary");
-    check(lab::probeEdgeDistance(lab::kSourceTriangle, {}, {0, 0.66F}, 100, 100) < 1.0e-5F, "vertex probe is classified as boundary, not a verdict");
+    const auto& a = lab::kSourceTriangle[0];
+    check(lab::probeEdgeDistance(lab::kSourceTriangle, {}, {a.positionX, a.positionY}, 100, 100) < 1.0e-5F, "vertex probe is classified as boundary, not a verdict");
     const lab::Viewport viewport{31, 7, 101, 73};
     const lab::ProbePixel pixel = lab::locateProbePixel({0.0F, 0.0F}, viewport);
     check(pixel.valid && pixel.x == 81 && pixel.y == 43, "odd viewport selects the containing pixel");
@@ -147,6 +171,7 @@ void testNamedValidationReport() {
 
 int main() {
     testVertexContract();
+    testProject16Reference();
     testTransformOrder();
     testCoordinateRoundTrips();
     testBarycentricColor();

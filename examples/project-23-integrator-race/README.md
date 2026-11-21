@@ -53,7 +53,7 @@ Target mặc định là final. Starter và các checkpoint chỉ có khi `BUILD
 
 Viết trong `starter/include/` và `starter/src/`, rồi build `project_23_starter`. Target `project_23_checkpoint_4` chạy bản tham khảo ở cuối bài 4; nó **không** nhận thay đổi bạn viết trong Starter.
 
-Cuối bài 8, đổi `target_include_directories(project_23_tests PRIVATE final/include)` thành `target_include_directories(project_23_tests PRIVATE starter/include)` trong bản ZIP của bạn. Configure lại, build `project_23_starter` và `project_23_tests`, rồi chạy CTest ở Debug và Release. Nếu giữ final/include, bạn chỉ đang kiểm bản mẫu. Starter ở các bài đầu chưa có đủ hàm cho bộ tests cuối.
+Muốn kiểm mã của mình trong `starter/`, chạy `cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON`, rồi `cmake --build build --config Debug --target project_23_check_work --parallel 1`. CTest sẽ ghi `project_23_starter_validation`. Nếu chỉ thấy nhãn `reference`, bạn đang kiểm bản mẫu. Bộ kiểm cuối cần cả phần benchmark ở bài 8.
 
 ## Điều khiển SDL3
 

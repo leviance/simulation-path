@@ -6,6 +6,10 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 Các bước trước đã tạo được hai renderer dùng chung dữ liệu. Bài cuối biến chúng thành công cụ đối chiếu: chọn và kéo A/B/C ở một trong hai panel, chỉnh đỉnh bằng bàn phím, đổi màu, đọc probe và khôi phục trạng thái ban đầu.
 
+Mở bản hoàn chỉnh rồi nhìn cạnh đáy trước: từ C màu lam sang B màu lục, cạnh này hơi chếch xuống. A màu đỏ nằm cao hơn và lệch trái so với C. Cả hai nửa phải hiện lại đúng hình trong [Project 16](/projects/triangle-rasterizer), kể cả khi kéo rộng cửa sổ. Giờ thử nhấn `N`: tam giác quay một bước nhưng mặt lưới dưới nó vẫn đứng yên. Nhấn `R` để trở về cảnh ban đầu, ba màu vẫn bật.
+
+Mặt lưới chỉ giúp mắt có mốc so sánh. Trong `include/reference_floor.hpp`, ta lấy các đường trên mặt phẳng `y = −1,5`, chiếu qua cùng ống kính rồi lưu ảnh nền cho đến lần đổi kích thước tiếp theo. Bên phải chỉ dùng texture này **làm nền**; chính lệnh `glDrawArrays(GL_TRIANGLES, 0, 3)` mới vẽ tam giác phủ lên trên. Khi đo một pixel bên ngoài hình, đáp án có thể là màu nền trời **hoặc** màu đường lưới.
+
 Ta không thêm camera hay ánh sáng vào bài chuyển tiếp này. Sản phẩm cần làm rõ GPU thay phần nào trong renderer CPU: transform chuyển sang vertex shader, coverage và nội suy sang rasterizer phần cứng, còn màu đầu ra được ghi bởi fragment shader. Vòng lặp SDL, dữ liệu đầu vào và việc kiểm kết quả vẫn do ứng dụng C++ quản lý.
 
 ## Hiểu ý tưởng trước khi viết code
@@ -42,8 +46,8 @@ Khai báo `std::array<lab::GpuVertex, 3> triangle = lab::kSourceTriangle;` trong
 
 ```cpp title="include/editor.hpp — đưa vị trí kéo về tọa độ của vertex"
 inline Vec2 inverseTransformPosition(Vec2 ndc, const Transform2D& transform) {
-    const float x = (ndc.x - transform.translation.x) / transform.scale;
-    const float y = (ndc.y - transform.translation.y) / transform.scale;
+    const float x = (ndc.x / transform.panelFit.x - transform.translation.x) / transform.scale;
+    const float y = (ndc.y / transform.panelFit.y - transform.translation.y) / transform.scale;
     const float cosine = std::cos(transform.angleRadians);
     const float sine = std::sin(transform.angleRadians);
     return {x * cosine + y * sine, -x * sine + y * cosine};
@@ -68,7 +72,7 @@ CPU rasterizer nhận chính tam giác ấy; GPU nhận cùng byte qua VBO. read
 
 ### Bước 3 — Đọc probe trước, vẽ nhãn sau
 
-include/overlay.hpp vẽ nhãn CPU/GPU, A/B/C, tọa độ NDC và hướng dẫn bằng một font bitmap nhỏ dùng scissored clear. Đây chỉ là lớp chú thích, không rasterize thay tam giác. Bảng bên GPU ghi **NDC expected**: các tọa độ đó là đầu ra dự kiến tính từ contract C++, không phải kết quả đọc trực tiếp từ vertex shader. Bằng chứng GPU thật vẫn đến từ pixel readback.
+`include/overlay.hpp` vẽ tên hai khung, đánh dấu A/B/C và ghi tọa độ bằng một font bitmap nhỏ. Tọa độ NDC ở khung GPU là **giá trị dự kiến do C++ tính**, không phải số đọc ngược từ vertex shader. Muốn biết GPU đã vẽ màu gì, nhấn `P` để đọc pixel.
 
 Gọi drawPipelineOverlay **sau** readGpuProbe và trước swap. Nếu đọc sau khi vẽ nhãn, probe có thể gặp chữ hoặc marker thay vì fragment của tam giác. Khi input đổi, báo cáo cũ được đánh dấu cần đo lại; không để một con số từ trạng thái cũ trông như kết quả hiện tại.
 

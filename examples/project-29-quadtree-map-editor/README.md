@@ -39,7 +39,7 @@ ctest --test-dir build-release --output-on-failure --timeout 30
 ./build-release/project_29_final
 ```
 
-Để tự viết từ starter, build target project_29_starter. Nếu muốn tests kiểm bản của bạn, đổi include directory của project_29_tests từ final/include sang starter/include trong CMakeLists.txt của ZIP. Khi chưa hoàn thiện các bài sau, test toàn tính năng chưa thể pass.
+Muốn kiểm mã của mình trong `starter/`, chạy `cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON`, rồi `cmake --build build --config Debug --target project_29_check_work --parallel 1`. CTest sẽ ghi `project_29_starter_validation`. Nếu chỉ thấy nhãn `reference`, bạn đang kiểm bản mẫu. Các bài đầu chưa có đủ chức năng để chạy bộ kiểm cuối.
 
 ## Các mốc học
 

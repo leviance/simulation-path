@@ -1,6 +1,7 @@
 #pragma once
 #include "gpu_renderer.hpp"
 #include <iostream>
+#include <string_view>
 
 #if LAB_CHECKPOINT >= 9
 namespace lab {
@@ -30,7 +31,7 @@ inline bool captureFramebuffer(GlApi& gl, int width, int height, const char* pat
     const std::size_t pitch = std::size_t(width) * 4;
     std::vector<std::uint8_t> pixels(pitch * std::size_t(height));
     gl.ReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-    // OpenGL rows run bottom-up; BMP receives a conventional top-left surface.
+    // OpenGL rows run bottom-up; the captured image uses a top-left origin.
     for (int y = 0; y < height / 2; ++y) {
         auto top = pixels.begin() + std::size_t(y) * pitch;
         auto bottom = pixels.begin() + std::size_t(height - 1 - y) * pitch;
@@ -39,17 +40,22 @@ inline bool captureFramebuffer(GlApi& gl, int width, int height, const char* pat
     SDL_Surface* surface = SDL_CreateSurfaceFrom(width, height, SDL_PIXELFORMAT_RGBA32, pixels.data(), int(pitch));
     if (!surface)
         return false;
-    const bool saved = SDL_SaveBMP(surface, path);
+    bool saved = false;
+    if (std::string_view(path).ends_with(".png")) {
+        saved = SDL_SavePNG(surface, path);
+    } else {
+        saved = SDL_SaveBMP(surface, path);
+    }
     SDL_DestroySurface(surface);
     return saved && gl.GetError() == GL_NO_ERROR;
 }
 
-inline bool verifyCoverageBand(GlApi& gl, const Viewport& viewport, const std::array<GpuVertex, 3>& triangle, const Transform2D& transform, bool smoothColor) {
+inline bool verifyCoverageBand(GlApi& gl, const Viewport& viewport, const std::array<GpuVertex, 3>& triangle, const Transform2D& transform, bool smoothColor, const Framebuffer& backdrop) {
     Framebuffer expected{};
     if (!expected.resize(viewport.width, viewport.height)) {
         return false;
     }
-    rasterizeCpuTriangle(expected, triangle, transform, smoothColor);
+    rasterizeCpuTriangle(expected, triangle, transform, smoothColor, &backdrop);
     std::vector<std::uint8_t> actual(expected.rgba.size());
     gl.ReadPixels(viewport.x, viewport.y, viewport.width, viewport.height, GL_RGBA, GL_UNSIGNED_BYTE, actual.data());
     const auto transformed = transformedTriangle(triangle, transform);
@@ -94,7 +100,7 @@ inline bool verifyCoverageBand(GlApi& gl, const Viewport& viewport, const std::a
 }
 
 // This is a real-driver check. CTest remains CPU-only so CI needs no display.
-inline bool verifyGpuImage(GlApi& gl, const Viewport& viewport, const std::array<GpuVertex, 3>& triangle, const Transform2D& transform, bool smoothColor) {
+inline bool verifyGpuImage(GlApi& gl, const Viewport& viewport, const std::array<GpuVertex, 3>& triangle, const Transform2D& transform, bool smoothColor, const Framebuffer& backdrop) {
     const auto transformed = transformedTriangle(triangle, transform);
     constexpr std::array<std::array<float, 3>, 3> weights{{{1.0F / 3, 1.0F / 3, 1.0F / 3}, {0.6F, 0.2F, 0.2F}, {0.2F, 0.6F, 0.2F}}};
     for (const auto& weight : weights) {
@@ -103,15 +109,15 @@ inline bool verifyGpuImage(GlApi& gl, const Viewport& viewport, const std::array
             point.x += transformed[index].positionX * weight[index];
             point.y += transformed[index].positionY * weight[index];
         }
-        const auto result = readGpuProbe(gl, viewport, transform, point, smoothColor, triangle);
+        const auto result = readGpuProbe(gl, viewport, transform, point, smoothColor, triangle, &backdrop);
         std::cout << "interior pixel=" << result.pixelX << ',' << result.pixelY << " error=" << result.maximumDifference << '\n';
         if (!result.valid || !result.inside || result.nearEdge || result.maximumDifference > 2.0F / 255.0F)
             return false;
     }
-    const auto outside = readGpuProbe(gl, viewport, transform, {-0.98F, 0.98F}, smoothColor, triangle);
+    const auto outside = readGpuProbe(gl, viewport, transform, {-0.98F, 0.98F}, smoothColor, triangle, &backdrop);
     if (!outside.valid || outside.inside || outside.maximumDifference > 2.0F / 255.0F)
         return false;
-    return gl.GetError() == GL_NO_ERROR && verifyCoverageBand(gl, viewport, triangle, transform, smoothColor);
+    return gl.GetError() == GL_NO_ERROR && verifyCoverageBand(gl, viewport, triangle, transform, smoothColor, backdrop);
 }
 } // namespace lab
 #endif

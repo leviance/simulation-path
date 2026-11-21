@@ -184,7 +184,13 @@ ctest --test-dir build -C Release --output-on-failure --timeout 30
 
 Cần C++20, CMake≥3.24, Visual Studio 2022 trên Windows. SDL **3.4.8** được FetchContent tải theo checksum, link qua SDL3::SDL3. Với Ninja/Makefiles, chọn CMAKE_BUILD_TYPE và tìm executable trực tiếp trong build/.
 
-Nếu tự viết trong starter/, CTest mặc định vẫn kiểm final/include của bản tham khảo. Trong CMakeLists.txt của **bản ZIP đang học**, đổi target_include_directories(project_15_tests PRIVATE final/include) thành target_include_directories(project_15_tests PRIVATE starter/include), configure lại rồi build target project_15_tests. Chỉ khi đó test mới kiểm chính phần bạn vừa viết.
+Từ thư mục gốc của gói ZIP, bật `-DCOURSE_TEST_STARTER=ON` để kiểm các hàm trong `starter/include`. Target `project_15_check_work` sẽ biên dịch lại bài làm rồi mới chạy CTest.
+
+```bash title="Terminal — kiểm mã trong starter/"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_15_check_work --parallel 1
+cmake --build build --config Release --target project_15_check_work --parallel 1
+```
 
 Source chia theo trách nhiệm, không cần dồn thành một main.cpp khổng lồ:
 
@@ -203,7 +209,7 @@ ZIP chứa Starter, bảy checkpoint, final, tests, README và CMakeLists độc
 1. Đổi MVP thành M×V×P. Oracle và phép so chạy rời phải bắt lỗi; đừng chỉ nhìn một point ở origin.
 2. Sửa cả trace lẫn MVP theo cùng một convention sai. Agreement có thể còn nhỏ, nhưng bảng tính tay và T×S/S×T phải báo lệch.
 3. Đặt drawContext/mesh trong nhánh debug rồi nhấn F. Cảnh biến mất là lỗi; chế độ sạch chỉ bỏ phần giải thích, không bỏ sản phẩm chính.
-4. Chỉ chạy test trên final nhưng tiếp tục sửa starter. Test xanh không chứng minh mã tự viết đúng; đổi include path như hướng dẫn trên.
+4. Chỉ chạy test trên final nhưng tiếp tục sửa starter. Nếu CTest báo nhãn `reference`, hãy bật `COURSE_TEST_STARTER` rồi chạy `project_15_check_work` trước khi kết luận.
 
 ## Tự kiểm tra kết quả
 

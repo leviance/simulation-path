@@ -7,7 +7,7 @@ import { SourceFile } from "@/components/source-file";
 import { SourceDiff } from "@/components/source-diff";
 
 import { diffLines } from "@/lib/diff-lines";
-import { workbookOption } from "@/lib/voxel-workbook";
+import { learnerBuild } from "@/lib/voxel-workbook";
 
 function formatDiff(path: string, before: string, after: string) {
   const lines = diffLines(before, after);
@@ -55,7 +55,7 @@ export async function LessonSourceGuide({
   guide: LessonCodeGuide;
 }) {
   const isFinalLesson = lesson.order === project.lessons.length;
-  const workbook = workbookOption(project.id);
+  const learner = learnerBuild(project.id);
   const previousEdition = Boolean(getProjectRevision(project.id));
   const [bundle, previousBundle] = await Promise.all([
     getProjectSourceBundle(project.id, isFinalLesson ? "final" : lesson.order),
@@ -89,13 +89,13 @@ export async function LessonSourceGuide({
   ].join("\n");
 
   const finalCommands = [
-    `cmake -S . -B build`,
-    `cmake --build build --config Release`,
-    `ctest --test-dir build -C Release --output-on-failure`,
+    `cmake -S . -B build-ref -DCMAKE_BUILD_TYPE=Release`,
+    `cmake --build build-ref --config Release --parallel 1`,
+    `ctest --test-dir build-ref -C Release -L reference --no-tests=error --output-on-failure`,
     `# Windows / Visual Studio`,
-    `.\\build\\Release\\${finalTarget}.exe`,
+    `.\\build-ref\\Release\\${finalTarget}.exe`,
     `# macOS, Linux hoặc Ninja`,
-    `./build/${finalTarget}`,
+    `./build-ref/${finalTarget}`,
   ].join("\n");
 
   return (
@@ -121,23 +121,11 @@ export async function LessonSourceGuide({
 
       <div className="run-recipe">
         <div>
-          <span>{workbook ? "01 / LỜI GIẢI ĐỂ ĐỐI CHIẾU" : "01 / CHẠY TRÊN MÁY CỦA BẠN"}</span>
-          <h3>
-            {workbook ? "Chạy bản mẫu sau khi đã thử bài làm" : "Build phiên bản của bài này"}
-          </h3>
+          <span>01 / LỜI GIẢI ĐỂ ĐỐI CHIẾU</span>
+          <h3>Chạy bản mẫu sau khi đã thử bài làm</h3>
           <p>
-            {workbook ? (
-              <>
-                Các lệnh dưới đây dùng mã có sẵn trong ZIP, không đọc <code>work/</code>. Chỉ dùng
-                để so sánh với kết quả của bạn.{" "}
-              </>
-            ) : (
-              <>
-                Mở terminal tại thư mục <code>{bundle.directory}</code> rồi chạy các lệnh theo thứ
-                tự.{" "}
-              </>
-            )}
-            Lần configure đầu cần mạng để CMake tải SDL 3.4.8.
+            Các lệnh dưới đây chạy checkpoint có sẵn trong ZIP, không chạy bản bạn đang sửa trong{" "}
+            <code>{learner.tree}/</code>. Lần configure đầu cần mạng để CMake tải SDL 3.4.8.
           </p>
         </div>
         <HighlightedCode code={checkpointCommands} language="bash" />
@@ -245,15 +233,25 @@ export async function LessonSourceGuide({
           </header>
           <div className="run-recipe final-recipe">
             <div>
-              <span>BẢN HOÀN CHỈNH / BUILD, TEST, RUN</span>
-              <h3>Kiểm tra lại toàn bộ dự án</h3>
+              <span>BÀI LÀM CỦA BẠN / CTEST</span>
+              <h3>Kiểm tra mã bạn vừa viết</h3>
               <p>
-                Build bản final, chạy CTest, sau đó mở ứng dụng và làm lại checklist thủ công. Test
-                tự động không thay thế được việc kiểm tra input và hình ảnh trên cửa sổ thật.
+                Target <code>{learner.check}</code> biên dịch bộ kiểm tra với{" "}
+                <code>{learner.tree}/include</code> rồi mới chạy CTest. Nếu build lỗi, hãy sửa lỗi
+                đầu tiên; kết quả từ lần chạy cũ không có giá trị. Sau khi test đạt, mở ứng dụng để
+                thử chuột, bàn phím và hình ảnh.
               </p>
             </div>
-            <HighlightedCode code={finalCommands} language="bash" />
+            <HighlightedCode
+              code={`cmake -S . -B ${learner.directory} ${learner.flags} -DCMAKE_BUILD_TYPE=Release\ncmake --build ${learner.directory} --config Release --target ${learner.check} --parallel 1`}
+              language="bash"
+            />
           </div>
+          <details>
+            <summary>Build và kiểm riêng lời giải trong final/</summary>
+            <p>Thư mục build-ref dùng mã mẫu. CTest ở đây không chấm bài của bạn.</p>
+            <HighlightedCode code={finalCommands} language="bash" />
+          </details>
           <a className="button button-primary" href={project.download} download>
             Tải ZIP Dự án {project.id}
             {previousEdition ? " (bản cũ)" : ""} <b>↓</b>

@@ -1,5 +1,78 @@
 import { expect, test } from "@playwright/test";
 
+test("Project 33 overview shows the real C++ result alongside the interactive reference scene", async ({
+  page,
+}) => {
+  await page.goto("/projects/cpu-gpu-triangle");
+  const demo = page.locator(".project-demo");
+  const still = demo.locator("img[src$='/cpu-gpu-triangle/project-16-reference.png']");
+  await still.scrollIntoViewIfNeeded();
+  await expect
+    .poll(() => still.evaluate((element) => (element as HTMLImageElement).naturalWidth))
+    .toBe(1120);
+  await expect(demo.getByRole("checkbox", { name: "Nội suy màu" })).toBeChecked();
+});
+
+test("Project 33 opens and resets to the P16 silhouette and vertex colors in both panels", async ({
+  page,
+}) => {
+  await page.goto("/projects/cpu-gpu-triangle/09-hoan-thien-cpu-gpu-triangle");
+  const canvas = page.locator("canvas[aria-label*='CPU rasterizer']");
+  const smooth = page.getByRole("checkbox", { name: "Nội suy màu" });
+  await expect(smooth).toBeEnabled();
+  await expect(smooth).toBeChecked();
+  const still = page.locator("img[src$='/cpu-gpu-triangle/project-16-reference.png']").first();
+  await still.scrollIntoViewIfNeeded();
+  await expect
+    .poll(() => still.evaluate((image) => (image as HTMLImageElement).naturalWidth))
+    .toBe(1120);
+
+  const colorMismatches = () =>
+    canvas.evaluate((element) => {
+      const surface = element as HTMLCanvasElement;
+      const box = surface.getBoundingClientRect();
+      const w = Math.floor((box.width - 52) / 2),
+        h = box.height - 94;
+      const focal = Math.min(h, 1.5 * w) / (2 * Math.tan(Math.PI / 6));
+      // Use P16 world coordinates and its camera, not coordinates from the P33 lab.
+      const vertices = [
+        [-1.4, 1.2, 4],
+        [1.6, -1, 5.5],
+        [-1.4, -1, 6.5],
+      ].map(([x, y, z]) => [w / 2 + (focal * x) / z, h / 2 - (focal * y) / z]);
+      const ctx = surface.getContext("2d")!;
+      const dprX = surface.width / box.width,
+        dprY = surface.height / box.height;
+      const mismatches = [];
+      for (const origin of [18, 18 + w + 16]) {
+        for (let i = 0; i < 3; i++) {
+          const weights = [0.09, 0.09, 0.09];
+          weights[i] = 0.82;
+          const x = origin + vertices.reduce((sum, v, k) => sum + weights[k] * v[0], 0);
+          const y = 30 + vertices.reduce((sum, v, k) => sum + weights[k] * v[1], 0);
+          const rgb = ctx.getImageData(Math.floor(x * dprX), Math.floor(y * dprY), 1, 1).data;
+          if (!weights.every((value, channel) => Math.abs(rgb[channel] - value * 255) <= 9))
+            mismatches.push({
+              vertex: "ABC"[i],
+              origin,
+              x,
+              y,
+              measured: [...rgb],
+              size: [box.width, box.height, surface.width, surface.height],
+            });
+        }
+      }
+      return mismatches;
+    });
+  await expect.poll(colorMismatches).toEqual([]);
+  await smooth.uncheck();
+  await expect.poll(colorMismatches).toHaveLength(6);
+  await page.getByRole("button", { name: "Đặt lại", exact: true }).click();
+  await expect(smooth).toBeChecked();
+  await page.setViewportSize({ width: 820, height: 880 });
+  await expect.poll(colorMismatches).toEqual([]);
+});
+
 test("Project 33 route exposes the CPU/GPU lab and complete source", async ({ page }) => {
   await page.goto("/projects/cpu-gpu-triangle/01-tao-opengl-context-tu-sdl3");
   await expect(

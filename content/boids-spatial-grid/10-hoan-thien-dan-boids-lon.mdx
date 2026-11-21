@@ -91,13 +91,13 @@ ctest --test-dir build -C Release --output-on-failure --timeout 20
 ./build/Release/project_28_final.exe --benchmark-cells-dense
 ```
 
-Mặc định tests kiểm final/include, tức bản tham khảo. Khi starter của bạn đã có đủ thuật toán, trong bản ZIP học tập đổi include của target tests thành dòng sau, configure/build lại rồi chạy cả hai lệnh CTest ở trên:
+Muốn biết spatial grid bạn viết có bỏ sót hàng xóm không, hãy chạy cùng bộ ca kiểm trên `starter/` thay vì `final/`:
 
-```cmake title="CMakeLists.txt — kiểm bài làm đã hoàn thiện"
-target_include_directories(project_28_tests PRIVATE starter/include)
+```bash title="Terminal — kiểm mã trong starter/"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_28_check_work --parallel 1
+cmake --build build --config Release --target project_28_check_work --parallel 1
 ```
-
-Không sửa CMake được sinh trong repository website. Source hoàn chỉnh từng file có ở phần mã nguồn cuối bài và ZIP; giữ tests cùng README khi chia sẻ bài làm.
 
 ## Thử làm sai để hiểu đúng
 

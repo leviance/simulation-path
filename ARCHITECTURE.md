@@ -62,6 +62,10 @@ CMake dùng một target `project_N_runtime_files` để chuẩn bị DLL SDL v�
 
 Project có shader thay đổi theo checkpoint có thể bật `shaderRuntimePerTarget` trong catalog. Khi bật, mỗi target có bản fallback tại `shaders/<target-name>/` cạnh executable và nhận đường này qua `COURSE_SHADER_FALLBACK_SUBDIRECTORY`; các target không chép đè GLSL của nhau. Source directory của đúng snapshot vẫn được ưu tiên để hỗ trợ hot reload. Các project chưa bật option giữ cách tìm runtime shader hiện tại.
 
+Mọi ZIP có ba cách kiểm C++: mặc định kiểm `final/` (nhãn CTest `reference`); bật `COURSE_TEST_STARTER` để kiểm ngay `starter/`; hoặc bật `COURSE_WORKBOOK` (riêng 58–64: `VOXEL_WORKBOOK`) để tạo `work/` một lần và kiểm thư mục này. Hai chế độ làm bài loại trừ nhau. Target `project_N_check_work` chỉ tồn tại ở chế độ học: nó build lại test rồi chạy CTest với nhãn `learner`. Binary test mang tên riêng theo cây mã, nên đổi chế độ không thể vô tình chạy executable của lời giải cũ. Không phải học phần nào có chế độ `work/` cũng đã có hướng dẫn ghép tệp từng bước.
+
+Sau khi đổi CMake chung, đóng gói P02 và chạy `node --experimental-strip-types scripts/verify-learner-ctest.mjs <thư-mục-chứa-SDL3Config.cmake>`. Ca tích hợp giải nén ZIP vào một thư mục tạm, làm sai rồi khôi phục công thức di chuyển trong từng cây bài làm. Bản mẫu phải không đổi, còn CTest phải lần lượt báo đỏ và xanh. Lệnh dùng SDL đã cài, một tiến trình biên dịch và giới hạn tổng 150 giây.
+
 ## File được sinh tự động
 
 ### Nền C++ dùng chung của tuyến cảnh quan voxel

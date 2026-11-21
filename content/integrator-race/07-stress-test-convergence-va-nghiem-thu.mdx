@@ -139,7 +139,7 @@ cmake --build build --config Release --target project_23_tests --parallel 2
 ctest --test-dir build -C Release --output-on-failure --timeout 30
 ```
 
-Mặc định target tests include final/include. Vì bộ kiểm còn bao gồm benchmark của bài 8, **chưa dùng kết quả CTest này để xác nhận Starter mới học tới bài 7**. Cuối bài 8 sẽ đổi include sang Starter hoàn chỉnh để kiểm chính bài làm của bạn.
+Bộ kiểm cuối còn cần benchmark ở bài 8. Ở bài 7, kết quả từ bản mẫu chưa xác nhận Starter của bạn; cuối bài 8 ta sẽ bật `COURSE_TEST_STARTER` để kiểm cả phần vừa viết.
 
 Trên Canvas/SDL3, thử cùng initial state với 1/30 rồi 1/60 s tại cùng t=2 s. Với stress preset, Euler có thể vượt giới hạn an toàn; chương trình dừng và báo rõ, không clamp state để giấu phân kỳ. Khối chỉ báo ngoài khung vẫn giữ giá trị vật lý thật trong readout.
 

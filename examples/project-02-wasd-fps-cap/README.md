@@ -11,25 +11,36 @@ Nối tiếp framebuffer của Project 01: tự tô ô vuông bằng putPixel, �
 - Resize không bóp méo hình; mất focus/minimize không gây bước nhảy khi trở lại.
 - Cùng năm giây ở 30/60/120 FPS cho gần 900 px nếu không có dt bị clamp; giải thích giới hạn của điều kiện này.
 
-## Build và chạy
+## Viết và kiểm bài làm trong `starter/`
+
+Mở terminal cạnh `CMakeLists.txt` trong gói đã giải nén. Khi đang học, chỉ build chương trình bạn vừa sửa:
+
+```bash
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_2_starter --parallel 1
+```
+
+Khi đã viết đủ các hàm của học phần, chạy `cmake --build build --config Debug --target project_2_check_work --parallel 1`. CTest phải hiện `project_2_starter_validation`. Nếu muốn so với chương trình mẫu trong `final/`, dùng thư mục `build-ref/` ở dưới; kết quả đó mang nhãn `reference`, không chấm bài làm.
+
+## Build và chạy bản tham khảo
 
 C++20, CMake 3.24+, compiler hỗ trợ C++20. Windows: Visual Studio 2022, workload Desktop development with C++. Lần configure đầu cần mạng để tải SDL **3.4.8**, kiểm SHA-256 bằng FetchContent và link SDL3::SDL3.
 
 Từ thư mục chứa CMakeLists.txt:
 
 ```bash
-cmake -S . -B build
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake -S . -B build-ref
+cmake --build build-ref --config Debug --parallel 2
+ctest --test-dir build-ref -C Debug -L reference --no-tests=error --output-on-failure --timeout 20
 ```
 
 Windows:
 
 ```powershell
-.\build\Debug\project_2_final.exe
+.\build-ref\Debug\project_2_final.exe
 ```
 
-Ninja/Makefiles: thêm -DCMAKE_BUILD_TYPE=Debug khi configure; executable thường là ./build/project_2_final. Dùng hai thư mục build riêng cho Debug/Release nếu generator chỉ hỗ trợ một cấu hình.
+Ninja/Makefiles: thêm -DCMAKE_BUILD_TYPE=Debug khi configure; executable thường là ./build-ref/project_2_final. Dùng hai thư mục build riêng cho Debug/Release nếu generator chỉ hỗ trợ một cấu hình.
 
 ## Điều khiển và số đo
 
@@ -55,10 +66,10 @@ Title: FPS thực, cap (0=off) hoặc delay, WASD distance, TEST/DONE elapsed/di
 6. Test thuần C++, final đầy đủ và native smoke hữu hạn.
 
 ```bash
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug --parallel 2
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 20
+cmake -S . -B build-ref -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build-ref --config Debug --parallel 2
+cmake --build build-ref --config Release --parallel 2
+ctest --test-dir build-ref -C Release -L reference --no-tests=error --output-on-failure --timeout 20
 ```
 
 Mặc định build final và tests. BUILD_CHECKPOINTS bật starter và project_2_checkpoint_1 … project_2_checkpoint_6. Mỗi snapshot có source độc lập. Trong repository website, starter/checkpoints/final/CMakeLists được sinh từ source-template; không sửa output bằng tay. ZIP đã chứa các file này nên không cần Node.js để build C++.
@@ -85,8 +96,8 @@ Mất focus/minimize tạm ngưng cập nhật và phép đo, khi trở lại re
 CTest kiểm input mapping thật, normalize, quãng đường 30/60/120, dãy không đều, dt biên/âm/không hữu hạn, clipping/count pixel, unsigned limiter và phép đo 5 giây.
 
 ```powershell
-.\build\Debug\project_2_final.exe --smoke
-.\build\Release\project_2_final.exe --smoke
+.\build-ref\Debug\project_2_final.exe --smoke
+.\build-ref\Release\project_2_final.exe --smoke
 ```
 
 Smoke dùng window ẩn và hướng chéo script sẵn, resize/upload/present 12 frame rồi tự kết thúc. Đặt timeout ngoài 15 giây khi chạy tự động; smoke không kiểm WASD vật lý, focus thật hoặc FPS dài hạn.

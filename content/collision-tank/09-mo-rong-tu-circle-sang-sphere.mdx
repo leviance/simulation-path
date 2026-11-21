@@ -341,7 +341,7 @@ Cuối cùng bật nhóm test 3D, chỉ sau khi đã thêm đủ các hàm:
 
 ## Ghép các phần lại
 
-Nếu CMake target tests đã include starter/include từ bài 8, build lại project_24_tests và chạy CTest. Output phải thêm nhóm **3D physics**; nhóm renderer/spawn còn chưa có. Hai nhóm sau chỉ xuất hiện khi phần tương ứng được ghép ở bài 10–11.
+Nếu đã bật `COURSE_TEST_STARTER` ở bài 8, chạy lại `project_24_check_work`. Muốn xem cả tên các nhóm đã chạy, dùng `ctest --test-dir build -C Debug -L learner -V`. Lần này phải có thêm **3D physics**; renderer và spawn sẽ xuất hiện ở bài 10–11.
 
 Đối chiếu ca xiên với các phân số phía trên. Thử thêm ca va chạm chỉ dọc Z: nếu hai sphere đổi vx nhưng vz không đổi, solver đã bê nguyên 2D sang mà chưa thực sự mở rộng.
 

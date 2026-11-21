@@ -74,8 +74,9 @@ void putPixel(int x, int y, Color color) {
 
 Trước vòng lặp pixel, ta transform ba vertex, đổi từ NDC sang tọa độ panel và chỉ quét bounding box của tam giác:
 
+Ở checkpoint này chưa có mặt lưới: trước mỗi lần vẽ, xóa ảnh về màu nền `RGB(11, 16, 32)`. Sau đó mới tìm các pixel có thể thuộc tam giác:
+
 ```cpp title="include/pipeline.hpp — chuẩn bị screen triangle và bounding box"
-framebuffer.clear({11.0F / 255.0F, 16.0F / 255.0F, 32.0F / 255.0F});
 const std::array<GpuVertex, 3> transformed = transformedTriangle(triangle, transform);
 std::array<ScreenVertex, 3> screen{};
 for (std::size_t index = 0; index < screen.size(); ++index) {

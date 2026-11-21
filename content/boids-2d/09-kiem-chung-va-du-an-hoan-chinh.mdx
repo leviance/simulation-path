@@ -135,13 +135,13 @@ ctest --test-dir build -C Release --output-on-failure --timeout 20
 
 Lệnh trên dùng Visual Studio hoặc generator multi-config. Với Ninja/Makefiles, tạo hai build directory có `CMAKE_BUILD_TYPE=Debug` và `Release` rồi chạy CTest trong từng directory.
 
-Mặc định, `project_27_tests` include `final/include`: kết quả này kiểm bản tham khảo, chưa chứng minh phần bạn sửa trong `starter` đã đúng. Khi đã viết xong toàn bộ chín bài, muốn dùng cùng tests kiểm bài làm, trong **bản ZIP của bạn** đổi dòng include của target tests từ `final/include` thành:
+Đến đây Starter đã có đủ ba quy tắc của đàn chim. Chạy bộ kiểm trên bài làm của bạn; ở bài 5, phần cohesion còn thiếu nên chưa thể dùng bộ kiểm cuối.
 
-```cmake title="CMakeLists.txt — kiểm bộ header do bạn hoàn thiện"
-target_include_directories(project_27_tests PRIVATE starter/include)
+```bash title="Terminal — kiểm mã trong starter/"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_27_check_work --parallel 1
+cmake --build build --config Release --target project_27_check_work --parallel 1
 ```
-
-Chạy lại `cmake -S . -B build -DBUILD_CHECKPOINTS=ON`, build target tests rồi chạy hai lệnh CTest ở trên. Chỉ đổi dòng này khi starter đã có đủ mọi thuật toán; ở Bài 05, tests của toàn dự án còn đòi cohesion chưa viết. Trong repository website, không sửa CMake được sinh; thay đổi trên dành cho bản ZIP học tập độc lập.
 
 Source đầy đủ từng file có ở phần mã nguồn cuối bài và trong ZIP. Bạn viết tiếp trên starter; checkpoint là bản đối chiếu, không phải lý do thay toàn bộ bài làm khi chỉ một hàm đang sai.
 

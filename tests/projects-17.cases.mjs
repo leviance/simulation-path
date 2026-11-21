@@ -185,7 +185,7 @@ test("Project 17 lessons teach learner owned code, full mesh, depth, culling and
     if (index === 8)
       for (const marker of [
         "Project 17 đã hoàn chỉnh",
-        "target_include_directories(project_17_tests PRIVATE starter/include)",
+        "project_17_check_work",
         "drawWorldGrid",
         "SDLK_F",
         "SDLK_J",

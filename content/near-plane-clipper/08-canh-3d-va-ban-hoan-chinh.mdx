@@ -190,20 +190,12 @@ Nhánh trả sớm ở clean chỉ bỏ chữ HUD; ảnh CPU vẫn đã có bề
 
 ZIP chứa README, Starter, tám checkpoint chạy độc lập, final, tests và CMake. Phần toàn bộ mã nguồn cuối bài hiển thị từng file hoàn chỉnh; không phải một tập mảnh rời để đoán chỗ ghép.
 
-CTest mặc định dùng final/include. Sau khi viết đủ tám bài, đổi đúng dòng sau trong **CMakeLists.txt của ZIP đã giải nén**, không sửa generator của website:
+Để kiểm chính phần clipping vừa viết, chọn `starter/` khi configure. Cùng các ca giao near plane sẽ chạy ở cả Debug và Release.
 
-```cmake title="CMakeLists.txt — kiểm mã người học"
-target_include_directories(project_18_tests PRIVATE starter/include)
-```
-
-Chạy lại configure, build app và test ở cả hai cấu hình:
-
-```powershell title="Build và kiểm Starter Debug/Release"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --target project_18_starter project_18_tests --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 30
-cmake --build build --config Release --target project_18_starter project_18_tests --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 30
+```bash title="Terminal — kiểm mã trong starter/"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_18_check_work --parallel 1
+cmake --build build --config Release --target project_18_check_work --parallel 1
 ```
 
 Runner dùng check/EXIT_FAILURE, không dùng assert bị Release tắt. Native test gồm oracle giao điểm/RGB, bốn topology, sáu hoán vị, winding/diện tích, contact điểm/đoạn, invalid input, sweep 1001 vị trí toán nhỏ và mask ray/triangle. Nó còn render scene CPU clean để chứng minh còn surface/grid; không chỉ kiểm helper math.

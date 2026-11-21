@@ -2,6 +2,7 @@
 #include "gpu_renderer.hpp"
 #include "overlay.hpp"
 #include "pipeline.hpp"
+#include "reference_floor.hpp"
 #include "verification.hpp"
 
 #include <SDL3/SDL.h>
@@ -54,7 +55,7 @@ int main(int argc, char** argv) {
     const bool verify = (argc == 2 && std::string(argv[1]) == "--verify") || capturePath != nullptr;
     const bool smoke = argc == 2 && std::string(argv[1]) == "--smoke";
     if (argc > 1 && !verify && !smoke) {
-        std::cerr << "Usage: project_33_final [--verify | --smoke | --capture image.bmp]\n";
+        std::cerr << "Usage: project_33_final [--verify | --smoke | --capture image.png]\n";
         return EXIT_FAILURE;
     }
     bool verificationFailed = false;
@@ -176,6 +177,15 @@ int main(int argc, char** argv) {
 #endif
 
 #if LAB_CHECKPOINT >= 9
+    lab::ReferenceFloor floor{};
+    if (!floor.presenter.initialize(gl, diagnostics)) {
+        std::cerr << diagnostics << '\n';
+        floor.presenter.destroy(gl);
+        cpuPresenter.destroy(gl);
+        gpuTriangle.destroy(gl);
+        destroyWindowAndContext(window, context);
+        return EXIT_FAILURE;
+    }
     const lab::PipelineValidationReport validation = lab::validateCpuGpuTriangleContract();
     std::array<lab::GpuVertex, 3> triangle = lab::kSourceTriangle;
     int selectedVertex = 0;
@@ -197,13 +207,12 @@ int main(int argc, char** argv) {
 #endif
     bool paused = true;
 #if LAB_CHECKPOINT >= 7
-    bool smoothColor = false;
+    bool smoothColor = true;
 #elif LAB_CHECKPOINT >= 3
     constexpr bool smoothColor = false;
 #endif
 #if LAB_CHECKPOINT >= 3
     lab::Transform2D transform{};
-    transform.scale = 0.82F;
 #endif
 #if LAB_CHECKPOINT >= 8
     bool probeRequested = false;
@@ -216,7 +225,7 @@ int main(int argc, char** argv) {
 #if LAB_CHECKPOINT >= 9
         if (verify) {
             // Independent fixtures exercise color, transforms, winding, edits and resize.
-            smoothColor = verificationFrame != 0;
+            smoothColor = verificationFrame != 1;
             if (verificationFrame == 2) {
                 transform.angleRadians = 0.35F;
                 transform.translation = {0.08F, -0.05F};
@@ -254,12 +263,20 @@ int main(int argc, char** argv) {
                 else
                     mousePoint = {event.button.x, event.button.y};
                 const lab::PanelPoint point = lab::pointerToPanel(mousePoint, logicalWidth, logicalHeight, pixelWidth, pixelHeight);
-                if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && point.valid) {
-                    int panelWidth = pixelWidth - pixelWidth / 2;
-                    if (point.panel == 0) {
-                        panelWidth = pixelWidth / 2;
+                if (!point.valid) {
+                    if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+                        dragging = false;
+                        SDL_CaptureMouse(false);
                     }
-                    const int picked = lab::pickVertex(triangle, transform, point.ndc, panelWidth, pixelHeight);
+                    continue;
+                }
+                int panelWidth = pixelWidth - pixelWidth / 2;
+                if (point.panel == 0) {
+                    panelWidth = pixelWidth / 2;
+                }
+                const auto pointerTransform = lab::forPanel(transform, panelWidth, pixelHeight);
+                if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT && point.valid) {
+                    const int picked = lab::pickVertex(triangle, pointerTransform, point.ndc, panelWidth, pixelHeight);
                     if (picked >= 0) {
                         selectedVertex = picked;
                         dragPanel = point.panel;
@@ -268,7 +285,7 @@ int main(int argc, char** argv) {
                         paused = true;
                     }
                 } else if (dragging && point.valid && point.panel == dragPanel && event.type == SDL_EVENT_MOUSE_MOTION) {
-                    const lab::Vec2 local = lab::inverseTransformPosition(point.ndc, transform);
+                    const lab::Vec2 local = lab::inverseTransformPosition(point.ndc, pointerTransform);
                     triangle[selectedVertex].positionX = std::clamp(local.x, -2.0F, 2.0F);
                     triangle[selectedVertex].positionY = std::clamp(local.y, -2.0F, 2.0F);
                     verticesDirty = true;
@@ -315,7 +332,7 @@ int main(int argc, char** argv) {
                     probeStatus = "RESET - PRESS P TO MEASURE";
 #endif
 #if LAB_CHECKPOINT >= 7
-                    smoothColor = false;
+                    smoothColor = true;
 #endif
 #if LAB_CHECKPOINT >= 8
                     lastProbe = {};
@@ -323,7 +340,6 @@ int main(int argc, char** argv) {
 #endif
 #if LAB_CHECKPOINT >= 3
                     transform = {};
-                    transform.scale = 0.82F;
 #endif
                     paused = true;
 #if LAB_CHECKPOINT >= 5
@@ -426,6 +442,9 @@ int main(int argc, char** argv) {
         const int leftWidth = framebufferWidth / 2;
         const int rightWidth = framebufferWidth - leftWidth;
 #endif
+#if LAB_CHECKPOINT >= 3
+        const auto gpuTransform = lab::forPanel(transform, rightWidth, framebufferHeight);
+#endif
 
 #if LAB_CHECKPOINT >= 1
         // Hai clear colors xác nhận context, scissor và pixel-sized framebuffer trước shader.
@@ -453,13 +472,18 @@ int main(int argc, char** argv) {
             }
         }
 #if LAB_CHECKPOINT >= 9
+        if (!floor.prepare(gl, leftWidth, rightWidth, framebufferHeight)) {
+            std::cerr << "Reference floor allocation failed.\n";
+            verificationFailed = true;
+            break;
+        }
         if (verticesDirty) {
             gpuTriangle.uploadVertices(gl, triangle);
             verticesDirty = false;
         }
-        rasterizeCpuTriangle(cpuFramebuffer, triangle, transform, smoothColor);
+        rasterizeCpuTriangle(cpuFramebuffer, triangle, lab::forPanel(transform, leftWidth, framebufferHeight), smoothColor, &floor.left(leftWidth));
 #else
-        rasterizeCpuTriangle(cpuFramebuffer, lab::kSourceTriangle, transform, smoothColor);
+        rasterizeCpuTriangle(cpuFramebuffer, lab::kSourceTriangle, lab::forPanel(transform, leftWidth, framebufferHeight), smoothColor);
 #endif
         cpuPresenter.upload(gl, cpuFramebuffer);
         gl.Viewport(0, 0, leftWidth, framebufferHeight);
@@ -468,19 +492,22 @@ int main(int argc, char** argv) {
 
 #if LAB_CHECKPOINT >= 3
         gl.Viewport(leftWidth, 0, rightWidth, framebufferHeight);
-        gpuTriangle.draw(gl, transform, smoothColor);
+#if LAB_CHECKPOINT >= 9
+        floor.presenter.draw(gl);
+#endif
+        gpuTriangle.draw(gl, gpuTransform, smoothColor);
 #endif
 
 #if LAB_CHECKPOINT >= 8
         if (probeRequested) {
 #if LAB_CHECKPOINT >= 9
-            const lab::Vec2 centroid = lab::triangleCentroid(triangle, transform);
+            const lab::Vec2 centroid = lab::triangleCentroid(triangle, gpuTransform);
 #else
-            const lab::Vec2 centroid = lab::triangleCentroid(lab::kSourceTriangle, transform);
+            const lab::Vec2 centroid = lab::triangleCentroid(lab::kSourceTriangle, gpuTransform);
 #endif
             const lab::Viewport gpuViewport{leftWidth, 0, rightWidth, framebufferHeight};
 #if LAB_CHECKPOINT >= 9
-            lastProbe = lab::readGpuProbe(gl, gpuViewport, transform, centroid, smoothColor, triangle);
+            lastProbe = lab::readGpuProbe(gl, gpuViewport, gpuTransform, centroid, smoothColor, triangle, &floor.right);
             if (!lastProbe.valid)
                 probeStatus = "PROBE OUTSIDE VIEWPORT - MOVE TRIANGLE BACK";
             else {
@@ -498,7 +525,7 @@ int main(int argc, char** argv) {
                 probeStatus = report;
             }
 #else
-            lastProbe = lab::readGpuProbe(gl, gpuViewport, transform, centroid, smoothColor);
+            lastProbe = lab::readGpuProbe(gl, gpuViewport, gpuTransform, centroid, smoothColor);
 #endif
             if (!lastProbe.valid) {
                 std::cout << "Probe unavailable: centroid is outside the viewport. Reset or move the triangle back.\n";
@@ -522,7 +549,7 @@ int main(int argc, char** argv) {
 #if LAB_CHECKPOINT >= 9
         if (verify) {
             const lab::Viewport viewport{leftWidth, 0, rightWidth, framebufferHeight};
-            if (!lab::verifyGpuImage(gl, viewport, triangle, transform, smoothColor)) {
+            if (!lab::verifyGpuImage(gl, viewport, triangle, gpuTransform, smoothColor, floor.right)) {
                 std::cerr << "GPU fixture failed at frame " << verificationFrame << '\n';
                 verificationFailed = true;
                 running = false;
@@ -607,6 +634,9 @@ int main(int argc, char** argv) {
     }
 
     // Cleanup: GPU objects cần context còn sống, vì vậy chúng được nhả trước context và window.
+#if LAB_CHECKPOINT >= 9
+    floor.presenter.destroy(gl);
+#endif
 #if LAB_CHECKPOINT >= 4
     cpuPresenter.destroy(gl);
 #endif

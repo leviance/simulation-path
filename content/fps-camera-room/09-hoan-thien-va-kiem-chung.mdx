@@ -108,7 +108,13 @@ ctest --test-dir build -C Release --output-on-failure --timeout 30
 
 Cần C++20, CMake≥3.24; SDL khóa 3.4.8 bằng FetchContent và link `SDL3::SDL3`. Lần configure đầu cần mạng. Với Ninja/Makefiles một cấu hình, dùng CMAKE_BUILD_TYPE và tìm executable trực tiếp trong build/.
 
-CTest mặc định include `final/include`, tức là kiểm bản hoàn chỉnh đi kèm ZIP. Nếu bạn đã tự viết cả project trong `starter`, hãy đổi dòng `target_include_directories(project_14_tests PRIVATE final/include)` thành `target_include_directories(project_14_tests PRIVATE starter/include)` trong `CMakeLists.txt` của bản ZIP đang học, configure lại rồi build target `project_14_tests`. Nếu không đổi đường dẫn này, CTest qua chưa chứng minh phần bạn vừa sửa đã đúng.
+Từ thư mục gốc của gói ZIP, bật `-DCOURSE_TEST_STARTER=ON` để kiểm các hàm trong `starter/include`. Target `project_14_check_work` sẽ biên dịch lại bài làm rồi mới chạy CTest.
+
+```bash title="Terminal — kiểm mã trong starter/"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_14_check_work --parallel 1
+cmake --build build --config Release --target project_14_check_work --parallel 1
+```
 
 Tests dùng `check` trả EXIT_FAILURE, không dùng assert có thể bị tắt bởi NDEBUG. Native `--smoke` chạy 12 frame ẩn để kiểm resource/resize/upload/present; nó không chứng minh relative mouse và input trên desktop hoạt động đúng.
 

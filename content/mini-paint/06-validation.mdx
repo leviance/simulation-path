@@ -107,25 +107,18 @@ File test chọn tám endpoint quanh (200,200), vẽ bằng begin/end rồi ki�
 
 ### Bước 6 — Build cả Debug và Release
 
-Từ thư mục chứa CMakeLists.txt trong ZIP:
+Các thao tác nhấn, kéo và thả dưới đây phải gọi đúng `paint.hpp` bạn vừa viết trong `starter/`. Một bản Mini Paint mẫu vẽ đúng không chứng minh nét trong bài làm của bạn không bị đứt.
 
-```bash title="Terminal — configure và test Debug"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```powershell title="Kiểm bài làm ở Debug và Release"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_3_check_work --parallel 1
+cmake --build build --config Release --target project_3_check_work --parallel 1
+cmake --build build --config Release --target project_3_starter --parallel 1
+.\build\Release\project_3_starter.exe
+.\build\Release\project_3_starter.exe --smoke
 ```
 
-```bash title="Terminal — test Release"
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 20
-```
-
-Ninja/Makefiles dùng thư mục riêng cho mỗi cấu hình với CMAKE_BUILD_TYPE tương ứng. Các test không link SDL hoặc mở window, nên phải kết thúc nhanh; 20 giây là timeout bảo vệ, không phải thời gian chờ bình thường.
-
-```bash title="Windows — bản tương tác và SDL smoke"
-.\build\Debug\project_3_final.exe
-.\build\Debug\project_3_final.exe --smoke
-```
+Với Visual Studio, `--config` chọn Debug hoặc Release. Với Ninja/Makefiles, tạo hai thư mục build riêng, chọn `CMAKE_BUILD_TYPE` khi configure và chạy executable ngay trong thư mục build.
 
 Smoke dùng window ẩn, chạy 12 frame có brush/nội suy/màu/resize/upload/present rồi tự thoát. Khi tự động hóa phải đặt deadline ngoài 15 giây để bảo vệ cả trường hợp driver kẹt. Nó không nhận chuột vật lý, không chứng minh capture của desktop đã hoạt động.
 

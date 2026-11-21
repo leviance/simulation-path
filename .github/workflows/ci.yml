@@ -109,6 +109,17 @@ jobs:
         with:
           name: sdl-3.4.8-windows-vs2022
           path: build/sdl-install
+      - name: Prove incorrect learner code fails CTest in the public ZIP
+        if: contains(matrix.shard.projects, 'project-02-wasd-fps-cap')
+        timeout-minutes: 4
+        shell: pwsh
+        run: |
+          node scripts/package-projects.mjs --project=02
+          if ($LASTEXITCODE -ne 0) { throw "Could not package Project 02" }
+          $sdlConfig = Get-ChildItem -LiteralPath build/sdl-install -Recurse -Filter SDL3Config.cmake | Select-Object -First 1
+          if (-not $sdlConfig) { throw "SDL 3.4.8 configuration missing from the installed artifact" }
+          node --experimental-strip-types scripts/verify-learner-ctest.mjs $sdlConfig.DirectoryName
+          if ($LASTEXITCODE -ne 0) { throw "Learner/reference CTest isolation failed" }
       - name: Configure every checkpoint
         shell: pwsh
         env:
@@ -128,7 +139,7 @@ jobs:
           foreach ($project in $projects) {
             cmake --build "build/$project" --config Debug
             if ($LASTEXITCODE -ne 0) { throw "Debug build failed: $project" }
-            ctest --test-dir "build/$project" -C Debug --output-on-failure
+            ctest --test-dir "build/$project" -C Debug -L reference --no-tests=error --output-on-failure
             if ($LASTEXITCODE -ne 0) { throw "Debug tests failed: $project" }
           }
       - name: Build and test Release
@@ -140,6 +151,6 @@ jobs:
           foreach ($project in $projects) {
             cmake --build "build/$project" --config Release
             if ($LASTEXITCODE -ne 0) { throw "Release build failed: $project" }
-            ctest --test-dir "build/$project" -C Release --output-on-failure
+            ctest --test-dir "build/$project" -C Release -L reference --no-tests=error --output-on-failure
             if ($LASTEXITCODE -ne 0) { throw "Release tests failed: $project" }
           }

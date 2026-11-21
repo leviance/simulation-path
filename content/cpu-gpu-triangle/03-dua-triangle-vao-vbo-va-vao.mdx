@@ -37,17 +37,33 @@ static_assert(offsetof(GpuVertex, red) == sizeof(float) * 2U);
 
 Ba vertex dùng tọa độ 2D quanh gốc; shader áp transform rồi ghi clip position với w = 1, nên x/y đầu ra cũng chính là NDC. Mỗi vertex có hai float position và ba float color; các static_assert giúp ta kiểm rõ kích thước và offset, không đoán cách struct được xếp trong bộ nhớ.
 
-Ngay sau các static_assert trong include/pipeline.hpp, khai báo dữ liệu tam giác. Mỗi dòng có x, y rồi red, green, blue; tọa độ Y dương hướng lên. Dùng cùng mảng này cho cả renderer CPU ở bài sau, không viết thêm một mảng vị trí gần giống ở main:
+Lấy lại cảnh cuối [Project 16](/projects/triangle-rasterizer). Nếu nhìn ngang, A và C cùng nằm ở bên trái camera với `x = -1,4`. Nhưng A ở độ sâu 4, còn C ở 6,5. Qua ống kính, A nằm xa tâm ảnh hơn C. Đó là lý do cạnh AC nghiêng chứ không thẳng đứng; nếu nhập ba tọa độ màn hình tùy ý, ta sẽ mất dấu hiệu dễ nhận ra này.
+
+Ta chỉ cần chiếu một lần. Camera đang ở gốc, nhìn về phía Z dương, góc nhìn dọc là 60°. Chia X và Y cho Z rồi nhân với `1 / tan(30°)`. Kết quả vẫn có Y dương hướng lên; chưa nhân với kích thước cửa sổ. Viết hai hàm sau ngay dưới các `static_assert`:
+
+```cpp title="include/pipeline.hpp — từ đỉnh 3D sang dữ liệu cho VBO"
+inline constexpr Vec2 project16Position(float x, float y, float z) {
+    constexpr float focal = 1.7320508075688772F; // 1 / tan(30°)
+    return {focal * x / z, focal * y / z};
+}
+
+inline constexpr GpuVertex project16Vertex(float x, float y, float z, Color color) {
+    const Vec2 point = project16Position(x, y, z);
+    return {point.x, point.y, color.red, color.green, color.blue};
+}
+```
+
+Giờ mới lập mảng để gửi vào VBO. Mỗi dòng dưới đây là **tọa độ thế giới và màu của một đỉnh**. Sau khi gọi hàm, mỗi phần tử trong mảng chỉ còn hai tọa độ đã chiếu và ba thành phần màu:
 
 ```cpp title="include/pipeline.hpp — ba vertex đầu vào"
 inline constexpr std::array<GpuVertex, 3> kSourceTriangle{
-    GpuVertex{0.0F, 0.66F, 0.97F, 0.42F, 0.35F},
-    GpuVertex{-0.70F, -0.58F, 0.35F, 0.78F, 0.48F},
-    GpuVertex{0.70F, -0.58F, 0.38F, 0.68F, 0.94F},
+    project16Vertex(-1.4F, 1.2F, 4.0F, {1, 0, 0}),
+    project16Vertex(1.6F, -1.0F, 5.5F, {0, 1, 0}),
+    project16Vertex(-1.4F, -1.0F, 6.5F, {0, 0, 1}),
 };
 ```
 
-Transform2D và transformPosition nằm cùng file để bài sau nối CPU vào cùng hệ tọa độ. Ở lần vẽ đầu, angle bằng 0, translation bằng (0,0) và scale bằng 0,82. Vì thế shader đã có uniform nhưng chưa cần chuyển động để kiểm kết nối dữ liệu.
+Lần vẽ đầu, giữ góc bằng 0, tỉ lệ bằng 1 và chưa dịch hình. Bạn sẽ thấy A trên trái, B dưới phải, C dưới trái. Cạnh CB hơi dốc xuống về phía B, dù trong thế giới hai đỉnh có cùng Y. Cả hình **vẫn chỉ có một màu** ở bài này: đến bài 07 ta mới cho fragment shader dùng màu của ba đỉnh.
 
 ### Bước 2 — Upload đúng một lần vào VBO
 
@@ -104,6 +120,7 @@ void draw(GlApi& api, const Transform2D& transform, bool smoothColor) const {
     api.Uniform1f(angleLocation, transform.angleRadians);
     api.Uniform1f(scaleLocation, transform.scale);
     api.Uniform2f(translationLocation, transform.translation.x, transform.translation.y);
+    api.Uniform2f(panelFitLocation, transform.panelFit.x, transform.panelFit.y);
     int smoothColorFlag = 0;
     if (smoothColor) {
         smoothColorFlag = 1;
@@ -123,7 +140,7 @@ Draw call không mang vertex pointer. Nó dùng program, uniforms, VAO và viewp
 
 Sau initializeProgram, gọi initializeMesh đúng một lần. Trong mỗi frame, clear trước, đặt glViewport bên phải, gọi gpuTriangle.draw rồi swap. Đổi thứ tự này có thể làm draw rơi vào viewport cũ hoặc bị clear đè.
 
-Bạn phải thấy một tam giác xanh ở panel phải. Uniform scale khởi đầu là 0,82, angle và translation bằng 0. Màu nội suy chưa bật; không cần sửa color attribute chỉ vì cả tam giác đang xanh.
+Bạn phải thấy một tam giác xanh ở khung phải. Tỉ lệ ban đầu là 1, góc và độ dịch chuyển đều bằng 0. Nếu hình đúng dáng nhưng chưa có ba màu thì bạn đã làm đúng: bài này chỉ kiểm dữ liệu đỉnh và lệnh vẽ.
 
 ```bash title="Terminal — build và chạy checkpoint 03"
 cmake --build build --config Debug --target project_33_checkpoint_3 --parallel 2

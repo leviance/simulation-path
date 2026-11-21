@@ -188,7 +188,7 @@ test("Project 15 rebuild implements a full native inspector with real 3D, six ro
     path.join(workspace, "content/3d-pipeline-inspector", lessons[6] + ".mdx"),
     "utf8",
   );
-  assert.match(final, /target_include_directories\(project_15_tests PRIVATE starter\/include\)/);
+  assert.match(final, /project_15_check_work/);
   assert.match(final, /550,210/);
 });
 test("Project 15 rebuild renders overview and seven lessons with all coordinates and complete source", async () => {

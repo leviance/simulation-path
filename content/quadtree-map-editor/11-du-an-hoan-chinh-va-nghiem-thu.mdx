@@ -88,23 +88,25 @@ Chỉ một check sai cũng trả EXIT_FAILURE cho CTest. CTest này không cầ
 
 ## Ghép các phần lại
 
-Trong ZIP, chạy từ thư mục có CMakeLists.txt. Để tests kiểm bản starter của bạn, thay dòng include của target test trong CMake của bản ZIP bằng dòng sau; không sửa CMake được sinh trong repository website:
+Từ thư mục gốc của gói ZIP, bật `-DCOURSE_TEST_STARTER=ON` để kiểm các hàm trong `starter/include`. Target `project_29_check_work` sẽ biên dịch lại bài làm rồi mới chạy CTest. Chạy khi Starter đã đủ chức năng:
 
-```cmake title="CMakeLists.txt — kiểm mã bạn tự viết trong starter"
-target_include_directories(project_29_tests PRIVATE starter/include)
+```bash title="Terminal — kiểm mã trong starter/"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_29_check_work --parallel 1
+cmake --build build --config Release --target project_29_check_work --parallel 1
 ```
 
-Sau đó configure và chạy lại CTest. Test toàn tính năng chỉ kỳ vọng pass khi starter của bạn đã hoàn thiện. Mỗi checkpoint có main/include riêng, không ghép file từ các mốc khác nhau.
+Các lệnh dưới đây chạy bản mẫu để đối chiếu. Tách thư mục build giúp giữ nguyên cấu hình cho bài làm.
 
 ```bash title="Terminal — build độc lập và nghiệm thu Windows / Visual Studio 2022"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 30
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 30
-.\build\Debug\project_29_final.exe --smoke
-.\build\Release\project_29_final.exe --smoke-workflow
-.\build\Release\project_29_final.exe --benchmark
+cmake -S . -B build-ref -DBUILD_CHECKPOINTS=ON
+cmake --build build-ref --config Debug --parallel 2
+ctest --test-dir build-ref -C Debug --output-on-failure --timeout 30
+cmake --build build-ref --config Release --parallel 2
+ctest --test-dir build-ref -C Release --output-on-failure --timeout 30
+.\build-ref\Debug\project_29_final.exe --smoke
+.\build-ref\Release\project_29_final.exe --smoke-workflow
+.\build-ref\Release\project_29_final.exe --benchmark
 ```
 
 Trên macOS/Linux với generator single-config, cấu hình hai thư mục build-debug/build-release bằng -DCMAKE_BUILD_TYPE tương ứng; bỏ -C và chạy executable ngay trong thư mục build. Không có assets ngoài ZIP phải chép thêm.

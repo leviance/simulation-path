@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { render, workspace } from "./site-support.mjs";
+
+test("Project 38 initial Canvas module stays below 24 KiB in production", async () => {
+  const chunks = path.join(workspace, "dist/client/_next/static/chunks");
+  const entries = (await readdir(chunks)).filter((name) =>
+    /^charged-particle-chamber-lab-.+\.js$/.test(name),
+  );
+  assert.equal(entries.length, 1, "Expected one production entry for the chamber");
+  const { size } = await stat(path.join(chunks, entries[0]));
+  assert.ok(size < 24 * 1024, `Project 38 entry is ${size} bytes`);
+});
 
 test("Project 38 production renders every new lesson and the complete source/download interface", async () => {
   const directory = path.join(workspace, "content/charged-particle-chamber");
@@ -14,8 +24,15 @@ test("Project 38 production renders every new lesson and the complete source/dow
     const html = await response.text();
     assert.match(html, /Canvas Project 38/, file);
     assert.match(html, /checkpoint-source/, file);
-    if (file.startsWith("12-"))
+    if (file.startsWith("12-")) {
       assert.match(html, /project-38-charged-particle-chamber\.zip/, file);
+      assert.ok(
+        html.includes('href="/projects/million-object-city"'),
+        "Final lesson links directly to the published P39",
+      );
+      assert.doesNotMatch(html, /href="\/roadmap\/39"/);
+      assert.equal((await render("/projects/million-object-city")).status, 200);
+    }
     assert.doesNotMatch(html, /Unhandled Script Error|Transform failed|Invalid Character/, file);
   }
   const overview = await render("/projects/charged-particle-chamber");

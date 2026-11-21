@@ -116,10 +116,7 @@ test("Project 23 stages add real algorithms, per-step history, runtime selection
     path.join(content, "08-do-runtime-va-hoan-thien-cuoc-dua.mdx"),
     "utf8",
   );
-  assert.match(
-    finalLesson,
-    /target_include_directories\(project_23_tests PRIVATE starter\/include\)/,
-  );
+  assert.match(finalLesson, /project_23_check_work/);
   assert.match(finalLesson, /JavaScript.*không.*C\+\+|C\+\+.*JavaScript/is);
 });
 

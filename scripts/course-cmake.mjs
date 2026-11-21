@@ -3,19 +3,20 @@ import { workbookOption } from "../lib/voxel-workbook.ts";
 export function courseCmake(project, { hasSnapshotShaders = false } = {}) {
   const projectNumber = Number(project.id);
   const workOption = workbookOption(project.id);
-  const hasWorkbook = workOption !== null;
-  // Seed the learner's tree once; a second configure must never overwrite their edits.
-  const workbook = hasWorkbook
-    ? `
+  // An existing starter edit and a separately seeded work/ are distinct learner paths.
+  const workbook = `
 option(${workOption} "Build the learner's editable copy and test its own headers" OFF)
+option(COURSE_TEST_STARTER "Test the learner's edits directly in starter/" OFF)
+if(${workOption} AND COURSE_TEST_STARTER)
+    message(FATAL_ERROR "Choose one learner tree: work/ or starter/, not both.")
+endif()
 if(${workOption})
     if(NOT EXISTS "\${CMAKE_CURRENT_SOURCE_DIR}/work")
         file(COPY "\${CMAKE_CURRENT_SOURCE_DIR}/starter/" DESTINATION "\${CMAKE_CURRENT_SOURCE_DIR}/work")
     endif()
     add_lab_app(project_${projectNumber}_work work)
 endif()
-`
-    : "";
+`;
   const testAssets =
     project.sourceSeries === "flock-workbench" && projectNumber >= 68
       ? "    target_compile_definitions(project_" +
@@ -121,8 +122,10 @@ ${shaderSetup}    enable_course_warnings(\${name})
 endfunction()
 
 add_lab_app(project_${projectNumber}_final final)
-${workbook}if(BUILD_CHECKPOINTS)
+${workbook}if(BUILD_CHECKPOINTS OR COURSE_TEST_STARTER)
     add_lab_app(project_${projectNumber}_starter starter)
+endif()
+if(BUILD_CHECKPOINTS)
     foreach(step RANGE 1 \${PROJECT_CHECKPOINT_COUNT})
         if(step LESS 10)
             set(step_directory "0\${step}")
@@ -133,22 +136,45 @@ ${workbook}if(BUILD_CHECKPOINTS)
     endforeach()
 endif()
 
-${hasWorkbook ? `# Tests dùng header trong work/include khi bật ${workOption}; ở bản mẫu dùng final/include.` : "# Tests chỉ include code thuần trong final/include và không cần mở SDL window."}
+# Một cấu hình chỉ kiểm một cây mã. Không tìm tiếp trong final/ nếu bài làm còn thiếu hàm.
 include(CTest)
 if(BUILD_TESTING)
     file(GLOB_RECURSE test_sources CONFIGURE_DEPENDS "\${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp")
     add_executable(project_${projectNumber}_tests \${test_sources})
-${
-  hasWorkbook
-    ? `    if(${workOption})
+    if(${workOption})
         target_include_directories(project_${projectNumber}_tests PRIVATE work/include)
+        set(test_tree work)
+    elseif(COURSE_TEST_STARTER)
+        target_include_directories(project_${projectNumber}_tests PRIVATE starter/include)
+        set(test_tree starter)
     else()
         target_include_directories(project_${projectNumber}_tests PRIVATE final/include)
-    endif()`
-    : `    target_include_directories(project_${projectNumber}_tests PRIVATE final/include)`
-}
+        set(test_tree final)
+    endif()
 ${testAssets}    enable_course_warnings(project_${projectNumber}_tests)
-    add_test(NAME project_${projectNumber}_validation COMMAND project_${projectNumber}_tests)
+    if(test_tree STREQUAL "final")
+        set(test_label reference)
+    else()
+        set(test_label learner)
+        # CTest không được chạy nhầm binary đã build cho cây khác. Ở các bài đầu
+        # chỉ build ứng dụng; tests toàn project có thể cần API chưa học tới.
+        set_target_properties(project_${projectNumber}_tests PROPERTIES
+            OUTPUT_NAME "project_${projectNumber}_\${test_tree}_tests")
+        add_custom_target(project_${projectNumber}_check_work
+            COMMAND "\${CMAKE_CTEST_COMMAND}" -C "$<CONFIG>" -L "^learner$" --no-tests=error --output-on-failure --timeout 45
+            WORKING_DIRECTORY "\${CMAKE_CURRENT_BINARY_DIR}"
+            DEPENDS project_${projectNumber}_tests
+            VERBATIM)
+    endif()
+    message(STATUS "CTest: \${test_label} (\${test_tree}/include)")
+    if(test_tree STREQUAL "final")
+        message(STATUS "Reference only. For your own code configure with -DCOURSE_TEST_STARTER=ON (starter/) or -D${workOption}=ON (work/).")
+    else()
+        message(STATUS "Build target project_${projectNumber}_check_work to rebuild and test your own code.")
+    endif()
+    set(test_name project_${projectNumber}_\${test_tree}_validation)
+    add_test(NAME \${test_name} COMMAND project_${projectNumber}_tests)
+    set_tests_properties(\${test_name} PROPERTIES LABELS \${test_label})
 endif()
 `;
 }

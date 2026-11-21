@@ -51,17 +51,38 @@ static_assert(sizeof(GpuVertex) == sizeof(float) * 5U);
 static_assert(offsetof(GpuVertex, positionX) == 0U);
 static_assert(offsetof(GpuVertex, red) == sizeof(float) * 2U);
 
+// Camera gốc của Project 16 nhìn về +Z, FOV dọc 60°. Giữ ảnh chiếu trước
+// bước chọn viewport: CPU và VBO sẽ nhận đúng cùng ba vị trí và ba màu.
+inline constexpr Vec2 project16Position(float x, float y, float z) {
+    constexpr float focal = 1.7320508075688772F; // 1 / tan(30°)
+    return {focal * x / z, focal * y / z};
+}
+
+inline constexpr GpuVertex project16Vertex(float x, float y, float z, Color color) {
+    const Vec2 point = project16Position(x, y, z);
+    return {point.x, point.y, color.red, color.green, color.blue};
+}
+
 inline constexpr std::array<GpuVertex, 3> kSourceTriangle{
-    GpuVertex{0.0F, 0.66F, 0.97F, 0.42F, 0.35F},
-    GpuVertex{-0.70F, -0.58F, 0.35F, 0.78F, 0.48F},
-    GpuVertex{0.70F, -0.58F, 0.38F, 0.68F, 0.94F},
+    project16Vertex(-1.4F, 1.2F, 4.0F, {1, 0, 0}),
+    project16Vertex(1.6F, -1.0F, 5.5F, {0, 1, 0}),
+    project16Vertex(-1.4F, -1.0F, 6.5F, {0, 0, 1}),
 };
 
 struct Transform2D {
     float angleRadians{};
     float scale{1.0F};
     Vec2 translation{};
+    Vec2 panelFit{1, 1};
 };
+
+inline Transform2D forPanel(Transform2D transform, int width, int height) {
+    // Một đơn vị X và một đơn vị Y phải dài bằng nhau trên màn hình.
+    // Thu đều cả hai chiều nếu nửa cửa sổ quá hẹp để chứa cảnh.
+    const float span = std::min(float(height), 1.5F * float(width));
+    transform.panelFit = {span / float(width), span / float(height)};
+    return transform;
+}
 
 inline Vec2 transformPosition(Vec2 position, const Transform2D& transform) {
     const float cosine = std::cos(transform.angleRadians);
@@ -69,8 +90,8 @@ inline Vec2 transformPosition(Vec2 position, const Transform2D& transform) {
     const float rotatedX = position.x * cosine - position.y * sine;
     const float rotatedY = position.x * sine + position.y * cosine;
     return {
-        rotatedX * transform.scale + transform.translation.x,
-        rotatedY * transform.scale + transform.translation.y,
+        (rotatedX * transform.scale + transform.translation.x) * transform.panelFit.x,
+        (rotatedY * transform.scale + transform.translation.y) * transform.panelFit.y,
     };
 }
 
@@ -196,9 +217,14 @@ inline void rasterizeCpuTriangle(
     Framebuffer& framebuffer,
     const std::array<GpuVertex, 3>& triangle,
     const Transform2D& transform,
-    bool smoothColor
+    bool smoothColor,
+    const Framebuffer* backdrop = nullptr
 ) {
-    framebuffer.clear({11.0F / 255.0F, 16.0F / 255.0F, 32.0F / 255.0F});
+    if (backdrop && backdrop->width == framebuffer.width && backdrop->height == framebuffer.height) {
+        std::copy(backdrop->rgba.begin(), backdrop->rgba.end(), framebuffer.rgba.begin());
+    } else {
+        framebuffer.clear({11.0F / 255.0F, 16.0F / 255.0F, 32.0F / 255.0F});
+    }
     const std::array<GpuVertex, 3> transformed = transformedTriangle(triangle, transform);
     std::array<ScreenVertex, 3> screen{};
     for (std::size_t index = 0; index < screen.size(); ++index) {

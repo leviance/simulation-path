@@ -23,17 +23,28 @@ Xây một buồng quan sát 3D trong đó hai nhóm hạt mang điện trái d�
 
 Starter có event loop, OpenGL loader và renderer cho khung cảnh. Các phần ấy dùng lại kiến thức camera/context từ những project trước; không chứa sẵn lực Lorentz hoặc integrator để bỏ qua việc học. Mỗi checkpoint trong ZIP chạy độc lập. Đọc diff và source đầy đủ khi một đoạn trích trong bài chưa cho thấy nơi nối vào ứng dụng.
 
-## Build và chạy
+## Viết và kiểm bài làm trong `starter/`
+
+Mở terminal cạnh `CMakeLists.txt` trong gói đã giải nén. Khi đang học, chỉ build chương trình bạn vừa sửa:
+
+```bash
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_38_starter --parallel 1
+```
+
+Khi đã viết đủ các hàm của học phần, chạy `cmake --build build --config Debug --target project_38_check_work --parallel 1`. CTest phải hiện `project_38_starter_validation`. Nếu muốn so với chương trình mẫu trong `final/`, dùng thư mục `build-ref/` ở dưới; kết quả đó mang nhãn `reference`, không chấm bài làm.
+
+## Build và chạy bản tham khảo
 
 Cần compiler C++20 (Windows: Visual Studio 2022 với Desktop development with C++), CMake 3.24+ và driver hỗ trợ OpenGL 4.3 Core. CMake tải đúng SDL **3.4.8** bằng FetchContent/checksum và link `SDL3::SDL3`. Không cần cài SDL thủ công.
 
 ```powershell
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 20
-.\build\Release\project_38_final.exe
+cmake -S . -B build-ref -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build-ref --config Debug --parallel 2
+ctest --test-dir build-ref -C Debug -L reference --no-tests=error --output-on-failure --timeout 20
+cmake --build build-ref --config Release --parallel 2
+ctest --test-dir build-ref -C Release -L reference --no-tests=error --output-on-failure --timeout 20
+.\build-ref\Release\project_38_final.exe
 ```
 
 Final là target mặc định; `BUILD_CHECKPOINTS=ON` thêm starter và checkpoint 01–12. Với Ninja hoặc Unix Makefiles, thêm `-DCMAKE_BUILD_TYPE=Release`; executable nằm trực tiếp trong `build`. Cùng source có thể build trên Linux/macOS nhưng **macOS OpenGL chỉ tới 4.1**, không đáp ứng compute 4.3 của project này; chương trình phải báo không hỗ trợ, không chuyển sang CPU rồi nhận là GPU.
@@ -85,9 +96,9 @@ Probe thường đọc 33 record = 1.056 byte (32 ID đầu + ID đang chọn), 
 CTest chỉ kiểm toán thuần, không mở window hoặc chạy benchmark vô hạn. Nghiệm thẳng, gia tốc đều và trường E/B đều dùng closed form double độc lập, không gọi lại Boris để làm đáp án. CPU mirror kiểm implementation; analytic reference kiểm mô hình và mốc thời gian. Kiểm tốc độ không thay kiểm pha/quỹ đạo.
 
 ```powershell
-.\build\Release\project_38_final.exe --verify
-.\build\Release\project_38_final.exe --verify --count 5000000
-.\build\Release\project_38_final.exe --hidden --seconds 3 --capture chamber.bmp
+.\build-ref\Release\project_38_final.exe --verify
+.\build-ref\Release\project_38_final.exe --verify --count 5000000
+.\build-ref\Release\project_38_final.exe --hidden --seconds 3 --capture chamber.bmp
 ```
 
 `--verify` mặc định kiểm N=1.000.003, chạy bốn preset nhỏ, v=0, q scale=0, dt convergence, tail canary, allocation lỗi, cancellation và GPU render thật. Readback toàn N chỉ có trong **job kiểm riêng**, chia batch 8.192 record, không nằm trong render loop bình thường. CPU mirror tolerance `absTol=relTol=3e-4`; analytic kiểm cả position/velocity với ngưỡng `0,005(1+|reference|)`. Test convergence dùng ngưỡng chặt hơn để thấy sai số giảm khi dt nhỏ đi. NaN/Inf và mass không hợp lệ không bao giờ PASS.

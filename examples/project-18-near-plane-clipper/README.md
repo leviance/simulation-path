@@ -36,7 +36,7 @@ ctest --test-dir build -C Release --output-on-failure --timeout 30
 
 Build mặc định chỉ tạo final và tests. Bật BUILD_CHECKPOINTS để có thêm Starter và tám target `project_18_checkpoint_1` … `project_18_checkpoint_8`. Để chạy mã người học, build target `project_18_starter` rồi mở executable tương ứng. Với generator single-config trên Linux/macOS, thêm `-DCMAKE_BUILD_TYPE=Debug` lúc configure, executable nằm ngay trong `build/`; cần các development packages nền tảng SDL được hướng dẫn trong Getting Started.
 
-CTest mặc định kiểm `final/include`. Sau khi tự viết đủ tám bài, sửa dòng target_include_directories của project_18_tests trong CMakeLists.txt **của gói đã giải nén** sang `starter/include`, configure lại, build app/tests và chạy cả Debug lẫn Release. Tests của bản tham khảo không chứng minh Starter của bạn đúng.
+Muốn kiểm mã của mình trong `starter/`, chạy `cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON`, rồi `cmake --build build --config Debug --target project_18_check_work --parallel 1`. CTest sẽ ghi `project_18_starter_validation`. Nếu chỉ thấy nhãn `reference`, bạn đang kiểm bản mẫu. Chạy lại ở Release sau bài 8.
 
 ## Điều khiển bản hoàn chỉnh
 

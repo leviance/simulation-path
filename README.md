@@ -164,18 +164,22 @@ Metadata của mỗi project nằm trong `course/projects/pXX/`: `manifest.ts`, 
 
 ## Build một project C++
 
-Ví dụ với Project 01:
+Ví dụ với Project 01: nếu đang ở repository, chạy `npm run generate:checkpoints` rồi vào `examples/project-01-hello-pixels`. Nếu đã tải ZIP, chỉ cần mở terminal ở thư mục có `CMakeLists.txt`; không cần Node.js hay server.
 
 ```bash
-npm run generate:checkpoints
-cmake -S examples/project-01-hello-pixels -B examples/project-01-hello-pixels/build -DBUILD_CHECKPOINTS=ON
-cmake --build examples/project-01-hello-pixels/build --config Debug
-ctest --test-dir examples/project-01-hello-pixels/build -C Debug --output-on-failure
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_1_starter --parallel 1
 ```
 
-Build mặc định tạo target final. `BUILD_CHECKPOINTS=ON` bổ sung starter và các target checkpoint, tương ứng với số bài học của từng project. Mỗi project khóa SDL 3.4.8 bằng URL cùng SHA-256 và link qua `SDL3::SDL3`.
+Viết tiếp trong `starter/`. Sau khi đã hoàn thành các hàm mà bộ kiểm yêu cầu, chạy:
 
-Lệnh sinh checkpoint chỉ cần chạy ở repository của website, không cần mở server. Nếu tải ZIP của một project từ trang Downloads, ZIP đã có đủ CMake, starter, checkpoint và final; bạn không cần Node.js hay npm để build gói đó.
+```bash
+cmake --build build --config Debug --target project_1_check_work --parallel 1
+```
+
+Tên `project_1_starter_validation` cho biết CTest đang đọc mã của bạn. Nếu muốn kiểm chứng bản mẫu, configure riêng bằng `cmake -S . -B build-ref`, build target `project_1_tests` rồi chạy `ctest --test-dir build-ref -C Debug -L reference --output-on-failure`. Với các bài viết trong `work/`, dùng lệnh trên trang bài học: `COURSE_WORKBOOK=ON` (riêng 58–64: `VOXEL_WORKBOOK=ON`).
+
+Mỗi project khóa SDL 3.4.8 bằng URL và SHA-256, link qua `SDL3::SDL3`. `BUILD_CHECKPOINTS=ON` bổ sung các chương trình theo từng bài; chúng là bản đối chiếu, không tự nhận những thay đổi của bạn.
 
 ## Những gì nên đưa vào commit
 

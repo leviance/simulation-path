@@ -4,12 +4,12 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
   type KeyboardEvent,
   type PointerEvent,
 } from "react";
 import { ChamberController } from "@/lib/labs/charged-particle-chamber/controller";
-import { renderChamber } from "@/lib/labs/charged-particle-chamber/render";
 import { canvasPoint, setupCanvas, useCanvasSize, useReducedMotion } from "./lab-shared";
 import Controls from "./charged-particle-chamber/controls";
 import Readout from "./charged-particle-chamber/readout";
@@ -21,6 +21,7 @@ export default function ChargedParticleChamberLab({
   mode?: InteractiveLabMode;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [paintFailed, setPaintFailed] = useState(false);
   const controller = useMemo(() => new ChamberController(mode), [mode]);
   const state = useSyncExternalStore(
     controller.subscribe,
@@ -92,22 +93,36 @@ export default function ChargedParticleChamberLab({
     let frame = 0,
       last: number | null = null,
       drawn = -1;
-    const draw = (now: number) => {
-      const current = controller.getSnapshot();
-      if (!current.paused || current.comparison.status === "running") {
-        controller.tick(last === null ? 0 : (now - last) / 1000);
-      }
-      last = now;
-      if (drawn !== controller.drawVersion) {
-        setupCanvas(ctx, size);
-        renderChamber(ctx, controller.getSnapshot(), size.width, size.height);
-        drawn = controller.drawVersion;
-        canvas.dataset.renderState = "complete";
-      }
+    let disposed = false;
+    const startDrawing = ({
+      renderChamber,
+    }: typeof import("@/lib/labs/charged-particle-chamber/render")) => {
+      if (disposed) return;
+      setPaintFailed(false);
+      const draw = (now: number) => {
+        const current = controller.getSnapshot();
+        if (!current.paused || current.comparison.status === "running") {
+          controller.tick(last === null ? 0 : (now - last) / 1000);
+        }
+        last = now;
+        if (drawn !== controller.drawVersion) {
+          setupCanvas(ctx, size);
+          renderChamber(ctx, controller.getSnapshot(), size.width, size.height);
+          drawn = controller.drawVersion;
+          canvas.dataset.renderState = "complete";
+        }
+        frame = requestAnimationFrame(draw);
+      };
       frame = requestAnimationFrame(draw);
     };
-    frame = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(frame);
+    // The server can show the controls and numerical state without downloading a painter.
+    void import("@/lib/labs/charged-particle-chamber/render").then(startDrawing, () => {
+      if (!disposed) setPaintFailed(true);
+    });
+    return () => {
+      disposed = true;
+      cancelAnimationFrame(frame);
+    };
   }, [controller, size]);
   useEffect(() => {
     const id = controller.getSnapshot().pointer;
@@ -212,7 +227,19 @@ export default function ChargedParticleChamberLab({
         onLostPointerCapture={(event) => controller.endPointer(event.pointerId)}
         onContextMenu={(event) => event.preventDefault()}
       />
-      <Controls controller={controller} state={state} reducedMotion={reducedMotion} reset={reset} />
+      <Controls
+        key={mode}
+        controller={controller}
+        state={state}
+        reducedMotion={reducedMotion}
+        reset={reset}
+      />
+      {paintFailed && (
+        <p role="alert">
+          Không tải được phần vẽ. Bạn vẫn có thể bấm Một bước để đọc số liệu bên dưới, hoặc tải lại
+          trang để xem quỹ đạo.
+        </p>
+      )}
       <Readout state={state} />
       <p className="lab-hint">
         Kéo để orbit; Shift-kéo hoặc chuột phải để pan; focus Canvas rồi cuộn để zoom. Click chọn

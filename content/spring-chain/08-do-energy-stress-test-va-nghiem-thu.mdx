@@ -325,20 +325,13 @@ inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
 
 ### Bước 5 — Kiểm chính Starter đã hoàn thiện
 
-Tests mặc định include final/include. Để nghiệm thu bài làm của bạn, đổi đúng dòng include path của target tests trong CMakeLists.txt:
+Năng lượng và đồ thị bạn muốn kiểm nằm trong `starter/`. Chọn thư mục đó cho CTest, sau đó chạy chính ứng dụng vừa build:
 
-```cmake title="CMakeLists.txt — chọn bài làm để kiểm"
-target_include_directories(project_25_tests PRIVATE starter/include)
-```
-
-Sau đó chạy:
-
-```powershell title="Terminal — kiểm Starter ở Debug và Release"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug --target project_25_starter project_25_tests --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 30
-cmake --build build --config Release --target project_25_starter project_25_tests --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 30
+```bash title="Terminal — kiểm mã trong starter/"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_25_check_work --parallel 1
+cmake --build build --config Release --target project_25_check_work --parallel 1
+cmake --build build --config Release --target project_25_starter --parallel 1
 .\build\Release\project_25_starter.exe
 ```
 

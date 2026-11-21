@@ -74,6 +74,11 @@ test("scoped checkpoint generation preserves other projects, check is read-only,
     mkdirSync(path.join(root, "scripts"));
     for (const file of scripts)
       cpSync(new URL("../scripts/" + file, import.meta.url), path.join(root, "scripts", file));
+    mkdirSync(path.join(root, "lib"));
+    cpSync(
+      new URL("../lib/voxel-workbook.ts", import.meta.url),
+      path.join(root, "lib", "voxel-workbook.ts"),
+    );
     const projects = [
       {
         id: "01",

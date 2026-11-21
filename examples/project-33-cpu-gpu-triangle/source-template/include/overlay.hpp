@@ -123,13 +123,15 @@ inline void drawPipelineOverlay(GlApi& gl, const std::array<GpuVertex, 3>& trian
     overlayRect(gl, 0, std::max(86, height - 56), width, 56, height, background);
     const int leftWidth = width / 2;
     overlayText(gl, 14, 12, "CPU - SOFTWARE RASTERIZER", height, ink);
-    overlayText(gl, leftWidth + 14, 12, "GPU - GLSL / NDC EXPECTED", height, ink);
-    const auto transformed = transformedTriangle(triangle, transform);
+    overlayText(gl, leftWidth + 14, 12, "GPU - OPENGL / GLSL", height, ink);
+    const auto right = transformedTriangle(triangle, forPanel(transform, width - leftWidth, height));
+    const auto left = transformedTriangle(triangle, forPanel(transform, leftWidth, height));
+    const Vec2 center = triangleCentroid(triangle, forPanel(transform, width - leftWidth, height));
     const auto& input = triangle[selected];
     char trace[120]{};
     std::snprintf(trace, sizeof(trace), "%c LOCAL %.2f %.2f / CLIP W 1", 'A' + selected, double(input.positionX), double(input.positionY));
     overlayText(gl, 14, 84, trace, height, ink);
-    const Vec2 selectedPixel = ndcToCpuScreen({transformed[selected].positionX, transformed[selected].positionY}, width - leftWidth, height);
+    const Vec2 selectedPixel = ndcToCpuScreen({right[selected].positionX, right[selected].positionY}, width - leftWidth, height);
     std::snprintf(trace, sizeof(trace), "SCREEN %.1f %.1f / TOP-LEFT", double(selectedPixel.x), double(selectedPixel.y));
     overlayText(gl, leftWidth + 14, 84, trace, height, ink);
     for (int index = 0; index < 3; ++index) {
@@ -138,24 +140,32 @@ inline void drawPipelineOverlay(GlApi& gl, const std::array<GpuVertex, 3>& trian
         if (index == selected) {
             selection = "SELECTED";
         }
-        std::snprintf(line, sizeof(line), "%c %s NDC %.3f %.3f", 'A' + index, selection, double(transformed[index].positionX), double(transformed[index].positionY));
-        overlayText(gl, 14, 30 + index * 16, line, height, ink);
-        overlayText(gl, leftWidth + 14, 30 + index * 16, line, height, ink);
         for (int panel = 0; panel < 2; ++panel) {
             int panelWidth = width - leftWidth;
             int origin = leftWidth;
+            auto vertexNdc = right[index];
             if (panel == 0) {
                 panelWidth = leftWidth;
                 origin = 0;
+                vertexNdc = left[index];
             }
-            const Vec2 pixel = ndcToCpuScreen({transformed[index].positionX, transformed[index].positionY}, panelWidth, height);
+            std::snprintf(line, sizeof(line), "%c %s NDC %.3f %.3f", 'A' + index, selection, double(vertexNdc.positionX), double(vertexNdc.positionY));
+            overlayText(gl, origin + 14, 30 + index * 16, line, height, ink);
+            const Vec2 pixel = ndcToCpuScreen({vertexNdc.positionX, vertexNdc.positionY}, panelWidth, height);
             if (pixel.x < 0 || pixel.x >= panelWidth || pixel.y < 110 || pixel.y >= height - 56)
                 continue;
             const auto& vertex = triangle[index];
             const Color color{vertex.red, vertex.green, vertex.blue};
             overlayRect(gl, origin + int(pixel.x) - 4, int(pixel.y) - 4, 9, 9, height, color);
             char label[2]{char('A' + index), '\0'};
-            overlayText(gl, origin + int(pixel.x) + 8, int(pixel.y) - 4, label, height, ink);
+            // Đặt nhãn ra phía ngoài để không che màu ở sát đỉnh.
+            int labelX = int(pixel.x) + 8;
+            int labelY = int(pixel.y) + 8;
+            if (right[index].positionX < center.x) labelX = int(pixel.x) - 15;
+            if (right[index].positionY > center.y) labelY = int(pixel.y) - 16;
+            if (labelX >= 0 && labelX + 8 < panelWidth && labelY >= 110 && labelY + 10 < height - 56) {
+                overlayText(gl, origin + labelX, labelY, label, height, ink);
+            }
         }
     }
     overlayText(gl, 14, height - 45, "DRAG VERTEX / 1 2 3 SELECT / I J K L MOVE / V COLOR / R RESET", height, ink);

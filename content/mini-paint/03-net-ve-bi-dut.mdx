@@ -32,59 +32,62 @@ inline double distance(Point start, Point end) {
 ```
 
 
-Thêm các trường sau vào `PaintState`. Chúng được đặt lại khi một nét mới bắt đầu:
+Trong `include/paint.hpp`, thêm `#include <algorithm>` để dùng `std::max`. Thêm năm trường sau vào `PaintState`, ngay dưới `radius`. Bốn số đo được đặt lại ở đầu mỗi nét; tỷ lệ lấy mẫu thì giữ nguyên đến khi bạn đổi bằng phím S:
 
 
 ```cpp title="include/paint.hpp — trạng thái đo và lấy thưa"
 int sampleEvery = 1;
-    int received = 0;
-    int accepted = 0;
-    int stamps = 0;
-    double maximumGap = 0.0;
+int received = 0;
+int accepted = 0;
+int stamps = 0;
+double maximumGap = 0.0;
 ```
 
 
-`received` đếm motion trước khi lấy thưa, `accepted` đếm các vị trí được giữ gồm down/up, `stamps` đếm lần đặt dấu. `maximumGap` đo khoảng cách lớn nhất giữa **mẫu được giữ**, không phải giữa các pixel trong dấu tròn.
+`received` đếm sự kiện di chuyển trước khi lọc. `accepted` đếm các vị trí khác nhau liên tiếp được giữ lại, kể cả điểm nhấn và điểm thả. `maximumGap` là khoảng cách lớn nhất giữa hai vị trí như vậy, không phải khoảng cách giữa hai pixel.
 
-### Bước 2 — Bỏ motion có chủ ý nhưng không bỏ down/up
+Để biết thực sự đã vẽ bao nhiêu dấu, tăng `stamps` ngay sau khi vẽ hình tròn trong hàm `applyStamp` của bài 2. Ở bài này mỗi vị trí được giữ tạo một dấu; sang bài nội suy, giữa hai vị trí có thể có nhiều dấu.
 
-Hàm `moveStroke` có thêm đối số `bool forceEndpoint = false`. Sau kiểm tra drawing và vùng ảnh, thêm:
+{/* snippet include/paint.hpp#apply-stamp */}
 
-
-```cpp title="include/paint.hpp — phân biệt motion với endpoint bắt buộc"
-if (!forceEndpoint) {
-        ++state.received;
-        const int interval = std::max(1, state.sampleEvery);
-        if (state.received % interval != 0) {
-            return false;
-        }
-    }
-```
-
-
-`endStroke` truyền true để thả nút luôn đi qua phần lấy thưa:
-
-
-```cpp title="include/paint.hpp — endpoint không phụ thuộc N"
-inline bool endStroke(Framebuffer& framebuffer, PaintState& state, Point endpoint) {
-    const bool changed = moveStroke(framebuffer, state, endpoint, true);
-    cancelStroke(state);
-    return changed;
+```cpp title="include/paint.hpp — vẽ một dấu rồi mới đếm"
+inline void applyStamp(Framebuffer& framebuffer, PaintState& state, Point point) {
+    stampCircle(framebuffer, point, state.radius, state.color);
+    ++state.stamps;
 }
 ```
 
+### Bước 2 — Nhấn chuột: đặt đúng một dấu đầu tiên
 
-Những mẫu bị bỏ **không cập nhật previous**. Nó phải giữ điểm đã xử lý gần nhất, nếu không khoảng cách đo và đoạn sẽ nội suy ở bài sau đều sai.
+Trong `include/paint.hpp`, thay hàm `beginStroke` của bài trước bằng hàm dưới đây. Khi chuột vừa nhấn, ta đã có một điểm thật trên nét vẽ, nhưng chưa nhận lần di chuyển nào. Đó là lý do `accepted` bắt đầu ở 1 còn `received` bắt đầu ở 0.
 
-### Bước 3 — Đo rồi vẫn chỉ đặt một dấu mới
+{/* snippet include/paint.hpp#start-stroke */}
 
-
-```cpp title="include/paint.hpp — đối chứng chưa nội suy"
-state.maximumGap = 0.0;
+```cpp title="include/paint.hpp — bắt đầu một nét và đặt lại các số đo"
+inline bool beginStroke(Framebuffer& framebuffer, PaintState& state, Point point) {
+    if (state.drawing || !insideCanvas(point)) {
+        return false;
+    }
+    state.drawing = true;
+    state.previous = point;
+    state.received = 0;
+    state.accepted = 1;
+    state.stamps = 0;
+    state.maximumGap = 0.0;
     applyStamp(framebuffer, state, point);
     return true;
 }
+```
 
+Trong `applyStamp`, tăng `state.stamps` ngay sau khi tô hình tròn. Thử nhấn rồi thả tại chỗ: ảnh phải có đúng một dấu tròn. Nếu thấy hai dấu được đếm, kiểm tra xem lúc thả chuột chương trình có tô lại chính điểm vừa vẽ không.
+
+### Bước 3 — Kéo rồi thả: đo khoảng hở giữa hai dấu được giữ
+
+Thay toàn bộ `moveStroke`. Với `sampleEvery = 4`, ba sự kiện di chuyển đầu tiên chỉ tăng `received`; sự kiện thứ tư mới được vẽ. Đừng ghi đè `previous` ở ba lần bỏ qua: ta muốn đo từ **dấu vừa vẽ**, không phải từ sự kiện chuột gần nhất.
+
+{/* snippet include/paint.hpp#move-stroke */}
+
+```cpp title="include/paint.hpp — đo khoảng cách rồi đặt một dấu ở vị trí mới"
 inline bool moveStroke(Framebuffer& framebuffer, PaintState& state, Point current, bool forceEndpoint = false) {
     if (!state.drawing) {
         return false;
@@ -108,10 +111,23 @@ inline bool moveStroke(Framebuffer& framebuffer, PaintState& state, Point curren
     // Bài 1–3 cố ý chỉ đặt dấu ở mẫu mới, chưa nối khoảng giữa hai mẫu.
     applyStamp(framebuffer, state, current);
     state.previous = current;
+    return true;
+}
 ```
 
+Cuối cùng, thay `endStroke` ngay bên dưới. Đối số `true` buộc lần thả chuột đi qua bộ lọc để nét kết thúc ngay dưới con trỏ. Nếu điểm thả trùng dấu cuối, `moveStroke` nhận ra và không tô lần nữa.
 
-`applyStamp` tăng `state.stamps` mỗi lần tạo dấu. `beginStroke` đặt lại bộ đếm rồi vẽ dấu đầu. Một lần click không kéo chỉ có một dấu vì up trùng previous được bỏ sớm.
+{/* snippet include/paint.hpp#finish-stroke */}
+
+```cpp title="include/paint.hpp — xử lý điểm thả rồi kết thúc nét"
+inline bool endStroke(Framebuffer& framebuffer, PaintState& state, Point endpoint) {
+    const bool changed = moveStroke(framebuffer, state, endpoint, true);
+    cancelStroke(state);
+    return changed;
+}
+```
+
+Thử kéo nhanh ở tỷ lệ 1/4: nét phải có những khoảng hở và `maximumGap` tăng. **Đừng nối chúng vội.** Ta cần phiên bản có lỗi nhìn thấy được này để kiểm cách nội suy ở bài sau.
 
 ### Bước 4 — Tạo cùng một bộ mẫu bằng phím D
 
@@ -138,24 +154,24 @@ Trong nhánh KEY_DOWN không repeat, phím D gọi demo và báo ảnh đã đ�
 
 ```cpp title="src/main.cpp — gọi phép thử từ bàn phím"
 if (event.key.key == SDLK_D) {
-                    SDL_CaptureMouse(false);
-                    lab::drawDemo(framebuffer, state);
-                    dirty = true;
-                }
+    SDL_CaptureMouse(false);
+    lab::drawDemo(framebuffer, state);
+    dirty = true;
+}
 ```
 
 
 
 ```cpp title="src/main.cpp — đổi tỷ lệ lấy mẫu"
 if (event.key.key == SDLK_S) {
-                    lab::cancelStroke(state);
-                    SDL_CaptureMouse(false);
-                    state.sampleEvery *= 2;
-                    if (state.sampleEvery > 8) {
-                        state.sampleEvery = 1;
-                    }
-                    dirty = true;
-                }
+    lab::cancelStroke(state);
+    SDL_CaptureMouse(false);
+    state.sampleEvery *= 2;
+    if (state.sampleEvery > 8) {
+        state.sampleEvery = 1;
+    }
+    dirty = true;
+}
 ```
 
 
@@ -164,7 +180,7 @@ Trước khi đổi mức, S cancel nét và nhả capture; muốn thử cùng �
 
 ```cpp title="src/main.cpp — số đo không được gọi nhầm là FPS"
 char title[256]{};
-            std::snprintf(title, sizeof(title), "Mini Paint | r=%d | 1/%d samples | %d kept | %d stamps | input gap %.1fpx | S sampling | D demo", state.radius, state.sampleEvery, state.accepted, state.stamps, state.maximumGap);
+std::snprintf(title, sizeof(title), "Mini Paint | r=%d | 1/%d samples | %d kept | %d stamps | input gap %.1fpx | S sampling | D demo", state.radius, state.sampleEvery, state.accepted, state.stamps, state.maximumGap);
 ```
 
 
@@ -172,9 +188,9 @@ char title[256]{};
 
 ## Ghép các phần lại
 
-Chạy `project_3_checkpoint_3`. Bấm D ở các mức S khác nhau, ghi số mẫu giữ và input gap. Với bán kính 12, khoảng 200 hoặc 800 pixel đều lớn hơn đường kính nên phải thấy dấu rời.
+Build và chạy `project_3_starter` sau khi lưu các thay đổi. Bấm D ở mức 1/1: phải thấy 5 dấu, cách nhau 200 pixel. Bấm S tới 1/4 rồi bấm D lần nữa: chỉ còn 2 dấu, cách nhau 800 pixel. Nếu số liệu khác, so `applyStamp` và `moveStroke` với `project_3_checkpoint_3`. Chạy checkpoint một mình chỉ cho biết bản mẫu đúng.
 
-Số dấu và số mẫu còn gần nhau ở phiên bản này. Bài sau giữ nguyên dữ liệu đầu vào nhưng tăng số dấu bằng nội suy. Đây mới là cách sửa nguyên nhân, không phải tăng FPS hoặc làm bút dày lên.
+Ở bài này, mỗi vị trí được giữ tạo đúng một dấu. Với bán kính 12 pixel, các dấu cách nhau 200 pixel không thể chạm nhau. Bài sau sẽ giữ nguyên năm vị trí đầu vào nhưng lấp khoảng trống bằng nội suy.
 
 ## Thử làm sai để hiểu đúng
 

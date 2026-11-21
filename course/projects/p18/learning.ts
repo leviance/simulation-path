@@ -197,7 +197,7 @@ const learning = {
         {
           title: "Kiểm đúng source đã viết",
           explanation:
-            "CTest mặc định dùng final/include. Sau tám bài, chuyển tests sang starter/include để kiểm mã của chính mình ở Debug/Release.",
+            "Sau tám bài, bật -DCOURSE_TEST_STARTER=ON rồi chạy project_18_check_work ở Debug và Release để kiểm chính phần clipping bạn viết.",
         },
       ],
     },

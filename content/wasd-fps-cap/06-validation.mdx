@@ -155,25 +155,18 @@ measurement.start();
 
 ### Bước 6 — Build và chạy Debug/Release có giới hạn
 
-Từ thư mục chứa `CMakeLists.txt` trong ZIP:
+Ca 30/60/144 FPS phải gọi đúng hàm cập nhật vị trí trong `starter/`. Nếu bỏ phép nhân với `dt`, bạn muốn CTest báo đỏ ngay cả khi đáp án trong ZIP vẫn đúng.
 
-```bash title="Terminal — configure và test Debug"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
+```powershell title="Kiểm bài làm ở Debug và Release"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_2_check_work --parallel 1
+cmake --build build --config Release --target project_2_check_work --parallel 1
+cmake --build build --config Release --target project_2_starter --parallel 1
+.\build\Release\project_2_starter.exe
+.\build\Release\project_2_starter.exe --smoke
 ```
 
-```bash title="Terminal — build và test Release"
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 20
-```
-
-Với Ninja/Makefiles, dùng hai thư mục build riêng và `-DCMAKE_BUILD_TYPE=Debug` hoặc `Release` khi configure. CTest không mở window và phải kết thúc nhanh; timeout 20 giây là hàng rào bảo vệ, không phải thời gian cần chờ bình thường.
-
-```bash title="Terminal Windows — chạy bản hoàn chỉnh và smoke"
-.\build\Debug\project_2_final.exe
-.\build\Debug\project_2_final.exe --smoke
-```
+Với Visual Studio, `--config` chọn Debug hoặc Release. Với Ninja/Makefiles, tạo hai thư mục build riêng, chọn `CMAKE_BUILD_TYPE` khi configure và chạy executable ngay trong thư mục build.
 
 `--smoke` mở cửa sổ ẩn, dùng hướng chéo được script sẵn, chạy 12 frame có resize/upload/present rồi thoát. Khi tự động hóa, đặt deadline bên ngoài 15 giây để bảo vệ cả trường hợp driver kẹt. Nó không kiểm bàn phím vật lý hoặc độ chính xác FPS dài hạn.
 

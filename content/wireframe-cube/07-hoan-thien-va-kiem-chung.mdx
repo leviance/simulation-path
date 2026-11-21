@@ -111,16 +111,17 @@ Renderer cũng được gọi thật vào framebuffer ở mọi preset và cả 
 
 ### Bước 4 — Build và chạy cả Debug lẫn Release
 
-```bash title="Terminal — nghiệm thu source tải về"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 30
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 30
-./build/Release/project_13_final.exe
+Để biết chính bộ chiếu của bạn có đi qua đủ tám đỉnh không, chọn `starter/` khi configure. Sau khi bộ kiểm đạt, mở cube bạn vừa build và thử cả hai phép chiếu.
+
+```powershell title="Kiểm bài làm ở Debug và Release"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_13_check_work --parallel 1
+cmake --build build --config Release --target project_13_check_work --parallel 1
+cmake --build build --config Release --target project_13_starter --parallel 1
+.\build\Release\project_13_starter.exe
 ```
 
-Target mặc định là final và tests; bật `BUILD_CHECKPOINTS` mới thêm Starter cùng bảy checkpoint. CMake dùng C++20 và khóa SDL 3.4.8 qua FetchContent, link `SDL3::SDL3`. Lần configure đầu cần mạng; các lần sau dùng dependency đã tải.
+Với Visual Studio, `--config` chọn Debug hoặc Release. Với Ninja/Makefiles, tạo hai thư mục build riêng, chọn `CMAKE_BUILD_TYPE` khi configure và chạy executable ngay trong thư mục build.
 
 ## Ghép các phần lại
 

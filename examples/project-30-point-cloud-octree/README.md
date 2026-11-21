@@ -32,7 +32,7 @@ ctest --test-dir build-release --output-on-failure --timeout 30
 ./build-release/project_30_final
 ```
 
-Final/tests là mặc định. BUILD_CHECKPOINTS mở thêm project_30_starter và project_30_checkpoint_1…11. Tên thư mục checkpoints/01…11 có số 0 đầu, tên target dùng 1…11. Khi tự làm trong starter, build target project_30_starter; muốn tests kiểm lời giải của bạn, đổi include directory của project_30_tests trong CMake ZIP từ final/include sang starter/include.
+Muốn kiểm mã của mình trong `starter/`, chạy `cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON`, rồi `cmake --build build --config Debug --target project_30_check_work --parallel 1`. CTest sẽ ghi `project_30_starter_validation`. Nếu chỉ thấy nhãn `reference`, bạn đang kiểm bản mẫu. `BUILD_CHECKPOINTS` mở thêm các mốc `checkpoints/01…11`; tên target là `project_30_checkpoint_1` đến `project_30_checkpoint_11`.
 
 ## Dataset và schema
 

@@ -27,13 +27,13 @@ inline Vec2 transformPosition(Vec2 position, const Transform2D& transform) {
     const float rotatedX = position.x * cosine - position.y * sine;
     const float rotatedY = position.x * sine + position.y * cosine;
     return {
-        rotatedX * transform.scale + transform.translation.x,
-        rotatedY * transform.scale + transform.translation.y,
+        (rotatedX * transform.scale + transform.translation.x) * transform.panelFit.x,
+        (rotatedY * transform.scale + transform.translation.y) * transform.panelFit.y,
     };
 }
 ```
 
-rotatedX và rotatedY giữ tọa độ sau phép quay. Hai dòng return mới nhân scale rồi cộng translation, nên ta có thể kiểm từng bước bằng ca tính tay ở trên.
+`rotatedX` và `rotatedY` là vị trí sau khi quay. Ta phóng to hoặc thu nhỏ, dịch hình, rồi mới nhân với `panelFit` để khung hẹp không kéo méo nó. Khi kiểm ví dụ tính tay ở trên, chọn khung vuông: hai hệ số cuối bằng 1.
 
 ### Bước 2 — GLSL phản chiếu cùng thứ tự
 
@@ -44,7 +44,7 @@ vec2 rotated = vec2(
     aPosition.x * cosine - aPosition.y * sine,
     aPosition.x * sine + aPosition.y * cosine
 );
-vec2 ndc = rotated * uScale + uTranslation;
+vec2 ndc = (rotated * uScale + uTranslation) * uPanelFit;
 gl_Position = vec4(ndc, 0.0, 1.0);
 ```
 
@@ -58,6 +58,7 @@ Trong project này, scale là một số dùng cho cả X/Y. Với phép co giã
 api.Uniform1f(angleLocation, transform.angleRadians);
 api.Uniform1f(scaleLocation, transform.scale);
 api.Uniform2f(translationLocation, transform.translation.x, transform.translation.y);
+api.Uniform2f(panelFitLocation, transform.panelFit.x, transform.panelFit.y);
 int smoothColorFlag = 0;
 if (smoothColor) {
     smoothColorFlag = 1;

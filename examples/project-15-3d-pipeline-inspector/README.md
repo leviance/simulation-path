@@ -39,7 +39,7 @@ ctest --test-dir build -C Release --output-on-failure --timeout 30
 
 Target mặc định final và tests. BUILD_CHECKPOINTS thêm Starter và checkpoint_1..7. Ninja/Makefiles dùng CMAKE_BUILD_TYPE; executable nằm trực tiếp trong build/.
 
-CTest mặc định include final/include. Khi hoàn thiện Starter và muốn test mã mình viết, đổi target_include_directories(project_15_tests PRIVATE final/include) thành target_include_directories(project_15_tests PRIVATE starter/include) trong CMakeLists của bản ZIP đang học, configure lại rồi build project_15_tests.
+Muốn kiểm mã của mình trong `starter/`, chạy `cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON`, rồi `cmake --build build --config Debug --target project_15_check_work --parallel 1`. CTest sẽ ghi `project_15_starter_validation`. Nếu chỉ thấy nhãn `reference`, bạn đang kiểm bản mẫu.
 
 ## Điều khiển final
 

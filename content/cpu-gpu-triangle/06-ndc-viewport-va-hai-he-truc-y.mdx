@@ -6,11 +6,13 @@ import { InteractiveLab } from "@/components/labs/interactive-lab";
 
 Hai tam giác cùng xoay đúng chưa có nghĩa ta có thể dùng chung một hàm đổi tọa độ pixel. Mảng ảnh CPU bắt đầu từ góc trên-trái; OpenGL window coordinates bắt đầu từ góc dưới-trái. Nhầm hai quy ước này thường làm ảnh lật dọc hoặc đọc nhầm pixel dù hình tam giác vẫn có vẻ đúng.
 
-Bài này nối NDC với tọa độ thật trong từng panel và xử lý resize/high-DPI. Ta cũng chốt một giới hạn quan trọng: đây là thí nghiệm tam giác 2D trong NDC, không phải camera perspective. Đổi tỉ lệ cửa sổ có thể làm tam giác trông rộng hoặc cao hơn; hai phía phải biến đổi giống nhau, không được sửa một phía bằng hệ số aspect giấu trong shader.
+Bắt đầu bằng một phép thử: kéo cửa sổ rộng ra rồi thu hẹp lại. Đỉnh A phải vẫn ở phía trên trái; cạnh CB không được bỗng nhiên nằm ngang hay dốc hơn. Bài này nối NDC với pixel thật của từng khung. Ảnh chiếu của Project 16 đã có sẵn; ta chỉ cần giữ cho một đơn vị theo X và theo Y dài bằng nhau trên màn hình.
 
 ## Hiểu ý tưởng trước khi viết code
 
 NDC x/y chạy từ −1 tới +1. CPU top-left mapping đảo Y; GPU bottom-left mapping cộng origin viewport nhưng không đảo Y. Hai cặp forward/inverse phải round-trip trong sai số đã công bố.
+
+Trên màn hình **high-DPI**, độ rộng mà hệ điều hành báo cho cửa sổ có thể khác số pixel thật của framebuffer. Đo bằng `SDL_GetWindowSizeInPixels` trước khi chia đôi; cả hai phép đổi tọa độ phải dùng kích thước vừa đo.
 
 Nếu framebuffer rộng 803 pixel, nửa trái rộng 401 và nửa phải 402. Cùng một NDC có thể rơi ở tâm mẫu khác nhau giữa hai panel. Phép kiểm ảnh GPU vì thế tạo CPU reference đúng bằng kích thước panel phải, không so mù hai mảng trái/phải theo cùng index.
 
@@ -19,6 +21,16 @@ Nếu framebuffer rộng 803 pixel, nửa trái rộng 401 và nửa phải 402.
 ## Viết code từng bước
 
 ### Bước 1 — NDC sang CPU top-left screen
+
+Nếu khung rộng gấp đôi chiều cao, một đơn vị NDC theo X sẽ chiếm số pixel gấp đôi một đơn vị theo Y. Khắc phục ngay trước khi đổi sang pixel: chọn một chiều dài chung `span` rồi chia nó cho chiều rộng và chiều cao tương ứng. Thông thường ta lấy chiều cao làm chuẩn như Project 16; ở cửa sổ rất hẹp, giới hạn `1.5 × width` giúp thấy đủ cả ba đỉnh.
+
+```cpp title="include/pipeline.hpp — giữ tỉ lệ hình ở từng viewport"
+inline Transform2D forPanel(Transform2D transform, int width, int height) {
+    const float span = std::min(float(height), 1.5F * float(width));
+    transform.panelFit = {span / float(width), span / float(height)};
+    return transform;
+}
+```
 
 ```cpp title="include/pipeline.hpp — ndcToCpuScreen"
 inline Vec2 ndcToCpuScreen(Vec2 position, int width, int height) {

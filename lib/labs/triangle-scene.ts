@@ -1,4 +1,9 @@
 import { projectPerspective, screenToCameraAtDepth } from "./projection-point.ts";
+import {
+  triangleReferenceWorld,
+  triangleReferenceRgb,
+  triangleVerticalFov,
+} from "./triangle-reference.ts";
 import type { RasterTriangle, BarycentricWeights } from "./triangle-raster.ts";
 export interface ScenePoint {
   x: number;
@@ -16,18 +21,10 @@ export interface RasterScene {
   limit: number;
 }
 export const initialRasterScene = (): RasterScene => ({
-  world: [
-    { x: -1.4, y: 1.2, z: 4 },
-    { x: 1.6, y: -1, z: 5.5 },
-    { x: -1.4, y: -1, z: 6.5 },
-  ],
-  palette: [
-    [255, 0, 0],
-    [0, 255, 0],
-    [0, 0, 255],
-  ],
+  world: triangleReferenceWorld.map((point) => ({ ...point })),
+  palette: triangleReferenceRgb.map((color) => [...color]),
   camera: { position: { x: 0, y: 0, z: 0 } },
-  fov: Math.PI / 3,
+  fov: triangleVerticalFov,
   selected: 0,
   debug: true,
   paused: true,

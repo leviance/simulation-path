@@ -10,23 +10,34 @@ Tự xây Mini Paint từ framebuffer: nhận chuột, tô đầu bút tròn, qu
 - Resize không mất tranh hoặc lệch con trỏ; ra ngoài vùng ảnh/mất focus kết thúc nét.
 - Test hình học, pixel, begin/move/end và công cụ bằng cùng hàm app dùng.
 
-## Chuẩn bị và build
+## Viết và kiểm bài làm trong `starter/`
+
+Mở terminal cạnh `CMakeLists.txt` trong gói đã giải nén. Khi đang học, chỉ build chương trình bạn vừa sửa:
+
+```bash
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_3_starter --parallel 1
+```
+
+Khi đã viết đủ các hàm của học phần, chạy `cmake --build build --config Debug --target project_3_check_work --parallel 1`. CTest phải hiện `project_3_starter_validation`. Nếu muốn so với chương trình mẫu trong `final/`, dùng thư mục `build-ref/` ở dưới; kết quả đó mang nhãn `reference`, không chấm bài làm.
+
+## Build và chạy bản tham khảo
 
 C++20, CMake 3.24+, Visual Studio 2022 với Desktop development with C++ trên Windows. Lần configure đầu cần mạng để FetchContent tải SDL **3.4.8**, xác minh SHA-256 và link SDL3::SDL3.
 
 Từ thư mục chứa CMakeLists.txt trong ZIP:
 
 ```bash
-cmake -S . -B build
-cmake --build build --config Debug --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 20
+cmake -S . -B build-ref
+cmake --build build-ref --config Debug --parallel 2
+ctest --test-dir build-ref -C Debug -L reference --no-tests=error --output-on-failure --timeout 20
 ```
 
 ```powershell
-.\build\Debug\project_3_final.exe
+.\build-ref\Debug\project_3_final.exe
 ```
 
-Ninja/Makefiles: thêm -DCMAKE_BUILD_TYPE=Debug khi configure; executable thường là ./build/project_3_final. Dùng hai thư mục build cho Debug/Release nếu generator đơn cấu hình.
+Ninja/Makefiles: thêm -DCMAKE_BUILD_TYPE=Debug khi configure; executable thường là ./build-ref/project_3_final. Dùng hai thư mục build cho Debug/Release nếu generator đơn cấu hình.
 
 ## Điều khiển
 
@@ -52,10 +63,10 @@ Ninja/Makefiles: thêm -DCMAKE_BUILD_TYPE=Debug khi configure; executable thư�
 6. Kiểm dữ liệu, pixel, vòng đời nét và native smoke hữu hạn.
 
 ```bash
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug --parallel 2
-cmake --build build --config Release --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 20
+cmake -S . -B build-ref -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
+cmake --build build-ref --config Debug --parallel 2
+cmake --build build-ref --config Release --parallel 2
+ctest --test-dir build-ref -C Release -L reference --no-tests=error --output-on-failure --timeout 20
 ```
 
 BUILD_CHECKPOINTS bật project_3_starter và project_3_checkpoint_1 … project_3_checkpoint_6. Mặc định có final và tests. Trong repository website, CMakeLists/starter/checkpoints/final được sinh từ source-template, không sửa snapshot bằng tay. ZIP đã có chúng; không cần Node.js để build C++.
@@ -87,8 +98,8 @@ Title: radius, số mẫu được giữ, số dấu và input gap của nét g�
 CTest kiểm endpoint/spacing, đoạn 0/invalid/overlong, 13 pixel r=2 và 6 pixel ở góc, symmetry, bounds, hover/down/up/cancel/reentry, nét rời, endpoint khi lấy thưa, các hướng raster và công cụ.
 
 ```powershell
-.\build\Debug\project_3_final.exe --smoke
-.\build\Release\project_3_final.exe --smoke
+.\build-ref\Debug\project_3_final.exe --smoke
+.\build-ref\Release\project_3_final.exe --smoke
 ```
 
 Smoke mở window ẩn, chạy 12 frame có brush/interpolation/palette/resize/upload/present rồi thoát. Đặt deadline ngoài 15 giây khi tự động hóa; không dùng smoke thay chuột vật lý, focus, DPI hoặc thử kéo nhanh.

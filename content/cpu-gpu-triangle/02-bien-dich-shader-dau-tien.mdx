@@ -28,6 +28,7 @@ layout(location = 1) in vec3 aColor;
 uniform float uAngle;
 uniform float uScale;
 uniform vec2 uTranslation;
+uniform vec2 uPanelFit;
 out vec3 vColor;
 
 void main() {
@@ -37,7 +38,7 @@ void main() {
         aPosition.x * cosine - aPosition.y * sine,
         aPosition.x * sine + aPosition.y * cosine
     );
-    vec2 ndc = rotated * uScale + uTranslation;
+    vec2 ndc = (rotated * uScale + uTranslation) * uPanelFit;
     gl_Position = vec4(ndc, 0.0, 1.0);
     vColor = aColor;
 }
@@ -167,6 +168,7 @@ Sau khi `LinkProgram` kết thúc, hai shader object không còn cần thiết n
 angleLocation = api.GetUniformLocation(program, "uAngle");
 scaleLocation = api.GetUniformLocation(program, "uScale");
 translationLocation = api.GetUniformLocation(program, "uTranslation");
+panelFitLocation = api.GetUniformLocation(program, "uPanelFit");
 smoothColorLocation = api.GetUniformLocation(program, "uSmoothColor");
 ```
 

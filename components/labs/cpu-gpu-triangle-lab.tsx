@@ -14,6 +14,7 @@ import {
   compareProbe,
   barycentricAtPoint,
   defaultTriangle,
+  forTrianglePanel,
   makePipelineTrace,
   maximumColorDifference,
   quantizeColor8,
@@ -34,6 +35,7 @@ import {
   usePauseOnReducedMotion,
 } from "./lab-shared";
 import type { InteractiveLabMode } from "./types";
+import { makeTriangleFloor } from "./cpu-gpu-triangle-floor";
 
 type DisplayMode = "color" | "coverage" | "difference";
 
@@ -97,6 +99,7 @@ function drawRasterPanel(
   smoothColor: boolean,
   gpuSide: boolean,
   displayMode: DisplayMode,
+  floor: ReturnType<typeof makeTriangleFloor>,
 ) {
   const samplingScale = Math.min(1, 240 / panel.width, 180 / panel.height);
   const width = Math.max(1, Math.floor(panel.width * samplingScale));
@@ -129,7 +132,7 @@ function drawRasterPanel(
       image.data[offset] = colorByte(color.r);
       image.data[offset + 1] = colorByte(color.g);
       image.data[offset + 2] = colorByte(color.b);
-      image.data[offset + 3] = 255;
+      image.data[offset + 3] = floor && displayMode === "color" && !sample.inside ? 0 : 255;
     }
   }
   const buffer = document.createElement("canvas");
@@ -140,6 +143,7 @@ function drawRasterPanel(
   bufferContext.putImageData(image, 0, 0);
   context.save();
   context.imageSmoothingEnabled = false;
+  if (floor && displayMode === "color") context.drawImage(floor.canvas, panel.x, panel.y);
   context.drawImage(buffer, panel.x, panel.y, panel.width, panel.height);
   context.restore();
 }
@@ -176,11 +180,24 @@ function drawTriangleOutline(
   context.strokeStyle = "rgba(255,255,255,0.8)";
   context.lineWidth = 1;
   context.stroke();
+  const center = {
+    x: (vertices[0].x + vertices[1].x + vertices[2].x) / 3,
+    y: (vertices[0].y + vertices[1].y + vertices[2].y) / 3,
+  };
   vertices.forEach((vertex, index) => {
     context.beginPath();
     context.arc(vertex.x, vertex.y, 4, 0, Math.PI * 2);
-    context.fillStyle = ["#f76b59", "#59c77a", "#61afef"][index];
+    const { r, g, b } = triangle[index].color;
+    context.fillStyle = `rgb(${colorByte(r)} ${colorByte(g)} ${colorByte(b)})`;
     context.fill();
+    context.fillStyle = "#fff";
+    context.font = "12px monospace";
+    // Đặt chữ ra ngoài hình: nhãn C không được che màu lam người học muốn đo.
+    const left = vertex.x < center.x,
+      above = vertex.y < center.y;
+    context.textAlign = left ? "right" : "left";
+    context.textBaseline = above ? "bottom" : "top";
+    context.fillText("ABC"[index], vertex.x + (left ? -7 : 7), vertex.y + (above ? -7 : 7));
   });
   context.restore();
 }
@@ -241,10 +258,10 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
   const reducedMotion = useReducedMotion();
   const capabilities = modeCapabilities(mode);
   const [angleDegrees, setAngleDegrees] = useState(0);
-  const [scale, setScale] = useState(0.82);
+  const [scale, setScale] = useState(1);
   const [translationX, setTranslationX] = useState(0);
   const [translationY, setTranslationY] = useState(0);
-  const [smoothColor, setSmoothColor] = useState(mode === "fragment-interpolation");
+  const [smoothColor, setSmoothColor] = useState(capabilities.canInterpolate);
   const [displayMode, setDisplayMode] = useState<DisplayMode>("color");
   const [paused, setPaused] = useState(true);
   const [capturing, setCapturing] = useState(false);
@@ -277,7 +294,7 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
     };
   }, [stop]);
 
-  const transform = useMemo<TriangleTransform>(
+  const modelTransform = useMemo<TriangleTransform>(
     () => ({
       angleRadians: (angleDegrees * Math.PI) / 180,
       scale,
@@ -299,18 +316,28 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
     };
   }, [size]);
 
+  const { width, height } = panels.cpu;
+  const transform = useMemo(
+    () => forTrianglePanel(modelTransform, width, height),
+    [modelTransform, width, height],
+  );
+  const floor = useMemo(
+    () => (ready && capabilities.stage === 8 ? makeTriangleFloor(width, height) : null),
+    [ready, capabilities.stage, width, height],
+  );
+
   const reset = useCallback(() => {
     setPreset("default");
     releaseCapture();
     setAngleDegrees(0);
-    setScale(0.82);
+    setScale(1);
     setTranslationX(0);
     setTranslationY(0);
-    setSmoothColor(mode === "fragment-interpolation");
+    setSmoothColor(capabilities.canInterpolate);
     setDisplayMode("color");
     setPaused(true);
     setProbe({ x: 0, y: -0.17 });
-  }, [mode, releaseCapture]);
+  }, [capabilities.canInterpolate, releaseCapture]);
 
   useEffect(() => {
     if (paused || reducedMotion || !capabilities.canTransform) return;
@@ -343,6 +370,7 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
         smoothColor,
         false,
         displayMode,
+        floor,
       );
       drawTriangleOutline(context, panels.cpu, defaultTriangle, transform);
     } else {
@@ -357,6 +385,7 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
         smoothColor,
         true,
         displayMode,
+        floor,
       );
       drawTriangleOutline(context, panels.gpu, defaultTriangle, transform);
     } else {
@@ -376,7 +405,7 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
     context.fillText("CPU · top-left framebuffer", panels.cpu.x, 19);
     context.fillText("GPU (mô hình) · bottom-left viewport", panels.gpu.x, 19);
     drawPipelineRail(context, size.width, size.height, capabilities.stage);
-  }, [capabilities, displayMode, mode, panels, probe, size, smoothColor, transform]);
+  }, [capabilities, displayMode, floor, mode, panels, probe, size, smoothColor, transform]);
 
   const setProbeFromPointer = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -480,6 +509,7 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
     panels.cpu.height,
     { x: panels.gpu.x, y: 0, width: panels.gpu.width, height: panels.gpu.height },
     smoothColor,
+    floor?.colorAt,
   );
   const trace = makePipelineTrace(defaultTriangle, transform, panels.cpu.width, panels.cpu.height, {
     x: panels.gpu.x,
@@ -536,7 +566,7 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
                     setTranslationY(-0.08);
                   } else if (event.target.value === "outside") {
                     setAngleDegrees(0);
-                    setScale(0.82);
+                    setScale(1);
                     setTranslationX(1.5);
                     setTranslationY(0);
                   } else {
@@ -659,7 +689,7 @@ export default function CpuGpuTriangleLab({ mode }: { mode?: InteractiveLabMode 
           },
           {
             label: "Mô tả thay thế",
-            value: `Hai panel dùng cùng ba vertex, cùng transform và cùng smooth-color contract. Pointer ${capturing ? "đang được capture" : "đã được nhả"}.`,
+            value: `Cảnh gốc của Project 16: A đỏ ở trên trái, B lục ở dưới phải, C lam ở dưới trái. Hai khung theo dõi cùng ba đỉnh. ${capturing ? "Đang kéo dấu lấy mẫu." : "Đã nhả con trỏ."}`,
           },
         ]}
       />

@@ -209,10 +209,7 @@ test("Project 14 rebuild implements the required native FPS product progressivel
   assert.match(movement, /const char\* state = "ACTIVE"/);
   assert.match(await lesson(lessons[5]), /const char\* mode = "WALK:/);
   assert.match(await lesson(lessons[6]), /const char\* look = "mouse released:/);
-  assert.match(
-    await lesson(lessons[8]),
-    /target_include_directories\(project_14_tests PRIVATE starter\/include\)/,
-  );
+  assert.match(await lesson(lessons[8]), /project_14_check_work/);
   assert.match(main, /setMouseLook\(window, true, mouseLookActive\);\s*dirty = true;/);
   assert.match(
     await source("final/include/presentation.hpp"),

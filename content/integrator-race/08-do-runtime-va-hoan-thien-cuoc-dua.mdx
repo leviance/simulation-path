@@ -271,18 +271,13 @@ if (event.key.key == SDLK_F) {
 
 Chế độ sạch vẫn phải có ba lò xo, tên phương pháp, khung đối chứng và đồ thị. Chỉ ẩn chi tiết kiểm tra và lưới, không biến dashboard thành cửa sổ trống.
 
-Sau khi Starter đã có đủ tám bài, đổi include của target tests trong CMakeLists.txt bản ZIP để kiểm **chính mã bạn viết**:
+Sau bài 8, Starter đã có đủ cả solver lẫn phần đo thời gian. Chạy bộ kiểm trên mã mình viết, rồi mở bản Release để quan sát cuộc đua:
 
-```cmake title="CMakeLists.txt — thay final/include bằng starter/include cho target tests"
-target_include_directories(project_23_tests PRIVATE starter/include)
-```
-
-```powershell title="Nghiệm thu Starter hoàn chỉnh ở hai cấu hình"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug --target project_23_starter project_23_tests --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 30
-cmake --build build --config Release --target project_23_starter project_23_tests --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 30
+```bash title="Terminal — kiểm mã trong starter/"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_23_check_work --parallel 1
+cmake --build build --config Release --target project_23_check_work --parallel 1
+cmake --build build --config Release --target project_23_starter --parallel 1
 .\build\Release\project_23_starter.exe
 ```
 

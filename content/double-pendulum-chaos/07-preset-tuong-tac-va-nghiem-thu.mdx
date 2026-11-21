@@ -514,20 +514,13 @@ inline bool drawHud(SDL_Renderer* renderer, const Scene& scene) {
 
 ZIP đã có tests/tests.cpp và tests/extra-cases.hpp. Tests không dùng assert nên vẫn hoạt động ở Release. Các nhóm kiểm gồm hình học, phương trình Newton với mass/length khác nhau, đạo hàm năng lượng, hội tụ RK4, divergence khi giảm h, đồng hồ nguyên tử, job có budget, mô hình kéo và pixel graph có đáp án.
 
-Mặc định target project_26_tests include final/include. Nếu bạn đang viết trong Starter, mở CMakeLists.txt của **bản ZIP đã giải nén** và đổi đúng dòng include của target tests:
+Bộ kiểm này dùng cả các hàm viết ở bài 7. Khi con lắc đã hoàn chỉnh, hãy chọn `starter/` để thử hai cấu hình trên cùng các điều kiện ban đầu:
 
-```cmake title="CMakeLists.txt — kiểm header trong bài làm"
-target_include_directories(project_26_tests PRIVATE starter/include)
-```
-
-Giữ nguyên các dòng target khác. Chỉ đổi sau khi đã hoàn thành toàn bộ bảy bài vì tests đầy đủ cần các hàm cuối. Không sửa CMake được sinh trong repository của website để làm việc này; lần generate tiếp theo sẽ ghi lại nó.
-
-```powershell title="Terminal — build và kiểm bài làm ở cả hai cấu hình"
-cmake -S . -B build -DBUILD_CHECKPOINTS=ON -DBUILD_TESTING=ON
-cmake --build build --config Debug --target project_26_starter project_26_tests --parallel 2
-ctest --test-dir build -C Debug --output-on-failure --timeout 30
-cmake --build build --config Release --target project_26_starter project_26_tests --parallel 2
-ctest --test-dir build -C Release --output-on-failure --timeout 30
+```bash title="Terminal — kiểm mã trong starter/"
+cmake -S . -B build -DCOURSE_TEST_STARTER=ON -DBUILD_CHECKPOINTS=ON
+cmake --build build --config Debug --target project_26_check_work --parallel 1
+cmake --build build --config Release --target project_26_check_work --parallel 1
+cmake --build build --config Release --target project_26_starter --parallel 1
 .\build\Release\project_26_starter.exe
 ```
 

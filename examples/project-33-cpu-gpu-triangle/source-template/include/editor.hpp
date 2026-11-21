@@ -31,8 +31,8 @@ inline PanelPoint pointerToPanel(Vec2 point, int windowWidth, int windowHeight, 
 }
 
 inline Vec2 inverseTransformPosition(Vec2 ndc, const Transform2D& transform) {
-    const float x = (ndc.x - transform.translation.x) / transform.scale;
-    const float y = (ndc.y - transform.translation.y) / transform.scale;
+    const float x = (ndc.x / transform.panelFit.x - transform.translation.x) / transform.scale;
+    const float y = (ndc.y / transform.panelFit.y - transform.translation.y) / transform.scale;
     const float cosine = std::cos(transform.angleRadians);
     const float sine = std::sin(transform.angleRadians);
     return {x * cosine + y * sine, -x * sine + y * cosine};

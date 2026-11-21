@@ -14,11 +14,11 @@ import {
 import { loadProjectCatalog, workspace } from "./project-catalog.mjs";
 import { installShutdownHandlers, ProcessSupervisor } from "./process-supervisor.mjs";
 import { replayLesson, snapshot, textAt, workPaths } from "./voxel-workbook-replay.mjs";
-import { workbookOption } from "../lib/voxel-workbook.ts";
+import { hasGuidedWorkFiles, workbookOption } from "../lib/voxel-workbook.ts";
 
 const [id, sdlDirectory] = process.argv.slice(2);
 const option = workbookOption(id);
-const project = loadProjectCatalog().find((p) => p.id === id && option);
+const project = loadProjectCatalog().find((p) => p.id === id && hasGuidedWorkFiles(p.id));
 if (!project || !sdlDirectory || !existsSync(path.join(sdlDirectory, "SDL3Config.cmake")))
   throw Error(
     "Usage: node --experimental-strip-types scripts/verify-voxel-workbook.mjs <11|31|32|52..64> <installed SDL3 3.4.8 CMake directory>",
